@@ -6,30 +6,22 @@ import org.khronos.webgl.Uint8Array
 import org.khronos.webgl.get
 import kotlin.js.ExperimentalWasmJsInterop
 
-@JsModule("@noble/secp256k1")
-external object NobleSecp256k1 {
-    fun getPublicKey(privateKey: Uint8Array, isCompressed: Boolean): Uint8Array
-}
+// Access noble modules from globalThis (set by index.html)
+@JsFun("() => globalThis.nobleSecp256k1.utils.randomPrivateKey()")
+private external fun jsRandomPrivateKey(): Uint8Array
 
-@JsModule("@noble/secp256k1")
-external val utils: Utils
+@JsFun("(privateKey, compressed) => globalThis.nobleSecp256k1.getPublicKey(privateKey, compressed)")
+private external fun jsGetPublicKey(privateKey: Uint8Array, compressed: Boolean): Uint8Array
 
-external interface Utils {
-    fun randomPrivateKey(): Uint8Array
-}
+// v1.7.1 has signSync and verifySync
+@JsFun("(message, privateKey) => globalThis.nobleSecp256k1.schnorr.signSync(message, privateKey)")
+private external fun jsSchnorrSign(message: Uint8Array, privateKey: Uint8Array): Uint8Array
 
-@JsModule("@noble/secp256k1")
-external val schnorr: Schnorr
+@JsFun("(signature, message, publicKey) => globalThis.nobleSecp256k1.schnorr.verifySync(signature, message, publicKey)")
+private external fun jsSchnorrVerify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Boolean
 
-external interface Schnorr {
-    fun signSync(message: Uint8Array, privateKey: Uint8Array): Uint8Array
-    fun verifySync(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Boolean
-}
-
-@JsModule("@noble/hashes/sha256")
-external object NobleHashes {
-    fun sha256(data: Uint8Array): Uint8Array
-}
+@JsFun("(data) => globalThis.nobleSha256(data)")
+private external fun jsSha256(data: Uint8Array): Uint8Array
 
 @JsFun("(size) => new Uint8Array(size)")
 private external fun jsCreateUint8Array(size: Int): Uint8Array
@@ -56,13 +48,13 @@ private fun Uint8Array.toByteArray(): ByteArray {
 actual object Crypto {
     
     actual fun generatePrivateKey(): ByteArray {
-        val uint8Array = utils.randomPrivateKey()
+        val uint8Array = jsRandomPrivateKey()
         return uint8Array.toByteArray()
     }
     
     actual fun getPublicKey(privateKey: ByteArray): ByteArray {
         val privKeyArray = privateKey.toUint8Array()
-        val pubKeyArray = NobleSecp256k1.getPublicKey(privKeyArray, true)
+        val pubKeyArray = jsGetPublicKey(privKeyArray, true)
         return pubKeyArray.toByteArray()
     }
     
@@ -80,7 +72,7 @@ actual object Crypto {
         val adjustedPrivKey = ensureEvenYSecretKey(privateKey)
         val privKeyArray = adjustedPrivKey.toUint8Array()
         val messageArray = messageHash.toUint8Array()
-        val signature = schnorr.signSync(messageArray, privKeyArray)
+        val signature = jsSchnorrSign(messageArray, privKeyArray)
         return signature.toByteArray()
     }
     
@@ -95,14 +87,16 @@ actual object Crypto {
             val sigArray = signature.toUint8Array()
             val msgArray = messageHash.toUint8Array()
             val pubKeyArray = xOnly.toUint8Array()
-            schnorr.verifySync(sigArray, msgArray, pubKeyArray)
+            jsSchnorrVerify(sigArray, msgArray, pubKeyArray)
         } catch (e: Throwable) {
             false
         }
     }
     
     actual fun sha256(data: ByteArray): ByteArray {
-        return sha256Sync(data)
+        val uint8Array = data.toUint8Array()
+        val resultArray = jsSha256(uint8Array)
+        return resultArray.toByteArray()
     }
     
     actual fun sha256(data: String): ByteArray = sha256(data.encodeToByteArray())
@@ -144,10 +138,4 @@ actual object Crypto {
         
         return result
     }
-}
-
-private fun sha256Sync(data: ByteArray): ByteArray {
-    val uint8Array = data.toUint8Array()
-    val resultArray = NobleHashes.sha256(uint8Array)
-    return resultArray.toByteArray()
 }

@@ -85,13 +85,6 @@ kotlin {
             implementation("io.ktor:ktor-client-js:3.0.0")
             implementation("media.kamel:kamel-image:0.9.5")
         }
-        
-        val wasmJsMain by getting {
-            dependencies {
-                implementation(npm("@noble/secp256k1", "2.1.0"))
-                implementation(npm("@noble/hashes", "1.4.0"))
-            }
-        }
     }
 }
 

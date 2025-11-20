@@ -5,8 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nostrord</title>
     <link type="text/css" rel="stylesheet" href="styles.css">
-    <script type="application/javascript" src="composeApp.js"></script>
 </head>
 <body>
+<div id="composeApplication"></div>
+<script type="module">
+    // Load noble modules and expose to globalThis BEFORE loading WASM
+    const [secp256k1Module, hashesModule] = await Promise.all([
+        import('https://esm.sh/@noble/secp256k1@1.7.1'),
+        import('https://esm.sh/@noble/hashes@1.4.0/sha256')
+    ]);
+    
+    // Configure sha256Sync for secp256k1 (required for schnorr functions)
+    secp256k1Module.utils.sha256Sync = (...messages) => {
+        const data = secp256k1Module.utils.concatBytes(...messages);
+        return hashesModule.sha256(data);
+    };
+    
+    // Also set hmacSha256Sync if needed
+    const hmacModule = await import('https://esm.sh/@noble/hashes@1.4.0/hmac');
+    secp256k1Module.utils.hmacSha256Sync = (key, ...messages) => {
+        const data = secp256k1Module.utils.concatBytes(...messages);
+        return hmacModule.hmac(hashesModule.sha256, key, data);
+    };
+    
+    globalThis.nobleSecp256k1 = secp256k1Module;
+    globalThis.nobleSha256 = hashesModule.sha256;
+    
+    console.log('✅ Noble modules loaded and configured');
+    
+    // Now load the app
+    const script = document.createElement('script');
+    script.src = 'composeApp.js';
+    document.body.appendChild(script);
+</script>
 </body>
 </html>
