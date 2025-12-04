@@ -10,6 +10,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,24 +43,6 @@ sealed class ChatItem {
 }
 
 @Composable
-private fun AvatarPlaceholder(displayName: String, pubkey: String) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(generateColorFromString(pubkey)),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = displayName.take(2).uppercase(),
-            color = Color.White,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-@Composable
 fun GroupScreen(
     groupId: String,
     groupName: String?,
@@ -70,15 +55,12 @@ fun GroupScreen(
     val allMessages by NostrRepository.messages.collectAsState()
     val allGroupMessages = allMessages[groupId] ?: emptyList()
     
-    // Filter messages by channel
     val messages = remember(allGroupMessages, selectedChannel) {
         if (selectedChannel == "general") {
-            // General: messages WITHOUT channel tag
             allGroupMessages.filter { message ->
                 !message.tags.any { it.size >= 2 && it[0] == "channel" }
             }
         } else {
-            // Other channels: messages WITH matching channel tag
             allGroupMessages.filter { message ->
                 message.tags.any { it.size >= 2 && it[0] == "channel" && it[1] == selectedChannel }
             }
@@ -104,14 +86,12 @@ fun GroupScreen(
         buildChatItems(messages)
     }
 
-    // Initial load when screen opens
     LaunchedEffect(groupId) {
         scope.launch {
             NostrRepository.requestGroupMessages(groupId, selectedChannel)
         }
     }
 
-    // Reload when channel changes
     LaunchedEffect(selectedChannel) {
         scope.launch {
             NostrRepository.requestGroupMessages(groupId, selectedChannel)
@@ -147,13 +127,201 @@ fun GroupScreen(
         )
     }
 
+    // Responsive layout
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isCompact = maxWidth < 600.dp
+
+        if (isCompact) {
+            MobileGroupScreen(
+                groupId = groupId,
+                groupName = groupName,
+                selectedChannel = selectedChannel,
+                onChannelSelect = { selectedChannel = it },
+                messages = messages,
+                chatItems = chatItems,
+                connectionStatus = connectionStatus,
+                isJoined = isJoined,
+                userMetadata = userMetadata,
+                messageInput = messageInput,
+                onMessageInputChange = { messageInput = it },
+                onSendMessage = {
+                    scope.launch {
+                        NostrRepository.sendMessage(groupId, messageInput, selectedChannel)
+                        messageInput = ""
+                    }
+                },
+                onJoinGroup = {
+                    scope.launch { NostrRepository.joinGroup(groupId) }
+                },
+                onLeaveGroup = { showLeaveDialog = true },
+                onBack = onBack
+            )
+        } else {
+            DesktopGroupScreen(
+                groupId = groupId,
+                groupName = groupName,
+                selectedChannel = selectedChannel,
+                onChannelSelect = { selectedChannel = it },
+                messages = messages,
+                chatItems = chatItems,
+                connectionStatus = connectionStatus,
+                isJoined = isJoined,
+                userMetadata = userMetadata,
+                messageInput = messageInput,
+                onMessageInputChange = { messageInput = it },
+                onSendMessage = {
+                    scope.launch {
+                        NostrRepository.sendMessage(groupId, messageInput, selectedChannel)
+                        messageInput = ""
+                    }
+                },
+                onJoinGroup = {
+                    scope.launch { NostrRepository.joinGroup(groupId) }
+                },
+                onLeaveGroup = { showLeaveDialog = true },
+                onBack = onBack
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MobileGroupScreen(
+    groupId: String,
+    groupName: String?,
+    selectedChannel: String,
+    onChannelSelect: (String) -> Unit,
+    messages: List<NostrGroupClient.NostrMessage>,
+    chatItems: List<ChatItem>,
+    connectionStatus: String,
+    isJoined: Boolean,
+    userMetadata: Map<String, UserMetadata>,
+    messageInput: String,
+    onMessageInputChange: (String) -> Unit,
+    onSendMessage: () -> Unit,
+    onJoinGroup: () -> Unit,
+    onLeaveGroup: () -> Unit,
+    onBack: () -> Unit
+) {
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = Color(0xFF2F3136)
+            ) {
+                GroupSidebar(
+                    groupName = groupName,
+                    selectedId = selectedChannel,
+                    onSelect = { channel ->
+                        scope.launch { drawerState.close() }
+                        onChannelSelect(channel)
+                    }
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("#$selectedChannel", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text(
+                                "$connectionStatus • ${messages.size} messages",
+                                color = Color(0xFF99AAB5),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        Row {
+                            IconButton(onClick = onBack) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                            }
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Default.Menu, contentDescription = "Channels", tint = Color.White)
+                            }
+                        }
+                    },
+                    actions = {
+                        if (!isJoined) {
+                            TextButton(onClick = onJoinGroup) {
+                                Text("Join", color = Color(0xFF5865F2))
+                            }
+                        } else {
+                            TextButton(onClick = onLeaveGroup) {
+                                Text("Leave", color = Color(0xFFED4245))
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF202225)
+                    )
+                )
+            },
+            containerColor = Color(0xFF36393F)
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                // Messages area
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    MessagesList(
+                        chatItems = chatItems,
+                        userMetadata = userMetadata,
+                        isJoined = isJoined
+                    )
+                }
+
+                // Input area
+                MessageInputArea(
+                    isJoined = isJoined,
+                    selectedChannel = selectedChannel,
+                    messageInput = messageInput,
+                    onMessageInputChange = onMessageInputChange,
+                    onSendMessage = onSendMessage,
+                    onJoinGroup = onJoinGroup
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesktopGroupScreen(
+    groupId: String,
+    groupName: String?,
+    selectedChannel: String,
+    onChannelSelect: (String) -> Unit,
+    messages: List<NostrGroupClient.NostrMessage>,
+    chatItems: List<ChatItem>,
+    connectionStatus: String,
+    isJoined: Boolean,
+    userMetadata: Map<String, UserMetadata>,
+    messageInput: String,
+    onMessageInputChange: (String) -> Unit,
+    onSendMessage: () -> Unit,
+    onJoinGroup: () -> Unit,
+    onLeaveGroup: () -> Unit,
+    onBack: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+
     Row(modifier = Modifier.fillMaxSize()) {
         GroupSidebar(
             groupName = groupName,
             selectedId = selectedChannel,
-            onSelect = { channel ->
-                selectedChannel = channel
-            }
+            onSelect = onChannelSelect
         )
 
         Column(
@@ -171,8 +339,8 @@ fun GroupScreen(
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onBack) {
-                    Text("← Back", color = Color(0xFF00AFF4))
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
                 
                 Spacer(modifier = Modifier.width(16.dp))
@@ -193,179 +361,213 @@ fun GroupScreen(
                 
                 if (!isJoined) {
                     Button(
-                        onClick = {
-                            scope.launch {
-                                NostrRepository.joinGroup(groupId)
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF5865F2)
-                        )
+                        onClick = onJoinGroup,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5865F2))
                     ) {
                         Text("Join Group")
                     }
                 } else {
                     Button(
-                        onClick = { showLeaveDialog = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFED4245)
-                        )
+                        onClick = onLeaveGroup,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED4245))
                     ) {
                         Text("Leave Group")
                     }
                 }
             }
 
-            val listState = rememberLazyListState()
-
+            // Messages area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                if (chatItems.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            "No messages yet",
-                            color = Color(0xFF99AAB5),
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            if (isJoined) "Be the first to send a message!" else "Join the group to participate!",
-                            color = Color(0xFF72767D),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(chatItems, key = { item ->
-                            when (item) {
-                                is ChatItem.DateSeparator -> "date_${item.date}"
-                                is ChatItem.SystemEvent -> "system_${item.id}"
-                                is ChatItem.Message -> "msg_${item.message.id}"
-                            }
-                        }) { item ->
-                            when (item) {
-                                is ChatItem.DateSeparator -> DateSeparatorItem(item.date)
-                                is ChatItem.SystemEvent -> SystemEventItem(item, userMetadata[item.pubkey])
-                                is ChatItem.Message -> MessageItem(item.message, userMetadata[item.message.pubkey])
-                            }
-                        }
-                    }
-
-                    LaunchedEffect(chatItems.size) {
-                        if (chatItems.isNotEmpty()) {
-                            listState.scrollToItem(chatItems.lastIndex)
-                        }
-                    }
-                }
+                MessagesList(
+                    chatItems = chatItems,
+                    userMetadata = userMetadata,
+                    isJoined = isJoined
+                )
             }
 
-            if (!isJoined) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF40444B))
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Join the group to send messages",
-                            color = Color(0xFF72767D),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    NostrRepository.joinGroup(groupId)
-                                }
-                            },
-                            colors = ButtonDefaults.textButtonColors(
-                                contentColor = Color(0xFF5865F2)
-                            )
-                        ) {
-                            Text("Join Now")
-                        }
-                    }
-                }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF40444B))
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextField(
-                        value = messageInput,
-                        onValueChange = { messageInput = it },
-                        placeholder = { Text("Message #$selectedChannel") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .onPreviewKeyEvent { event ->
-                                if (
-                                    event.type == KeyEventType.KeyDown &&
-                                    event.key == Key.Enter &&
-                                    event.isShiftPressed
-                                ) {
-                                    if (messageInput.isNotBlank()) {
-                                        scope.launch {
-                                            NostrRepository.sendMessage(groupId, messageInput, selectedChannel)
-                                            messageInput = ""
-                                        }
-                                    }
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color(0xFF383A40),
-                            unfocusedContainerColor = Color(0xFF383A40),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedPlaceholderColor = Color(0xFF72767D),
-                            unfocusedPlaceholderColor = Color(0xFF72767D),
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    
-                    Spacer(modifier = Modifier.width(8.dp))
+            // Input area
+            MessageInputArea(
+                isJoined = isJoined,
+                selectedChannel = selectedChannel,
+                messageInput = messageInput,
+                onMessageInputChange = onMessageInputChange,
+                onSendMessage = onSendMessage,
+                onJoinGroup = onJoinGroup
+            )
+        }
+    }
+}
 
-                    AppButton(
-                        text = "Send",
-                        enabled = messageInput.isNotBlank(),
-                        onClick = {
-                            scope.launch {
-                                NostrRepository.sendMessage(groupId, messageInput, selectedChannel)
-                                messageInput = ""
-                            }
-                        },
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
+@Composable
+private fun MessagesList(
+    chatItems: List<ChatItem>,
+    userMetadata: Map<String, UserMetadata>,
+    isJoined: Boolean
+) {
+    val listState = rememberLazyListState()
+
+    if (chatItems.isEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                "No messages yet",
+                color = Color(0xFF99AAB5),
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                if (isJoined) "Be the first to send a message!" else "Join the group to participate!",
+                color = Color(0xFF72767D),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    } else {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(chatItems, key = { item ->
+                when (item) {
+                    is ChatItem.DateSeparator -> "date_${item.date}"
+                    is ChatItem.SystemEvent -> "system_${item.id}"
+                    is ChatItem.Message -> "msg_${item.message.id}"
+                }
+            }) { item ->
+                when (item) {
+                    is ChatItem.DateSeparator -> DateSeparatorItem(item.date)
+                    is ChatItem.SystemEvent -> SystemEventItem(item, userMetadata[item.pubkey])
+                    is ChatItem.Message -> MessageItem(item.message, userMetadata[item.message.pubkey])
                 }
             }
         }
+
+        LaunchedEffect(chatItems.size) {
+            if (chatItems.isNotEmpty()) {
+                listState.scrollToItem(chatItems.lastIndex)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageInputArea(
+    isJoined: Boolean,
+    selectedChannel: String,
+    messageInput: String,
+    onMessageInputChange: (String) -> Unit,
+    onSendMessage: () -> Unit,
+    onJoinGroup: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+
+    if (!isJoined) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF40444B))
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Join the group to send messages",
+                    color = Color(0xFF72767D),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                TextButton(
+                    onClick = onJoinGroup,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF5865F2))
+                ) {
+                    Text("Join Now")
+                }
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF40444B))
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextField(
+                value = messageInput,
+                onValueChange = onMessageInputChange,
+                placeholder = { Text("Message #$selectedChannel") },
+                modifier = Modifier
+                    .weight(1f)
+                    .onPreviewKeyEvent { event ->
+                        if (
+                            event.type == KeyEventType.KeyDown &&
+                            event.key == Key.Enter &&
+                            event.isShiftPressed
+                        ) {
+                            if (messageInput.isNotBlank()) {
+                                onSendMessage()
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color(0xFF383A40),
+                    unfocusedContainerColor = Color(0xFF383A40),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedPlaceholderColor = Color(0xFF72767D),
+                    unfocusedPlaceholderColor = Color(0xFF72767D),
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent
+                ),
+                shape = RoundedCornerShape(8.dp),
+                singleLine = false,
+                maxLines = 4
+            )
+            
+            Spacer(modifier = Modifier.width(8.dp))
+
+            AppButton(
+                text = "Send",
+                enabled = messageInput.isNotBlank(),
+                onClick = onSendMessage,
+                modifier = Modifier.padding(start = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AvatarPlaceholder(displayName: String, pubkey: String) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(generateColorFromString(pubkey)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = displayName.take(2).uppercase(),
+            color = Color.White,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
