@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,7 +39,6 @@ enum class RelayStatus {
 fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
     val scope = rememberCoroutineScope()
     
-    // Collect state from NostrRepository
     val groups by NostrRepository.groups.collectAsState()
     val connectionState by NostrRepository.connectionState.collectAsState()
     val joinedGroups by NostrRepository.joinedGroups.collectAsState()
@@ -64,7 +66,6 @@ fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
     var newRelayUrl by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
     
-    // Check relay statuses
     LaunchedEffect(currentRelay) {
         relays = relays.map { relay ->
             relay.copy(
@@ -73,74 +74,6 @@ fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
         }
     }
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        /** ---------- SIDEBAR ---------- **/
-        Sidebar(
-            onNavigate = onNavigate,
-            connectionStatus = connectionStatus,
-            pubKey = pubKey,
-            joinedGroups = joinedGroups,
-            groups = groups
-        )
-
-        /** ---------- MAIN CONTENT ---------- **/
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF36393F))
-        ) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .background(Color(0xFF202225))
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = { onNavigate(Screen.Home) }) {
-                    Text("← Back", color = Color(0xFF00AFF4))
-                }
-                
-                Spacer(modifier = Modifier.width(16.dp))
-                
-                Text(
-                    text = "Relay Settings",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // Content
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                items(relays) { relay ->
-                    RelayCard(
-                        relay = relay,
-                        isActive = relay.url == currentRelay,
-                        onSelectRelay = {
-                            scope.launch {
-                                NostrRepository.switchRelay(relay.url)
-                                relays = relays.map { r ->
-                                    r.copy(status = if (r.url == relay.url) RelayStatus.CONNECTED else RelayStatus.DISCONNECTED)
-                                }
-                            }
-                        }
-                    )
-                }
-                
-                item {
-                    AddRelayCard(onClick = { showAddDialog = true })
-                }
-            }
-        }
-    }
-    
     // Add Relay Dialog
     if (showAddDialog) {
         AlertDialog(
@@ -148,7 +81,7 @@ fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
             title = { Text("Add New Relay") },
             text = {
                 Column {
-                    Text("Enter the WebSocket URL of the relay you want to add:")
+                    Text("Enter the WebSocket URL of the relay:")
                     Spacer(modifier = Modifier.height(8.dp))
                     TextField(
                         value = newRelayUrl,
@@ -182,12 +115,213 @@ fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
             }
         )
     }
+
+    // Responsive layout
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isCompact = maxWidth < 600.dp
+
+        if (isCompact) {
+            MobileRelaySettingsScreen(
+                relays = relays,
+                currentRelay = currentRelay,
+                connectionStatus = connectionStatus,
+                pubKey = pubKey,
+                joinedGroups = joinedGroups,
+                groups = groups,
+                onNavigate = onNavigate,
+                onSelectRelay = { relayUrl ->
+                    scope.launch {
+                        NostrRepository.switchRelay(relayUrl)
+                        relays = relays.map { r ->
+                            r.copy(status = if (r.url == relayUrl) RelayStatus.CONNECTED else RelayStatus.DISCONNECTED)
+                        }
+                    }
+                },
+                onAddRelay = { showAddDialog = true }
+            )
+        } else {
+            DesktopRelaySettingsScreen(
+                relays = relays,
+                currentRelay = currentRelay,
+                connectionStatus = connectionStatus,
+                pubKey = pubKey,
+                joinedGroups = joinedGroups,
+                groups = groups,
+                onNavigate = onNavigate,
+                onSelectRelay = { relayUrl ->
+                    scope.launch {
+                        NostrRepository.switchRelay(relayUrl)
+                        relays = relays.map { r ->
+                            r.copy(status = if (r.url == relayUrl) RelayStatus.CONNECTED else RelayStatus.DISCONNECTED)
+                        }
+                    }
+                },
+                onAddRelay = { showAddDialog = true }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MobileRelaySettingsScreen(
+    relays: List<RelayInfo>,
+    currentRelay: String,
+    connectionStatus: String,
+    pubKey: String?,
+    joinedGroups: Set<String>,
+    groups: List<org.nostr.nostrord.network.GroupMetadata>,
+    onNavigate: (Screen) -> Unit,
+    onSelectRelay: (String) -> Unit,
+    onAddRelay: () -> Unit
+) {
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = Color(0xFF2F3136)
+            ) {
+                Sidebar(
+                    onNavigate = { screen ->
+                        scope.launch { drawerState.close() }
+                        onNavigate(screen)
+                    },
+                    connectionStatus = connectionStatus,
+                    pubKey = pubKey,
+                    joinedGroups = joinedGroups,
+                    groups = groups
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Relay Settings", color = Color.White, fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        Row {
+                            IconButton(onClick = { onNavigate(Screen.Home) }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                            }
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF202225)
+                    )
+                )
+            },
+            containerColor = Color(0xFF36393F)
+        ) { paddingValues ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(relays) { relay ->
+                    RelayCard(
+                        relay = relay,
+                        isActive = relay.url == currentRelay,
+                        isCompact = true,
+                        onSelectRelay = { onSelectRelay(relay.url) }
+                    )
+                }
+                
+                item {
+                    AddRelayCard(isCompact = true, onClick = onAddRelay)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesktopRelaySettingsScreen(
+    relays: List<RelayInfo>,
+    currentRelay: String,
+    connectionStatus: String,
+    pubKey: String?,
+    joinedGroups: Set<String>,
+    groups: List<org.nostr.nostrord.network.GroupMetadata>,
+    onNavigate: (Screen) -> Unit,
+    onSelectRelay: (String) -> Unit,
+    onAddRelay: () -> Unit
+) {
+    Row(modifier = Modifier.fillMaxSize()) {
+        // Sidebar
+        Sidebar(
+            onNavigate = onNavigate,
+            connectionStatus = connectionStatus,
+            pubKey = pubKey,
+            joinedGroups = joinedGroups,
+            groups = groups
+        )
+
+        // Main content
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF36393F))
+        ) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .background(Color(0xFF202225))
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { onNavigate(Screen.Home) }) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                }
+                
+                Spacer(modifier = Modifier.width(16.dp))
+                
+                Text(
+                    text = "Relay Settings",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Content
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                items(relays) { relay ->
+                    RelayCard(
+                        relay = relay,
+                        isActive = relay.url == currentRelay,
+                        isCompact = false,
+                        onSelectRelay = { onSelectRelay(relay.url) }
+                    )
+                }
+                
+                item {
+                    AddRelayCard(isCompact = false, onClick = onAddRelay)
+                }
+            }
+        }
+    }
 }
 
 @Composable
 private fun RelayCard(
     relay: RelayInfo,
     isActive: Boolean,
+    isCompact: Boolean,
     onSelectRelay: () -> Unit
 ) {
     Card(
@@ -205,27 +339,20 @@ private fun RelayCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(if (isCompact) 12.dp else 16.dp)
         ) {
             // Relay URL
             Text(
                 text = relay.url,
                 color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
+                style = if (isCompact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(if (isCompact) 8.dp else 12.dp))
             
-            // Status
+            // Status row
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Status:",
-                    color = Color(0xFF99AAB5),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                
                 val statusColor = when (relay.status) {
                     RelayStatus.CONNECTED -> Color(0xFF3BA55D)
                     RelayStatus.CONNECTING -> Color(0xFFFAA81A)
@@ -247,35 +374,29 @@ private fun RelayCard(
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold
                 )
+                
+                if (!isCompact) {
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Text(
+                        text = "Groups: ${relay.groupCount?.toString() ?: "N/A"}",
+                        color = Color(0xFF99AAB5),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
             
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Groups
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!isCompact) {
+                Spacer(modifier = Modifier.height(8.dp))
+                
                 Text(
-                    text = "Groups:",
+                    text = relay.details,
                     color = Color(0xFF99AAB5),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = relay.groupCount?.toString() ?: "Not Available",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
             
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Details
-            Text(
-                text = relay.details,
-                color = Color(0xFF99AAB5),
-                style = MaterialTheme.typography.bodySmall
-            )
-            
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(if (isCompact) 8.dp else 12.dp))
             
             // Select Button
             Button(
@@ -288,7 +409,7 @@ private fun RelayCard(
                 enabled = !isActive
             ) {
                 Text(
-                    text = if (isActive) "Active Relay" else "Select as Active Relay",
+                    text = if (isActive) "Active" else if (isCompact) "Select" else "Select as Active Relay",
                     color = Color.White
                 )            
             }
@@ -297,7 +418,7 @@ private fun RelayCard(
 }
 
 @Composable
-private fun AddRelayCard(onClick: () -> Unit) {
+private fun AddRelayCard(isCompact: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -308,26 +429,28 @@ private fun AddRelayCard(onClick: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isCompact) 12.dp else 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = "Add New Relay",
                 color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
+                style = if (isCompact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             
-            Spacer(modifier = Modifier.height(8.dp))
+            if (!isCompact) {
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Easily manage your groups in New Relay by including them in the list.",
+                    color = Color(0xFF99AAB5),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             
-            Text(
-                text = "Easily manage your groups in New Relay by including them in the list.",
-                color = Color(0xFF99AAB5),
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth()
-            )
-            
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(if (isCompact) 8.dp else 12.dp))
             
             Button(
                 onClick = onClick,
@@ -336,7 +459,7 @@ private fun AddRelayCard(onClick: () -> Unit) {
                     containerColor = Color(0xFF5865F2)
                 )
             ) {
-                Text("Add Relay URL")
+                Text(if (isCompact) "Add Relay" else "Add Relay URL")
             }
         }
     }
