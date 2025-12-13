@@ -1,19 +1,18 @@
 package org.nostr.nostrord.storage
 
 import kotlinx.browser.localStorage
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
 
-// JS implementation (same as WasmJS)
 actual object SecureStorage {
     private const val PRIVATE_KEY_PREF = "nostr_private_key"
     private const val JOINED_GROUPS_PREFIX = "joined_groups_"
     private const val CURRENT_RELAY_URL = "current_relay_url"
+    private const val BUNKER_URL_PREF = "nostr_bunker_url"
+    private const val BUNKER_USER_PUBKEY_PREF = "nostr_bunker_user_pubkey"
+    private const val BUNKER_CLIENT_PRIVATE_KEY_PREF = "nostr_bunker_client_private_key"
     
     actual fun savePrivateKey(privateKeyHex: String) {
         localStorage.setItem(PRIVATE_KEY_PREF, privateKeyHex)
-        println("🔐 Private key saved to localStorage")
+        println("🔐 Private key saved")
     }
     
     actual fun getPrivateKey(): String? {
@@ -45,7 +44,7 @@ actual object SecureStorage {
     
     actual fun saveJoinedGroupsForRelay(relayUrl: String, groupIds: Set<String>) {
         val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
-        val json = Json.encodeToString(groupIds.toList())
+        val json = groupIds.joinToString(",")
         localStorage.setItem(key, json)
         println("💾 Saved ${groupIds.size} joined groups for relay: $relayUrl")
     }
@@ -53,12 +52,7 @@ actual object SecureStorage {
     actual fun getJoinedGroupsForRelay(relayUrl: String): Set<String> {
         val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
         val json = localStorage.getItem(key) ?: return emptySet()
-        return try {
-            Json.decodeFromString<List<String>>(json).toSet()
-        } catch (e: Exception) {
-            println("❌ Failed to parse joined groups for relay: ${e.message}")
-            emptySet()
-        }
+        return if (json.isBlank()) emptySet() else json.split(",").toSet()
     }
     
     actual fun clearJoinedGroupsForRelay(relayUrl: String) {
@@ -68,23 +62,68 @@ actual object SecureStorage {
     }
     
     actual fun clearAllJoinedGroups() {
-        try {
-            val keysToRemove = mutableListOf<String>()
-            for (i in 0 until localStorage.length) {
-                val key = localStorage.key(i)
-                if (key != null && key.startsWith(JOINED_GROUPS_PREFIX)) {
-                    keysToRemove.add(key)
-                }
+        val keysToRemove = mutableListOf<String>()
+        for (i in 0 until localStorage.length) {
+            val key = localStorage.key(i)
+            if (key != null && key.startsWith(JOINED_GROUPS_PREFIX)) {
+                keysToRemove.add(key)
             }
-            keysToRemove.forEach { localStorage.removeItem(it) }
-            println("🗑️ Cleared all relay-specific joined groups")
-        } catch (e: Exception) {
-            println("❌ Failed to clear all joined groups: ${e.message}")
         }
+        keysToRemove.forEach { localStorage.removeItem(it) }
+        println("🗑️ Cleared all joined groups")
+    }
+    
+    // NIP-46 Bunker URL support
+    actual fun saveBunkerUrl(bunkerUrl: String) {
+        localStorage.setItem(BUNKER_URL_PREF, bunkerUrl)
+        println("🔐 Bunker URL saved")
+    }
+    
+    actual fun getBunkerUrl(): String? {
+        return localStorage.getItem(BUNKER_URL_PREF)
+    }
+    
+    actual fun hasBunkerUrl(): Boolean {
+        return localStorage.getItem(BUNKER_URL_PREF) != null
+    }
+    
+    actual fun clearBunkerUrl() {
+        localStorage.removeItem(BUNKER_URL_PREF)
+        println("🗑️ Bunker URL cleared")
+    }
+    
+    // NIP-46 Bunker User Pubkey support
+    actual fun saveBunkerUserPubkey(pubkey: String) {
+        localStorage.setItem(BUNKER_USER_PUBKEY_PREF, pubkey)
+        println("🔐 Bunker user pubkey saved")
+    }
+    
+    actual fun getBunkerUserPubkey(): String? {
+        return localStorage.getItem(BUNKER_USER_PUBKEY_PREF)
+    }
+    
+    actual fun clearBunkerUserPubkey() {
+        localStorage.removeItem(BUNKER_USER_PUBKEY_PREF)
+        println("🗑️ Bunker user pubkey cleared")
+    }
+    
+    // NIP-46 Bunker Client Private Key (for session persistence)
+    actual fun saveBunkerClientPrivateKey(privateKey: String) {
+        localStorage.setItem(BUNKER_CLIENT_PRIVATE_KEY_PREF, privateKey)
+        println("🔐 Bunker client private key saved")
+    }
+    
+    actual fun getBunkerClientPrivateKey(): String? {
+        return localStorage.getItem(BUNKER_CLIENT_PRIVATE_KEY_PREF)
+    }
+    
+    actual fun clearBunkerClientPrivateKey() {
+        localStorage.removeItem(BUNKER_CLIENT_PRIVATE_KEY_PREF)
+        println("🗑️ Bunker client private key cleared")
     }
     
     actual fun clearAll() {
         localStorage.clear()
-        println("🗑️ All secure storage cleared")
+        println("🗑️ All storage cleared")
     }
 }

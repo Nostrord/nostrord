@@ -19,6 +19,22 @@ expect object SecureStorage {
     fun clearJoinedGroupsForRelay(relayUrl: String)
     fun clearAllJoinedGroups()
     
+    // NIP-46 Bunker support
+    fun saveBunkerUrl(bunkerUrl: String)
+    fun getBunkerUrl(): String?
+    fun hasBunkerUrl(): Boolean
+    fun clearBunkerUrl()
+    
+    // NIP-46 Bunker User Pubkey support
+    fun saveBunkerUserPubkey(pubkey: String)
+    fun getBunkerUserPubkey(): String?
+    fun clearBunkerUserPubkey()
+    
+    // NIP-46 Bunker Client Private Key (for session persistence)
+    fun saveBunkerClientPrivateKey(privateKey: String)
+    fun getBunkerClientPrivateKey(): String?
+    fun clearBunkerClientPrivateKey()
+    
     fun clearAll()
 }
 

@@ -17,6 +17,9 @@ actual object SecureStorage {
     private const val ENCRYPTION_KEY_PREF = "encryption_key"
     private const val JOINED_GROUPS_PREFIX = "joined_groups_"
     private const val CURRENT_RELAY_URL = "current_relay_url"
+    private const val BUNKER_URL_PREF = "nostr_bunker_url"
+    private const val BUNKER_USER_PUBKEY_PREF = "nostr_bunker_user_pubkey"
+    private const val BUNKER_CLIENT_PRIVATE_KEY_PREF = "nostr_bunker_client_private_key"
     
     init {
         if (prefs.get(ENCRYPTION_KEY_PREF, null) == null) {
@@ -129,6 +132,82 @@ actual object SecureStorage {
         } catch (e: Exception) {
             println("❌ Failed to clear all joined groups: ${e.message}")
         }
+    }
+    
+    // NIP-46 Bunker URL support
+    actual fun saveBunkerUrl(bunkerUrl: String) {
+        val encrypted = encrypt(bunkerUrl)
+        prefs.put(BUNKER_URL_PREF, encrypted)
+        prefs.flush()
+        println("🔐 Bunker URL saved securely")
+    }
+    
+    actual fun getBunkerUrl(): String? {
+        val encrypted = prefs.get(BUNKER_URL_PREF, null) ?: return null
+        return try {
+            decrypt(encrypted)
+        } catch (e: Exception) {
+            println("❌ Failed to decrypt bunker URL: ${e.message}")
+            null
+        }
+    }
+    
+    actual fun hasBunkerUrl(): Boolean {
+        return prefs.get(BUNKER_URL_PREF, null) != null
+    }
+    
+    actual fun clearBunkerUrl() {
+        prefs.remove(BUNKER_URL_PREF)
+        prefs.flush()
+        println("🗑️ Bunker URL cleared")
+    }
+    
+    // NIP-46 Bunker User Pubkey support
+    actual fun saveBunkerUserPubkey(pubkey: String) {
+        val encrypted = encrypt(pubkey)
+        prefs.put(BUNKER_USER_PUBKEY_PREF, encrypted)
+        prefs.flush()
+        println("🔐 Bunker user pubkey saved securely")
+    }
+    
+    actual fun getBunkerUserPubkey(): String? {
+        val encrypted = prefs.get(BUNKER_USER_PUBKEY_PREF, null) ?: return null
+        return try {
+            decrypt(encrypted)
+        } catch (e: Exception) {
+            println("❌ Failed to decrypt bunker user pubkey: ${e.message}")
+            null
+        }
+    }
+    
+    actual fun clearBunkerUserPubkey() {
+        prefs.remove(BUNKER_USER_PUBKEY_PREF)
+        prefs.flush()
+        println("🗑️ Bunker user pubkey cleared")
+    }
+    
+    // NIP-46 Bunker Client Private Key (for session persistence)
+    actual fun saveBunkerClientPrivateKey(privateKey: String) {
+        val encrypted = encrypt(privateKey)
+        prefs.put(BUNKER_CLIENT_PRIVATE_KEY_PREF, encrypted)
+        prefs.flush()
+        println("🔐 Bunker client private key saved securely")
+    }
+    
+    actual fun getBunkerClientPrivateKey(): String? {
+        val encrypted = prefs.get(BUNKER_CLIENT_PRIVATE_KEY_PREF, null) ?: return null
+        return try {
+            decrypt(encrypted)
+        } catch (e: Exception) {
+            println("❌ Failed to decrypt bunker client private key: ${e.message}")
+            null
+        }
+    }
+    
+    actual fun clearBunkerClientPrivateKey() {
+        prefs.remove(BUNKER_CLIENT_PRIVATE_KEY_PREF)
+        prefs.flush()
+        println("🗑️ Bunker client private key cleared")
     }
     
     actual fun clearAll() {

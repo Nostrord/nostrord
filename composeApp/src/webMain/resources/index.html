@@ -5,24 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nostrord</title>
     <link type="text/css" rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/aes-js@3.1.2/index.min.js"></script>
 </head>
 <body>
 <div id="composeApplication"></div>
 <script type="module">
-    // Load noble modules and expose to globalThis BEFORE loading WASM
-    const [secp256k1Module, hashesModule] = await Promise.all([
+    const [secp256k1Module, hashesModule, hmacModule] = await Promise.all([
         import('https://esm.sh/@noble/secp256k1@1.7.1'),
-        import('https://esm.sh/@noble/hashes@1.4.0/sha256')
+        import('https://esm.sh/@noble/hashes@1.4.0/sha256'),
+        import('https://esm.sh/@noble/hashes@1.4.0/hmac')
     ]);
     
-    // Configure sha256Sync for secp256k1 (required for schnorr functions)
     secp256k1Module.utils.sha256Sync = (...messages) => {
         const data = secp256k1Module.utils.concatBytes(...messages);
         return hashesModule.sha256(data);
     };
     
-    // Also set hmacSha256Sync if needed
-    const hmacModule = await import('https://esm.sh/@noble/hashes@1.4.0/hmac');
     secp256k1Module.utils.hmacSha256Sync = (key, ...messages) => {
         const data = secp256k1Module.utils.concatBytes(...messages);
         return hmacModule.hmac(hashesModule.sha256, key, data);
@@ -30,10 +28,201 @@
     
     globalThis.nobleSecp256k1 = secp256k1Module;
     globalThis.nobleSha256 = hashesModule.sha256;
+    globalThis.nobleHmac = hmacModule.hmac;
+    
+    // ============================================
+    // Pure JS ChaCha20 Implementation
+    // ============================================
+    
+    function chacha20Quarter(state, a, b, c, d) {
+        state[a] += state[b]; state[d] ^= state[a]; state[d] = (state[d] << 16) | (state[d] >>> 16);
+        state[c] += state[d]; state[b] ^= state[c]; state[b] = (state[b] << 12) | (state[b] >>> 20);
+        state[a] += state[b]; state[d] ^= state[a]; state[d] = (state[d] << 8) | (state[d] >>> 24);
+        state[c] += state[d]; state[b] ^= state[c]; state[b] = (state[b] << 7) | (state[b] >>> 25);
+    }
+    
+    function chacha20Block(key, nonce, counter) {
+        const constants = new Uint32Array([0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
+        const keyView = new DataView(key.buffer, key.byteOffset, key.byteLength);
+        const nonceView = new DataView(nonce.buffer, nonce.byteOffset, nonce.byteLength);
+        
+        const state = new Uint32Array(16);
+        state[0] = constants[0];
+        state[1] = constants[1];
+        state[2] = constants[2];
+        state[3] = constants[3];
+        
+        for (let i = 0; i < 8; i++) {
+            state[4 + i] = keyView.getUint32(i * 4, true);
+        }
+        
+        state[12] = counter;
+        state[13] = nonceView.getUint32(0, true);
+        state[14] = nonceView.getUint32(4, true);
+        state[15] = nonceView.getUint32(8, true);
+        
+        const working = new Uint32Array(state);
+        
+        for (let i = 0; i < 10; i++) {
+            chacha20Quarter(working, 0, 4, 8, 12);
+            chacha20Quarter(working, 1, 5, 9, 13);
+            chacha20Quarter(working, 2, 6, 10, 14);
+            chacha20Quarter(working, 3, 7, 11, 15);
+            chacha20Quarter(working, 0, 5, 10, 15);
+            chacha20Quarter(working, 1, 6, 11, 12);
+            chacha20Quarter(working, 2, 7, 8, 13);
+            chacha20Quarter(working, 3, 4, 9, 14);
+        }
+        
+        for (let i = 0; i < 16; i++) {
+            working[i] += state[i];
+        }
+        
+        return new Uint8Array(working.buffer);
+    }
+    
+    globalThis.chacha20Encrypt = function(key, nonce, data) {
+        const keyArr = new Uint8Array(key);
+        const nonceArr = new Uint8Array(nonce);
+        const dataArr = new Uint8Array(data);
+        
+        console.log('chacha20 (pure JS) - key:', keyArr.length, 'nonce:', nonceArr.length, 'data:', dataArr.length);
+        
+        const output = new Uint8Array(dataArr.length);
+        let counter = 0;
+        
+        for (let offset = 0; offset < dataArr.length; offset += 64) {
+            const block = chacha20Block(keyArr, nonceArr, counter);
+            const remaining = Math.min(64, dataArr.length - offset);
+            
+            for (let i = 0; i < remaining; i++) {
+                output[offset + i] = dataArr[offset + i] ^ block[i];
+            }
+            counter++;
+        }
+        
+        return output;
+    };
+    
+    // ============================================
+    // Utility Functions
+    // ============================================
+    
+    globalThis.uint8ArrayToBase64 = function(uint8Array) {
+        const arr = new Uint8Array(uint8Array);
+        let binary = '';
+        for (let i = 0; i < arr.length; i++) {
+            binary += String.fromCharCode(arr[i]);
+        }
+        return btoa(binary);
+    };
+
+    globalThis.base64ToUint8Array = function(base64) {
+        const binary = atob(base64);
+        const uint8Array = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            uint8Array[i] = binary.charCodeAt(i);
+        }
+        return uint8Array;
+    };
+    
+    globalThis.concatUint8Arrays = function(a, b) {
+        const arrA = new Uint8Array(a);
+        const arrB = new Uint8Array(b);
+        const result = new Uint8Array(arrA.length + arrB.length);
+        result.set(arrA, 0);
+        result.set(arrB, arrA.length);
+        return result;
+    };
+    
+    globalThis.uint8ArraysEqual = function(a, b) {
+        const arrA = new Uint8Array(a);
+        const arrB = new Uint8Array(b);
+        if (arrA.length !== arrB.length) return false;
+        for (let i = 0; i < arrA.length; i++) {
+            if (arrA[i] !== arrB[i]) return false;
+        }
+        return true;
+    };
+    
+    globalThis.sliceUint8Array = function(arr, start, end) {
+        return new Uint8Array(arr.slice(start, end));
+    };
+
+    // ============================================
+    // NIP-04 Helper Functions (AES-CBC)
+    // ============================================
+
+    globalThis.cryptoEncryptAesCbc = function(key, iv, data) {
+        const keyArr = new Uint8Array(key);
+        const ivArr = new Uint8Array(iv);
+        const dataArr = new Uint8Array(data);
+        
+        const padLength = 16 - (dataArr.length % 16);
+        const padded = new Uint8Array(dataArr.length + padLength);
+        padded.set(dataArr);
+        for (let i = dataArr.length; i < padded.length; i++) {
+            padded[i] = padLength;
+        }
+        
+        const aesCbc = new aesjs.ModeOfOperation.cbc(Array.from(keyArr), Array.from(ivArr));
+        return new Uint8Array(aesCbc.encrypt(padded));
+    };
+
+    globalThis.cryptoDecryptAesCbc = function(key, iv, data) {
+        const keyArr = new Uint8Array(key);
+        const ivArr = new Uint8Array(iv);
+        const dataArr = new Uint8Array(data);
+        
+        const aesCbc = new aesjs.ModeOfOperation.cbc(Array.from(keyArr), Array.from(ivArr));
+        const decrypted = new Uint8Array(aesCbc.decrypt(dataArr));
+        
+        const padLength = decrypted[decrypted.length - 1];
+        return new Uint8Array(decrypted.slice(0, decrypted.length - padLength));
+    };
+    
+    // ============================================
+    // NIP-44 Helper Functions
+    // ============================================
+    
+    globalThis.hkdfExtract = function(salt, ikm) {
+        const saltArr = new Uint8Array(salt);
+        const ikmArr = new Uint8Array(ikm);
+        return hmacModule.hmac(hashesModule.sha256, saltArr, ikmArr);
+    };
+    
+    globalThis.hkdfExpand = function(prk, info, length) {
+        const prkArr = new Uint8Array(prk);
+        const infoArr = new Uint8Array(info);
+        
+        const hashLen = 32;
+        const n = Math.ceil(length / hashLen);
+        const okm = new Uint8Array(n * hashLen);
+        
+        let prev = new Uint8Array(0);
+        for (let i = 0; i < n; i++) {
+            const input = new Uint8Array(prev.length + infoArr.length + 1);
+            input.set(prev, 0);
+            input.set(infoArr, prev.length);
+            input[prev.length + infoArr.length] = i + 1;
+            
+            prev = hmacModule.hmac(hashesModule.sha256, prkArr, input);
+            okm.set(prev, i * hashLen);
+        }
+        
+        return new Uint8Array(okm.slice(0, length));
+    };
+    
+    globalThis.hmacSha256 = function(key, data) {
+        const keyArr = new Uint8Array(key);
+        const dataArr = new Uint8Array(data);
+        return hmacModule.hmac(hashesModule.sha256, keyArr, dataArr);
+    };
     
     console.log('✅ Noble modules loaded and configured');
+    console.log('✅ NIP-04 crypto helpers ready');
+    console.log('✅ NIP-44 crypto helpers ready (with pure JS ChaCha20)');
     
-    // Now load the app
     const script = document.createElement('script');
     script.src = 'composeApp.js';
     document.body.appendChild(script);

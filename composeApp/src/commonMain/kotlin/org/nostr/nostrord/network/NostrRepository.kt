@@ -9,8 +9,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Event
+import org.nostr.nostrord.nostr.Nip46Client
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.utils.epochMillis
+import org.nostr.nostrord.utils.urlDecode
 
 object NostrRepository {
     private var client: NostrGroupClient? = null
@@ -19,10 +21,13 @@ object NostrRepository {
 
     private var keyPair: KeyPair? = null
     
+    // NIP-46 Bunker support
+    private var nip46Client: Nip46Client? = null
+    private var isBunkerLogin = false
+    private var bunkerUserPubkey: String? = null
+    
     private val metadataRelays = listOf(
         "wss://relay.damus.io",
-        //"wss://relay.nostr.band",
-        //"wss://nos.lol"
     )
     private var currentMetadataRelayIndex = 0
     
@@ -43,16 +48,21 @@ object NostrRepository {
     
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
+    
+    private val _isBunkerConnected = MutableStateFlow(false)
+    val isBunkerConnected: StateFlow<Boolean> = _isBunkerConnected.asStateFlow()
 
     private val _userMetadata = MutableStateFlow<Map<String, UserMetadata>>(emptyMap())
     val userMetadata: StateFlow<Map<String, UserMetadata>> = _userMetadata.asStateFlow()
+
+    private val _authUrl = MutableStateFlow<String?>(null)
+    val authUrl: StateFlow<String?> = _authUrl.asStateFlow()
 
     private var kind10009SubId: String? = null
     private var kind10009Received = false
     private var eoseReceived = false
     
-    // Store groups from ALL relays (for kind:10009 merging)
-    private val allRelayGroups = mutableMapOf<String, MutableSet<String>>() // relayUrl -> Set<groupId>
+    private val allRelayGroups = mutableMapOf<String, MutableSet<String>>()
     
     sealed class ConnectionState {
         data object Disconnected : ConnectionState()
@@ -68,6 +78,93 @@ object NostrRepository {
             println("✅ Loaded saved relay URL: $savedRelayUrl")
         }
         
+        // Check for bunker login first
+        val savedBunkerUrl: String? = SecureStorage.getBunkerUrl()
+        val savedUserPubkey: String? = SecureStorage.getBunkerUserPubkey()
+        
+        if (savedBunkerUrl != null && savedUserPubkey != null) {
+            try {
+                println("🔐 Restoring bunker session...")
+                val bunkerInfo = parseBunkerUrl(savedBunkerUrl)
+                val savedClientPrivateKey = SecureStorage.getBunkerClientPrivateKey()
+                
+                // Use saved client private key to maintain session identity
+                val newNip46Client = if (savedClientPrivateKey != null) {
+                    println("   Using saved client keypair for session continuity")
+                    Nip46Client(savedClientPrivateKey)
+                } else {
+                    println("   No saved client key, generating new (may need re-authorization)")
+                    Nip46Client()
+                }
+                
+                // Set the user pubkey immediately from saved value
+                bunkerUserPubkey = savedUserPubkey
+                isBunkerLogin = true
+                _joinedGroups.value = SecureStorage.getJoinedGroupsForRelay(_currentRelayUrl.value)
+                
+                println("✅ Loaded bunker user pubkey: ${savedUserPubkey.take(16)}...")
+                
+                // Connect to bunker - wait for it to complete
+                try {
+                    try {
+                        newNip46Client.connect(
+                            remoteSignerPubkey = bunkerInfo.pubkey,
+                            relays = bunkerInfo.relays,
+                            secret = bunkerInfo.secret
+                        )
+                    } catch (e: Exception) {
+                        // "already connected" means the signer remembers us - this is success!
+                        if (e.message?.contains("already connected", ignoreCase = true) == true) {
+                            println("✅ Signer reports already connected - reusing session")
+                        } else {
+                            throw e
+                        }
+                    }
+                    
+                    nip46Client = newNip46Client
+                    _isBunkerConnected.value = true
+                    
+                    // Save client key if it was newly generated
+                    if (savedClientPrivateKey == null) {
+                        SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
+                    }
+                    
+                    // Verify the pubkey matches
+                    try {
+                        val actualUserPubkey = newNip46Client.getPublicKey()
+                        if (actualUserPubkey != savedUserPubkey) {
+                            println("⚠️ Bunker returned different pubkey, updating...")
+                            bunkerUserPubkey = actualUserPubkey
+                            SecureStorage.saveBunkerUserPubkey(actualUserPubkey)
+                        }
+                    } catch (e: Exception) {
+                        println("⚠️ Could not verify pubkey, using saved: ${savedUserPubkey.take(16)}...")
+                    }
+                    
+                    println("✅ Restored bunker connection for ${bunkerUserPubkey?.take(16)}...")
+                } catch (e: Exception) {
+                    println("⚠️ Initial bunker reconnection failed: ${e.message}")
+                    println("   Will retry when signing is needed")
+                    // Don't set _isBunkerConnected to true, signEvent will try to reconnect
+                }
+                
+                // Set logged in after bunker setup attempt
+                _isLoggedIn.value = true
+                
+                connect()
+                connectToMetadataRelay()
+                return
+            } catch (e: Exception) {
+                println("❌ Failed to restore bunker session: ${e.message}")
+                SecureStorage.clearBunkerUrl()
+                SecureStorage.clearBunkerUserPubkey()
+                SecureStorage.clearBunkerClientPrivateKey()
+                isBunkerLogin = false
+                bunkerUserPubkey = null
+            }
+        }
+        
+        // Fall back to private key login
         val savedPrivateKey = SecureStorage.getPrivateKey()
         if (savedPrivateKey != null) {
             try {
@@ -84,16 +181,213 @@ object NostrRepository {
         }
     }
     
+   fun clearAuthUrl() {
+    _authUrl.value = null
+}
+
+suspend fun loginWithBunker(bunkerUrl: String): String {
+    val bunkerInfo = parseBunkerUrl(bunkerUrl)
+    
+    // Check if we have an existing client key (from previous session with same signer)
+    val existingClientKey = SecureStorage.getBunkerClientPrivateKey()
+    val newNip46Client = if (existingClientKey != null) {
+        println("🔑 Reusing existing client keypair for bunker connection")
+        Nip46Client(existingClientKey)
+    } else {
+        println("🔑 Generating new client keypair for bunker connection")
+        Nip46Client(null)
+    }
+    
+    // Set up auth URL callback
+    newNip46Client.onAuthUrl = { url ->
+        println("🔐 Auth URL received: $url")
+        _authUrl.value = url
+    }
+    
+    try {
+        newNip46Client.connect(
+            remoteSignerPubkey = bunkerInfo.pubkey,
+            relays = bunkerInfo.relays,
+            secret = bunkerInfo.secret
+        )
+    } catch (e: Exception) {
+        // "already connected" means the signer remembers us - this is success!
+        if (e.message?.contains("already connected", ignoreCase = true) == true) {
+            println("✅ Signer reports already connected - reusing session")
+        } else {
+            throw e
+        }
+    }
+    
+    val userPubkey = newNip46Client.getPublicKey()
+    
+    nip46Client = newNip46Client
+    bunkerUserPubkey = userPubkey
+    isBunkerLogin = true
+    keyPair = null
+    
+    // Save bunker URL, user pubkey, AND client private key for session persistence
+    SecureStorage.saveBunkerUrl(bunkerUrl)
+    SecureStorage.saveBunkerUserPubkey(userPubkey)
+    SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
+    SecureStorage.clearPrivateKey()
+    
+    _isLoggedIn.value = true
+    _isBunkerConnected.value = true
+    _authUrl.value = null
+    
+    println("✅ Bunker login successful, user: ${userPubkey.take(16)}...")
+    println("   Client pubkey: ${newNip46Client.clientPubkey.take(16)}...")
+    
+    connect()
+    connectToMetadataRelay()
+    
+    return userPubkey
+} 
+
+    // Reconnect to bunker if disconnected
+    private suspend fun reconnectBunker(): Boolean {
+        val savedBunkerUrl = SecureStorage.getBunkerUrl() ?: return false
+        val savedClientPrivateKey = SecureStorage.getBunkerClientPrivateKey()
+        
+        try {
+            println("🔄 Attempting to reconnect bunker...")
+            val bunkerInfo = parseBunkerUrl(savedBunkerUrl)
+            
+            // Use saved client private key to maintain session identity
+            val newNip46Client = if (savedClientPrivateKey != null) {
+                println("   Using saved client keypair for session continuity")
+                Nip46Client(savedClientPrivateKey)
+            } else {
+                println("   No saved client key, generating new (will need re-authorization)")
+                Nip46Client()
+            }
+            
+            // Set up auth URL callback for re-authorization
+            newNip46Client.onAuthUrl = { url ->
+                println("🔐 Auth URL received for reconnection: $url")
+                _authUrl.value = url
+            }
+            
+            try {
+                newNip46Client.connect(
+                    remoteSignerPubkey = bunkerInfo.pubkey,
+                    relays = bunkerInfo.relays,
+                    secret = bunkerInfo.secret
+                )
+            } catch (e: Exception) {
+                // "already connected" means the signer remembers us - this is success!
+                if (e.message?.contains("already connected", ignoreCase = true) == true) {
+                    println("✅ Signer reports already connected - reusing session")
+                } else {
+                    throw e
+                }
+            }
+            
+            nip46Client = newNip46Client
+            _isBunkerConnected.value = true
+            
+            // Save client key if it was newly generated
+            if (savedClientPrivateKey == null) {
+                SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
+            }
+            
+            // Verify pubkey
+            try {
+                val actualUserPubkey = newNip46Client.getPublicKey()
+                val savedUserPubkey = SecureStorage.getBunkerUserPubkey()
+                if (actualUserPubkey != savedUserPubkey) {
+                    bunkerUserPubkey = actualUserPubkey
+                    SecureStorage.saveBunkerUserPubkey(actualUserPubkey)
+                }
+            } catch (e: Exception) {
+                // If getPublicKey fails but we have saved pubkey, use that
+                val savedUserPubkey = SecureStorage.getBunkerUserPubkey()
+                if (savedUserPubkey != null) {
+                    println("⚠️ Could not verify pubkey, using saved: ${savedUserPubkey.take(16)}...")
+                } else {
+                    throw e
+                }
+            }
+            
+            println("✅ Bunker reconnected successfully")
+            return true
+        } catch (e: Exception) {
+            println("❌ Bunker reconnection failed: ${e.message}")
+            return false
+        }
+    }
+
+    // Sign event using bunker or local keypair
+    private suspend fun signEvent(event: Event): Event {
+        return if (isBunkerLogin) {
+            // Try to reconnect if bunker is not connected
+            if (nip46Client == null) {
+                val reconnected = reconnectBunker()
+                if (!reconnected) {
+                    throw Exception("Bunker not connected and reconnection failed. Please try logging in again.")
+                }
+            }
+            
+            val bunker = nip46Client ?: throw Exception("Bunker not connected")
+            try {
+                val eventJson = event.toJsonString()
+                val signedEventJson = bunker.signEvent(eventJson)
+                parseSignedEvent(signedEventJson)
+            } catch (e: Exception) {
+                // Handle permission errors - need to re-authorize
+                if (e.message?.contains("no permission", ignoreCase = true) == true ||
+                    e.message?.contains("not authorized", ignoreCase = true) == true ||
+                    e.message?.contains("permission denied", ignoreCase = true) == true) {
+                    
+                    println("🔐 Permission denied - clearing session, please login again")
+                    // Clear the bunker session so user can re-login
+                    nip46Client?.disconnect()
+                    nip46Client = null
+                    _isBunkerConnected.value = false
+                    SecureStorage.clearBunkerUrl()
+                    SecureStorage.clearBunkerUserPubkey()
+                    SecureStorage.clearBunkerClientPrivateKey()
+                    isBunkerLogin = false
+                    bunkerUserPubkey = null
+                    _isLoggedIn.value = false
+                    
+                    throw Exception("Signing permission denied. Please login again and approve signing permission in your signer app.")
+                }
+                throw e
+            }
+        } else {
+            val kp = keyPair ?: throw Exception("Not logged in")
+            event.sign(kp)
+        }
+    }
+
+    private fun parseSignedEvent(jsonString: String): Event {
+        val json = Json { ignoreUnknownKeys = true }
+        val obj = json.parseToJsonElement(jsonString).jsonObject
+        
+        return Event(
+            id = obj["id"]?.jsonPrimitive?.content,
+            pubkey = obj["pubkey"]?.jsonPrimitive?.content ?: "",
+            createdAt = obj["created_at"]?.jsonPrimitive?.long ?: 0L,
+            kind = obj["kind"]?.jsonPrimitive?.int ?: 0,
+            tags = obj["tags"]?.jsonArray?.map { tagArray ->
+                tagArray.jsonArray.map { it.jsonPrimitive.content }
+            } ?: emptyList(),
+            content = obj["content"]?.jsonPrimitive?.content ?: "",
+            sig = obj["sig"]?.jsonPrimitive?.content
+        )
+    }
+    
     // NEW: Load kind:10009 from Nostr
     private suspend fun loadJoinedGroupsFromNostr() {
-        val pubKey = keyPair?.publicKeyHex ?: return
+        val pubKey = getPublicKey() ?: return
         val currentClient = metadataClient ?: run {
             println("⚠️ No metadata client available")
             return
         }
         
         try {
-            // Reset flags
             kind10009Received = false
             eoseReceived = false
             
@@ -117,14 +411,12 @@ object NostrRepository {
             println("   SubId: $subId")
             println("   PubKey: ${pubKey.take(16)}...")
             
-            // Wait for EOSE or timeout (5 seconds)
             var waitTime = 0
             while (!eoseReceived && waitTime < 5000) {
                 kotlinx.coroutines.delay(500)
                 waitTime += 500
             }
             
-            // Close the subscription
             val closeMsg = buildJsonArray {
                 add("CLOSE")
                 add(subId)
@@ -134,12 +426,10 @@ object NostrRepository {
             
             if (!kind10009Received) {
                 println("⚠️ No kind:10009 event found on relay")
-                // If we have local joined groups, publish them
                 val localGroups = SecureStorage.getJoinedGroupsForRelay(_currentRelayUrl.value)
                 if (localGroups.isNotEmpty()) {
                     println("📤 Publishing local joined groups (${localGroups.size} groups) as kind:10009")
                     _joinedGroups.value = localGroups
-                    // Initialize allRelayGroups with current relay's local groups
                     allRelayGroups[_currentRelayUrl.value] = localGroups.toMutableSet()
                     publishJoinedGroupsList()
                 } else {
@@ -155,7 +445,7 @@ object NostrRepository {
 
     // NEW: Publish kind:10009 to Nostr
     private suspend fun publishJoinedGroupsList() {
-        val currentKeyPair = keyPair ?: run {
+        val pubKey = getPublicKey() ?: run {
             println("⚠️ Cannot publish kind:10009 - not logged in")
             return
         }
@@ -165,11 +455,9 @@ object NostrRepository {
         }
         
         try {
-            // Update allRelayGroups with current relay's groups
             val currentRelayGroups = _joinedGroups.value
             allRelayGroups[_currentRelayUrl.value] = currentRelayGroups.toMutableSet()
             
-            // Build tags from ALL relays (merge all groups)
             val tags = mutableListOf<List<String>>()
             allRelayGroups.forEach { (relayUrl, groupIds) ->
                 groupIds.forEach { groupId ->
@@ -183,14 +471,14 @@ object NostrRepository {
             }
             
             val event = Event(
-                pubkey = currentKeyPair.publicKeyHex,
+                pubkey = pubKey,
                 createdAt = epochMillis() / 1000,
                 kind = 10009,
                 tags = tags,
                 content = ""
             )
             
-            val signedEvent = event.sign(currentKeyPair)
+            val signedEvent = signEvent(event)
             
             val message = buildJsonArray {
                 add("EVENT")
@@ -222,7 +510,6 @@ object NostrRepository {
             newMetadataClient.waitForConnection()
             println("✅ Connected to metadata relay: $relayUrl")
 
-            // Wait for connection to stabilize
             kotlinx.coroutines.delay(1000)
             println("🔄 Loading kind:10009 joined groups...")
 
@@ -241,7 +528,6 @@ object NostrRepository {
             val json = Json { ignoreUnknownKeys = true }
             val arr = json.parseToJsonElement(msg).jsonArray
             
-            // Handle EOSE for kind:10009 subscription
             if (arr.size >= 2 && arr[0].jsonPrimitive.content == "EOSE") {
                 val subId = arr[1].jsonPrimitive.content
                 if (subId == kind10009SubId) {
@@ -260,7 +546,6 @@ object NostrRepository {
                     println("🎯 Received kind:10009 event")
                     val tags = event["tags"]?.jsonArray ?: return
                     
-                    // Clear and rebuild allRelayGroups from kind:10009
                     allRelayGroups.clear()
                     val currentRelayGroups = mutableSetOf<String>()
                     
@@ -270,11 +555,9 @@ object NostrRepository {
                             val groupId = tagArray[1].jsonPrimitive.content
                             val relayUrl = tagArray.getOrNull(2)?.jsonPrimitive?.content
                             
-                            // Store in allRelayGroups map
                             if (relayUrl != null) {
                                 allRelayGroups.getOrPut(relayUrl) { mutableSetOf() }.add(groupId)
                                 
-                                // Filter only groups from current relay for UI
                                 if (relayUrl == _currentRelayUrl.value) {
                                     currentRelayGroups.add(groupId)
                                     println("  ✅ $groupId (${_currentRelayUrl.value})")
@@ -282,7 +565,6 @@ object NostrRepository {
                                     println("  📝 $groupId ($relayUrl) - stored for merging")
                                 }
                             } else {
-                                // No relay specified, include in current relay
                                 currentRelayGroups.add(groupId)
                                 allRelayGroups.getOrPut(_currentRelayUrl.value) { mutableSetOf() }.add(groupId)
                                 println("  ✅ $groupId (no relay specified, using current)")
@@ -336,8 +618,11 @@ object NostrRepository {
             _connectionState.value = ConnectionState.Connected
             println("✅ Repository connected to $relayUrl")
             
-            keyPair?.let { kp ->
-                newClient.sendAuth(kp.privateKeyHex)
+            // Only send AUTH if using local keypair (not bunker)
+            if (!isBunkerLogin) {
+                keyPair?.let { kp ->
+                    newClient.sendAuth(kp.privateKeyHex)
+                }
             }
             newClient.requestGroups()
             
@@ -350,14 +635,46 @@ object NostrRepository {
         }
     }
 
-    fun getPublicKey(): String? = keyPair?.publicKeyHex
+    fun getPublicKey(): String? {
+        return if (isBunkerLogin) {
+            bunkerUserPubkey
+        } else {
+            keyPair?.publicKeyHex
+        }
+    }
 
-    fun getPrivateKey(): String? = keyPair?.privateKeyHex
+    fun getPrivateKey(): String? {
+        return if (isBunkerLogin) {
+            null // Bunker doesn't expose private key
+        } else {
+            keyPair?.privateKeyHex
+        }
+    }
+    
+    fun isUsingBunker(): Boolean = isBunkerLogin
+    
+    fun isBunkerReady(): Boolean = isBunkerLogin && nip46Client != null
+    
+    suspend fun ensureBunkerConnected(): Boolean {
+        if (!isBunkerLogin) return true // Not using bunker, nothing to do
+        if (nip46Client != null) return true // Already connected
+        return reconnectBunker()
+    }
 
     suspend fun loginSuspend(privKey: String, pubKey: String) {
+        // Clear any bunker session
+        nip46Client?.disconnect()
+        nip46Client = null
+        isBunkerLogin = false
+        bunkerUserPubkey = null
+        SecureStorage.clearBunkerUrl()
+        SecureStorage.clearBunkerUserPubkey()
+        SecureStorage.clearBunkerClientPrivateKey()
+        
         keyPair = KeyPair.fromPrivateKeyHex(privKey)
         SecureStorage.savePrivateKey(privKey)
         _isLoggedIn.value = true
+        _isBunkerConnected.value = false
         connect()
         connectToMetadataRelay()
     }
@@ -366,37 +683,62 @@ object NostrRepository {
         disconnect()
         metadataClient?.disconnect()
         metadataClient = null
+        
+        // Clear bunker session but KEEP the client private key
+        // This allows re-login with the same bunker URI
+        nip46Client?.disconnect()
+        nip46Client = null
+        isBunkerLogin = false
+        bunkerUserPubkey = null
+        SecureStorage.clearBunkerUrl()
+        SecureStorage.clearBunkerUserPubkey()
+        // NOTE: We intentionally do NOT clear BunkerClientPrivateKey here
+        // This allows the user to re-login with the same bunker URI
+        // The client private key will only be cleared when:
+        // 1. User calls forgetBunkerConnection() explicitly
+        // 2. User logs in with private key (loginSuspend)
+        // 3. Permission is denied by signer
+        
         SecureStorage.clearPrivateKey()
         SecureStorage.clearAllJoinedGroups()
         keyPair = null
         _isLoggedIn.value = false
+        _isBunkerConnected.value = false
         _joinedGroups.value = emptySet()
         allRelayGroups.clear()
-        println("👋 Logged out")
+        println("👋 Logged out (bunker client key preserved for re-login)")
+    }
+    
+    // Call this to completely forget the bunker connection
+    // User will need a new bunker URI after this
+    suspend fun forgetBunkerConnection() {
+        nip46Client?.disconnect()
+        nip46Client = null
+        isBunkerLogin = false
+        bunkerUserPubkey = null
+        SecureStorage.clearBunkerUrl()
+        SecureStorage.clearBunkerUserPubkey()
+        SecureStorage.clearBunkerClientPrivateKey()
+        _isBunkerConnected.value = false
+        println("🗑️ Bunker connection completely forgotten - need new bunker URI")
     }
 
     suspend fun switchRelay(newRelayUrl: String) {
         println("🔄 Switching to relay: $newRelayUrl")
         
-        // Disconnect from current relay
         disconnect()
         
-        // Update relay URL
         _currentRelayUrl.value = newRelayUrl
         SecureStorage.saveCurrentRelayUrl(newRelayUrl)
         
-        // Load local groups first (fallback)
         _joinedGroups.value = SecureStorage.getJoinedGroupsForRelay(newRelayUrl)
         println("📂 Loaded ${_joinedGroups.value.size} local joined groups")
         
-        // Connect to new relay
         connect(newRelayUrl)
         
-        // Reset kind:10009 flags
         kind10009Received = false
         eoseReceived = false
         
-        // Ensure metadata client is connected
         val currentMetadataClient = metadataClient
         if (currentMetadataClient == null) {
             println("🔄 Metadata client not connected, connecting...")
@@ -406,7 +748,6 @@ object NostrRepository {
             kotlinx.coroutines.delay(1000)
         }
         
-        // Reload kind:10009 for new relay
         println("🔄 Loading kind:10009 for new relay...")
         loadJoinedGroupsFromNostr()
     }
@@ -489,14 +830,14 @@ object NostrRepository {
             return
         }
         
-        val currentKeyPair = keyPair ?: run {
+        val pubKey = getPublicKey() ?: run {
             println("⚠️ Cannot join group - not logged in")
             return
         }
         
         try {
             val event = Event(
-                pubkey = currentKeyPair.publicKeyHex,
+                pubkey = pubKey,
                 createdAt = epochMillis() / 1000,
                 kind = 9021,
                 tags = listOf(
@@ -507,7 +848,7 @@ object NostrRepository {
 
             println(event)
             
-            val signedEvent = event.sign(currentKeyPair)
+            val signedEvent = signEvent(event)
             
             val message = buildJsonArray {
                 add("EVENT")
@@ -519,7 +860,6 @@ object NostrRepository {
             _joinedGroups.value = _joinedGroups.value + groupId
             SecureStorage.saveJoinedGroupsForRelay(_currentRelayUrl.value, _joinedGroups.value)
             
-            // NEW: Publish kind:10009
             publishJoinedGroupsList()
             
             println("✅ Joined group $groupId on relay ${_currentRelayUrl.value}")
@@ -538,14 +878,14 @@ object NostrRepository {
             return
         }
         
-        val currentKeyPair = keyPair ?: run {
+        val pubKey = getPublicKey() ?: run {
             println("⚠️ Cannot leave group - not logged in")
             return
         }
         
         try {
             val event = Event(
-                pubkey = currentKeyPair.publicKeyHex,
+                pubkey = pubKey,
                 createdAt = epochMillis() / 1000,
                 kind = 9022,
                 tags = listOf(
@@ -556,7 +896,7 @@ object NostrRepository {
 
             println(event)
             
-            val signedEvent = event.sign(currentKeyPair)
+            val signedEvent = signEvent(event)
             
             val message = buildJsonArray {
                 add("EVENT")
@@ -568,7 +908,6 @@ object NostrRepository {
             _joinedGroups.value = _joinedGroups.value - groupId
             SecureStorage.saveJoinedGroupsForRelay(_currentRelayUrl.value, _joinedGroups.value)
             
-            // NEW: Publish kind:10009
             publishJoinedGroupsList()
             
             _messages.value = _messages.value - groupId
@@ -596,48 +935,47 @@ object NostrRepository {
         currentClient.requestGroupMessages(groupId, channel)
     }
 
-suspend fun sendMessage(groupId: String, content: String, channel: String? = null) {
-    val currentClient = client ?: run {
-        println("⚠️ Cannot send message - not connected")
-        return
-    }
-    
-    val currentKeyPair = keyPair ?: run {
-        println("⚠️ Cannot send message - not logged in")
-        return
-    }
-    
-    try {
-        val tags = mutableListOf(listOf("h", groupId))
-        // Only add channel tag if it's NOT "general"
-        if (channel != null && channel != "general") {
-            tags.add(listOf("channel", channel))
+    suspend fun sendMessage(groupId: String, content: String, channel: String? = null) {
+        val currentClient = client ?: run {
+            println("⚠️ Cannot send message - not connected")
+            return
         }
         
-        val event = Event(
-            pubkey = currentKeyPair.publicKeyHex,
-            createdAt = epochMillis() / 1000,
-            kind = 9,
-            tags = tags,
-            content = content
-        )
+        val pubKey = getPublicKey() ?: run {
+            println("⚠️ Cannot send message - not logged in")
+            return
+        }
         
-        val signedEvent = event.sign(currentKeyPair)
-        
-        val eventJson = signedEvent.toJsonObject()
-        val message = buildJsonArray {
-            add("EVENT")
-            add(eventJson)
-        }.toString()
-        
-        currentClient.send(message)
-        println("📤 Sent message to group $groupId${if (channel != null && channel != "general") " in channel $channel" else " (general)"}: $content")
-        
-    } catch (e: Exception) {
-        println("❌ Failed to send message: ${e.message}")
-        e.printStackTrace()
+        try {
+            val tags = mutableListOf(listOf("h", groupId))
+            if (channel != null && channel != "general") {
+                tags.add(listOf("channel", channel))
+            }
+            
+            val event = Event(
+                pubkey = pubKey,
+                createdAt = epochMillis() / 1000,
+                kind = 9,
+                tags = tags,
+                content = content
+            )
+            
+            val signedEvent = signEvent(event)
+            
+            val eventJson = signedEvent.toJsonObject()
+            val message = buildJsonArray {
+                add("EVENT")
+                add(eventJson)
+            }.toString()
+            
+            currentClient.send(message)
+            println("📤 Sent message to group $groupId${if (channel != null && channel != "general") " in channel $channel" else " (general)"}: $content")
+            
+        } catch (e: Exception) {
+            println("❌ Failed to send message: ${e.message}")
+            e.printStackTrace()
+        }
     }
-}
 
     fun getMessagesForGroup(groupId: String): List<NostrGroupClient.NostrMessage> {
         return _messages.value[groupId] ?: emptyList()
@@ -651,4 +989,51 @@ suspend fun sendMessage(groupId: String, content: String, channel: String? = nul
         _messages.value = emptyMap()
         isConnecting = false
     }
+}
+
+// Helper function for parsing bunker URLs
+data class BunkerInfo(
+    val pubkey: String,
+    val relays: List<String>,
+    val secret: String?
+)
+
+fun parseBunkerUrl(url: String): BunkerInfo {
+    val trimmed = url.trim()
+    
+    require(trimmed.startsWith("bunker://")) {
+        "Invalid bunker URL: must start with bunker://"
+    }
+
+    val withoutScheme = trimmed.removePrefix("bunker://")
+    val parts = withoutScheme.split("?", limit = 2)
+    
+    val pubkey = parts[0]
+    require(pubkey.length == 64 && pubkey.all { it in '0'..'9' || it in 'a'..'f' }) {
+        "Invalid pubkey in bunker URL"
+    }
+
+    val relays = mutableListOf<String>()
+    var secret: String? = null
+
+    if (parts.size > 1) {
+        val queryParams = parts[1].split("&")
+        for (param in queryParams) {
+            val kv = param.split("=", limit = 2)
+            if (kv.size == 2) {
+                val key = kv[0]
+                val value = kv[1].urlDecode()
+                when (key) {
+                    "relay" -> relays.add(value)
+                    "secret" -> secret = value
+                }
+            }
+        }
+    }
+
+    require(relays.isNotEmpty()) {
+        "Bunker URL must contain at least one relay"
+    }
+
+    return BunkerInfo(pubkey, relays, secret)
 }

@@ -46,6 +46,8 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             implementation("io.ktor:ktor-client-okhttp:3.0.0")
             implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.14.0")
+            implementation("androidx.security:security-crypto:1.1.0-alpha06")
+            implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
         }
         
         commonMain.dependencies {
@@ -80,6 +82,7 @@ kotlin {
             implementation("io.ktor:ktor-client-cio:3.0.0")
             implementation("fr.acinq.secp256k1:secp256k1-kmp:0.14.0")
             implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-jvm:0.14.0")
+            implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
         }
         
         jsMain.dependencies {
@@ -103,6 +106,8 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+            excludes += "META-INF/DEPENDENCIES"
         }
     }
     buildTypes {
