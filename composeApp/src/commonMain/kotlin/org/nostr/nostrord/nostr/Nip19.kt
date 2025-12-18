@@ -88,14 +88,14 @@ object Nip19 {
     private fun decodeNprofile(data: ByteArray): Entity.Nprofile? {
         val tlvs = parseTLV(data)
         val pubkey = tlvs[TLV_SPECIAL]?.firstOrNull()?.toHexString() ?: return null
-        val relays = tlvs[TLV_RELAY]?.map { String(it, Charsets.UTF_8) } ?: emptyList()
+        val relays = tlvs[TLV_RELAY]?.map { it.decodeToString() } ?: emptyList()
         return Entity.Nprofile(pubkey, relays)
     }
 
     private fun decodeNevent(data: ByteArray): Entity.Nevent? {
         val tlvs = parseTLV(data)
         val eventId = tlvs[TLV_SPECIAL]?.firstOrNull()?.toHexString() ?: return null
-        val relays = tlvs[TLV_RELAY]?.map { String(it, Charsets.UTF_8) } ?: emptyList()
+        val relays = tlvs[TLV_RELAY]?.map { it.decodeToString() } ?: emptyList()
         val author = tlvs[TLV_AUTHOR]?.firstOrNull()?.toHexString()
         val kind = tlvs[TLV_KIND]?.firstOrNull()?.let { bytesToInt(it) }
         return Entity.Nevent(eventId, relays, author, kind)
@@ -103,10 +103,10 @@ object Nip19 {
 
     private fun decodeNaddr(data: ByteArray): Entity.Naddr? {
         val tlvs = parseTLV(data)
-        val identifier = tlvs[TLV_SPECIAL]?.firstOrNull()?.let { String(it, Charsets.UTF_8) } ?: return null
+        val identifier = tlvs[TLV_SPECIAL]?.firstOrNull()?.decodeToString() ?: return null
         val pubkey = tlvs[TLV_AUTHOR]?.firstOrNull()?.toHexString() ?: return null
         val kind = tlvs[TLV_KIND]?.firstOrNull()?.let { bytesToInt(it) } ?: return null
-        val relays = tlvs[TLV_RELAY]?.map { String(it, Charsets.UTF_8) } ?: emptyList()
+        val relays = tlvs[TLV_RELAY]?.map { it.decodeToString() } ?: emptyList()
         return Entity.Naddr(identifier, pubkey, kind, relays)
     }
 
