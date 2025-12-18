@@ -5,11 +5,11 @@ import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.ui.Screen
-import org.nostr.nostrord.ui.screens.HomeScreen
-import org.nostr.nostrord.ui.screens.GroupScreen
-import org.nostr.nostrord.ui.screens.RelaySettingsScreen
-import org.nostr.nostrord.ui.screens.NostrLoginScreen
-import org.nostr.nostrord.ui.screens.BackupScreen
+import org.nostr.nostrord.ui.screens.home.HomeScreen
+import org.nostr.nostrord.ui.screens.group.GroupScreen
+import org.nostr.nostrord.ui.screens.relay.RelaySettingsScreen
+import org.nostr.nostrord.ui.screens.login.NostrLoginScreen
+import org.nostr.nostrord.ui.screens.backup.BackupScreen
 
 @Composable
 fun App() {

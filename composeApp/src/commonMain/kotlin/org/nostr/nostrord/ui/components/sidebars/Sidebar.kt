@@ -1,4 +1,4 @@
-package org.nostr.nostrord.ui.components
+package org.nostr.nostrord.ui.components.sidebars
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,7 +20,8 @@ import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.ui.Screen
-import kotlin.math.abs
+import org.nostr.nostrord.ui.theme.NostrordColors
+import org.nostr.nostrord.ui.util.generateColorFromString
 
 @Composable
 fun Sidebar(
@@ -36,7 +37,7 @@ fun Sidebar(
         modifier = Modifier
             .widthIn(min = 80.dp, max = 250.dp)
             .fillMaxHeight()
-            .background(Color(0xFF2F3136))
+            .background(NostrordColors.Surface)
             .padding(8.dp)
     ) {
         // Header
@@ -64,25 +65,24 @@ fun Sidebar(
         // Connection info
         Text(
             connectionStatus,
-            color = Color(0xFF99AAB5),
+            color = NostrordColors.TextSecondary,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
         )
 
         // Logged-in pubkey
         if (pubKey != null) {
-            // Logged-in pubkey display
             Spacer(modifier = Modifier.height(8.dp))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
-                    .background(Color(0xFF2F3136), shape = RoundedCornerShape(8.dp))
+                    .background(NostrordColors.Surface, shape = RoundedCornerShape(8.dp))
                     .padding(vertical = 6.dp, horizontal = 12.dp)
             ) {
                 Text(
                     text = "Logged in as: ${pubKey.take(8)}…",
-                    color = Color(0xFF99AAB5),
+                    color = NostrordColors.TextSecondary,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -98,12 +98,11 @@ fun Sidebar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED4245))
+                colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Error)
             ) {
                 Text("Logout", color = Color.White)
             }
         } else {
-            // Show login only if not logged in
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
@@ -111,7 +110,7 @@ fun Sidebar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5865F2))
+                colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Primary)
             ) {
                 Text("Login with Nostr", color = Color.White)
             }
@@ -119,7 +118,6 @@ fun Sidebar(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        /** --- Sidebar Groups List --- **/
         Text(
             "Joined Groups",
             color = Color.White,
@@ -130,7 +128,7 @@ fun Sidebar(
         if (joinedGroups.isEmpty()) {
             Text(
                 "No joined groups yet",
-                color = Color(0xFF99AAB5),
+                color = NostrordColors.TextSecondary,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(8.dp)
             )
@@ -146,12 +144,11 @@ fun Sidebar(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
-                            .background(Color(0xFF36393F), RoundedCornerShape(8.dp))
+                            .background(NostrordColors.Background, RoundedCornerShape(8.dp))
                             .clickable { onNavigate(Screen.Group(groupId, group?.name)) }
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Colored circle avatar
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
@@ -169,7 +166,6 @@ fun Sidebar(
 
                         Spacer(modifier = Modifier.width(12.dp))
 
-                        // Group name
                         Text(
                             text = groupName,
                             color = Color.White,
@@ -181,20 +177,4 @@ fun Sidebar(
             }
         }
     }
-}
-
-// Helper function to generate consistent colors from strings
-private fun generateColorFromString(str: String): Color {
-    val hash = str.hashCode()
-    val colors = listOf(
-        Color(0xFF5865F2),
-        Color(0xFF57F287),
-        Color(0xFFFEE75C),
-        Color(0xFFEB459E),
-        Color(0xFFED4245),
-        Color(0xFFFF6B6B),
-        Color(0xFF4ECDC4),
-        Color(0xFF95E1D3)
-    )
-    return colors[abs(hash) % colors.size]
 }

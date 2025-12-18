@@ -1,4 +1,4 @@
-package org.nostr.nostrord.ui.components
+package org.nostr.nostrord.ui.components.buttons
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.unit.dp
+import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
 fun AppButton(
@@ -20,13 +21,13 @@ fun AppButton(
         onClick = { if (enabled) onClick() },
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Color(0xFF5865F2),
+            containerColor = NostrordColors.Primary,
             contentColor = Color.White,
-            disabledContainerColor = Color(0xFF5865F2).copy(alpha = 0.4f),
+            disabledContainerColor = NostrordColors.Primary.copy(alpha = 0.4f),
             disabledContentColor = Color.White
         ),
         modifier = modifier.pointerHoverIcon(
-            if (enabled) PointerIcon.Hand else PointerIcon.Default // 👈 hover pointer
+            if (enabled) PointerIcon.Hand else PointerIcon.Default
         )
     ) {
         Text(
@@ -36,4 +37,3 @@ fun AppButton(
         )
     }
 }
-

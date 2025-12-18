@@ -1,4 +1,4 @@
-package org.nostr.nostrord.ui.components
+package org.nostr.nostrord.ui.components.sidebars
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
 fun GroupSidebar(
@@ -22,20 +23,19 @@ fun GroupSidebar(
     onSelect: (String) -> Unit
 ) {
     val channels = listOf("general")
-    //val channels = listOf("general", "test")
-    
+
     Column(
         modifier = Modifier
             .width(240.dp)
             .fillMaxHeight()
-            .background(Color(0xFF2F3136))
+            .background(NostrordColors.Surface)
     ) {
         // Server header
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(50.dp)
-                .background(Color(0xFF202225))
+                .background(NostrordColors.BackgroundDark)
                 .padding(horizontal = 16.dp),
             contentAlignment = Alignment.CenterStart
         ) {
@@ -55,7 +55,7 @@ fun GroupSidebar(
             item {
                 SectionHeader(title = "CHANNELS")
             }
-            
+
             items(channels) { channel ->
                 PageItem(
                     name = channel,
@@ -93,7 +93,7 @@ private fun PageItem(
 ) {
     val bg = if (selected) Color(0xFF393C43) else Color.Transparent
     val color = if (selected) Color.White else Color(0xFFB9BBBE)
-    
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
