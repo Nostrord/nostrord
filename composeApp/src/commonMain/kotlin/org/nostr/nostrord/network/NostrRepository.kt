@@ -64,9 +64,30 @@ object NostrRepository {
     private val _authUrl = MutableStateFlow<String?>(null)
     val authUrl: StateFlow<String?> = _authUrl.asStateFlow()
 
+    // NIP-65: User's relay list
+    data class Nip65Relay(
+        val url: String,
+        val read: Boolean = true,
+        val write: Boolean = true
+    )
+    private val _userRelayList = MutableStateFlow<List<Nip65Relay>>(emptyList())
+    val userRelayList: StateFlow<List<Nip65Relay>> = _userRelayList.asStateFlow()
+
+    // Cache for other users' relay lists (for outbox model)
+    private val _relayListCache = MutableStateFlow<Map<String, List<Nip65Relay>>>(emptyMap())
+    val relayListCache: StateFlow<Map<String, List<Nip65Relay>>> = _relayListCache.asStateFlow()
+
+    // Pending relay list requests to avoid duplicate requests
+    private val pendingRelayListRequests = mutableSetOf<String>()
+
+    // Additional relay clients for fetching from hint relays
+    private val hintRelayClients = mutableMapOf<String, NostrGroupClient>()
+
     private var kind10009SubId: String? = null
     private var kind10009Received = false
     private var eoseReceived = false
+    private var kind10002SubId: String? = null
+    private var kind10002Received = false
     
     private val allRelayGroups = mutableMapOf<String, MutableSet<String>>()
     
@@ -456,6 +477,40 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         }
     }
 
+    // NIP-65: Load user's relay list (kind:10002)
+    private suspend fun loadUserRelayList(pubKey: String) {
+        val currentClient = metadataClient ?: run {
+            println("⚠️ No metadata client available for NIP-65")
+            return
+        }
+
+        try {
+            kind10002Received = false
+
+            val filter = buildJsonObject {
+                putJsonArray("kinds") { add(10002) }
+                putJsonArray("authors") { add(pubKey) }
+                put("limit", 1)
+            }
+
+            val subId = "relay-list-${epochMillis()}"
+            kind10002SubId = subId
+
+            val message = buildJsonArray {
+                add("REQ")
+                add(subId)
+                add(filter)
+            }.toString()
+
+            currentClient.send(message)
+            println("📥 Requesting NIP-65 relay list (kind:10002)")
+
+            // Don't wait for this - it will be processed asynchronously
+        } catch (e: Exception) {
+            println("❌ Failed to request relay list: ${e.message}")
+        }
+    }
+
     // NEW: Publish kind:10009 to Nostr
     private suspend fun publishJoinedGroupsList() {
         val pubKey = getPublicKey() ?: run {
@@ -523,11 +578,12 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             newMetadataClient.waitForConnection()
             println("✅ Connected to metadata relay: $relayUrl")
 
-            // Immediately fetch the logged-in user's metadata first (highest priority)
+            // Immediately fetch the logged-in user's metadata and NIP-65 relay list first (highest priority)
             val pubKey = getPublicKey()
             if (pubKey != null) {
-                println("👤 Fetching current user metadata first...")
+                println("👤 Fetching current user metadata and relay list first...")
                 newMetadataClient.requestMetadata(listOf(pubKey))
+                loadUserRelayList(pubKey)
             }
 
             kotlinx.coroutines.delay(500)
@@ -622,6 +678,50 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
                     println("💾 Saved ${currentRelayGroups.size} groups for current relay")
                     println("📊 Total groups across all relays: ${allRelayGroups.values.sumOf { it.size }}")
                     println("📊 Relays in kind:10009: ${allRelayGroups.keys.joinToString(", ")}")
+                    return
+                }
+
+                // NIP-65: Handle relay list (kind:10002)
+                if (kind == 10002) {
+                    val eventPubkey = event["pubkey"]?.jsonPrimitive?.content
+                    val isCurrentUser = eventPubkey == getPublicKey()
+
+                    if (isCurrentUser) {
+                        kind10002Received = true
+                    }
+
+                    println("🎯 Received NIP-65 relay list (kind:10002) for ${eventPubkey?.take(8) ?: "unknown"}")
+                    val tags = event["tags"]?.jsonArray ?: return
+
+                    val relays = mutableListOf<Nip65Relay>()
+                    tags.forEach { tag ->
+                        val tagArray = tag.jsonArray
+                        if (tagArray.size >= 2 && tagArray[0].jsonPrimitive.content == "r") {
+                            val relayUrl = tagArray[1].jsonPrimitive.content
+                            val marker = tagArray.getOrNull(2)?.jsonPrimitive?.content
+
+                            val relay = when (marker) {
+                                "read" -> Nip65Relay(relayUrl, read = true, write = false)
+                                "write" -> Nip65Relay(relayUrl, read = false, write = true)
+                                else -> Nip65Relay(relayUrl, read = true, write = true)
+                            }
+                            relays.add(relay)
+                            println("  📡 ${relayUrl} (read=${relay.read}, write=${relay.write})")
+                        }
+                    }
+
+                    // Store in cache for any user
+                    if (eventPubkey != null) {
+                        _relayListCache.value = _relayListCache.value + (eventPubkey to relays)
+                        pendingRelayListRequests.remove(eventPubkey)
+                    }
+
+                    // Also update current user's relay list if it's theirs
+                    if (isCurrentUser) {
+                        _userRelayList.value = relays
+                    }
+
+                    println("✅ Loaded ${relays.size} relays from NIP-65 for ${eventPubkey?.take(8) ?: "unknown"}")
                     return
                 }
             }
@@ -813,24 +913,235 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         currentMetadataClient.requestMetadata(pubkeys.toList())
     }
 
-    suspend fun requestEventById(eventId: String) {
+    /**
+     * Request NIP-65 relay lists for given pubkeys
+     */
+    suspend fun requestRelayLists(pubkeys: Set<String>) {
+        val currentMetadataClient = metadataClient
+        if (currentMetadataClient == null) {
+            println("⚠️ Metadata client not connected for relay list request")
+            return
+        }
+
+        // Filter out pubkeys we already have or are already requesting
+        val toRequest = pubkeys.filter { pubkey ->
+            !_relayListCache.value.containsKey(pubkey) &&
+            !pendingRelayListRequests.contains(pubkey)
+        }
+
+        if (toRequest.isEmpty()) return
+
+        toRequest.forEach { pendingRelayListRequests.add(it) }
+
+        val filter = buildJsonObject {
+            putJsonArray("kinds") { add(10002) }
+            putJsonArray("authors") {
+                toRequest.forEach { add(it) }
+            }
+        }
+
+        val message = buildJsonArray {
+            add("REQ")
+            add("relay-list-${epochMillis()}")
+            add(filter)
+        }.toString()
+
+        currentMetadataClient.send(message)
+        println("📥 Requesting NIP-65 relay lists for ${toRequest.size} users")
+    }
+
+    /**
+     * Get relay list for a pubkey from cache
+     */
+    fun getRelayListForPubkey(pubkey: String): List<Nip65Relay> {
+        // Check if it's the current user
+        if (pubkey == getPublicKey()) {
+            return _userRelayList.value
+        }
+        return _relayListCache.value[pubkey] ?: emptyList()
+    }
+
+    /**
+     * Outbox model: Select relays based on query parameters
+     *
+     * @param authors Pubkeys of content authors (use their WRITE/outbox relays)
+     * @param taggedPubkeys Pubkeys tagged in content (use their READ/inbox relays)
+     * @param explicitRelays Explicit relay hints that override outbox selection
+     * @return List of relay URLs to query, in priority order
+     */
+    fun selectOutboxRelays(
+        authors: List<String> = emptyList(),
+        taggedPubkeys: List<String> = emptyList(),
+        explicitRelays: List<String> = emptyList()
+    ): List<String> {
+        val relays = mutableListOf<String>()
+
+        // 1. Explicit relays always come first (highest priority)
+        explicitRelays.forEach { relay ->
+            if (relay.isNotBlank() && relay !in relays) {
+                relays.add(relay)
+            }
+        }
+
+        // 2. If we have authors, use their WRITE relays (outbox)
+        if (authors.isNotEmpty()) {
+            authors.forEach { author ->
+                val authorRelays = getRelayListForPubkey(author)
+                authorRelays
+                    .filter { it.write }
+                    .forEach { relay ->
+                        if (relay.url !in relays) {
+                            relays.add(relay.url)
+                        }
+                    }
+            }
+        }
+
+        // 3. If we have tagged pubkeys, use their READ relays (inbox)
+        if (taggedPubkeys.isNotEmpty()) {
+            taggedPubkeys.forEach { pubkey ->
+                val pubkeyRelays = getRelayListForPubkey(pubkey)
+                pubkeyRelays
+                    .filter { it.read }
+                    .forEach { relay ->
+                        if (relay.url !in relays) {
+                            relays.add(relay.url)
+                        }
+                    }
+            }
+        }
+
+        // 4. If no authors or tagged users, use current user's READ relays
+        if (authors.isEmpty() && taggedPubkeys.isEmpty()) {
+            _userRelayList.value
+                .filter { it.read }
+                .forEach { relay ->
+                    if (relay.url !in relays) {
+                        relays.add(relay.url)
+                    }
+                }
+        }
+
+        // 5. Always add fallback metadata relays at the end
+        metadataRelays.forEach { relay ->
+            if (relay !in relays) {
+                relays.add(relay)
+            }
+        }
+
+        return relays
+    }
+
+    suspend fun requestEventById(eventId: String, relayHints: List<String> = emptyList(), author: String? = null) {
         // Skip if already cached
         if (_cachedEvents.value.containsKey(eventId)) {
             return
         }
 
-        val currentMetadataClient = metadataClient
-        if (currentMetadataClient == null) {
-            println("⚠️ Metadata client not connected, connecting now...")
-            connectToMetadataRelay()
-            metadataClient?.let {
-                it.requestEventById(eventId)
-            }
-            return
+        println("📥 Requesting event: ${eventId.take(8)}..." + (author?.let { " by ${it.take(8)}" } ?: ""))
+
+        // If we have an author, try to get their relay list first
+        if (author != null && !_relayListCache.value.containsKey(author)) {
+            requestRelayLists(setOf(author))
+            // Give a small delay for the relay list to arrive
+            kotlinx.coroutines.delay(200)
         }
 
-        println("📥 Requesting event: ${eventId.take(8)}...")
-        currentMetadataClient.requestEventById(eventId)
+        // Use outbox model for relay selection
+        val relaysToTry = selectOutboxRelays(
+            authors = if (author != null) listOf(author) else emptyList(),
+            explicitRelays = relayHints
+        )
+
+        println("   Trying ${relaysToTry.size} relays (outbox): ${relaysToTry.take(3).joinToString(", ")}${if (relaysToTry.size > 3) "..." else ""}")
+
+        // Request from all available relays
+        for (relayUrl in relaysToTry) {
+            try {
+                val client = getOrConnectHintRelay(relayUrl)
+                client?.requestEventById(eventId)
+            } catch (e: Exception) {
+                println("⚠️ Failed to request from $relayUrl: ${e.message}")
+            }
+        }
+    }
+
+    // Get or create a client for a hint relay
+    private suspend fun getOrConnectHintRelay(relayUrl: String): NostrGroupClient? {
+        // Check if it's our main metadata relay
+        if (metadataClient != null && metadataRelays.contains(relayUrl)) {
+            return metadataClient
+        }
+
+        // Check if we already have a connection
+        hintRelayClients[relayUrl]?.let { return it }
+
+        // Create new connection
+        return try {
+            println("🔗 Connecting to hint relay: $relayUrl")
+            val newClient = NostrGroupClient(relayUrl)
+            newClient.connect { msg ->
+                handleHintRelayMessage(msg, newClient)
+            }
+            newClient.waitForConnection()
+            hintRelayClients[relayUrl] = newClient
+            println("✅ Connected to hint relay: $relayUrl")
+            newClient
+        } catch (e: Exception) {
+            println("❌ Failed to connect to hint relay $relayUrl: ${e.message}")
+            null
+        }
+    }
+
+    // Handle messages from hint relays (for event fetching)
+    private fun handleHintRelayMessage(msg: String, client: NostrGroupClient) {
+        try {
+            val json = Json { ignoreUnknownKeys = true }
+            val arr = json.parseToJsonElement(msg).jsonArray
+
+            if (arr.size >= 3 && arr[0].jsonPrimitive.content == "EVENT") {
+                val subId = arr[1].jsonPrimitive.content
+                val event = arr[2].jsonObject
+
+                // Handle event_* subscriptions (fetched events by ID)
+                if (subId.startsWith("event_")) {
+                    val eventId = event["id"]?.jsonPrimitive?.content ?: return
+
+                    // Skip if already cached
+                    if (_cachedEvents.value.containsKey(eventId)) {
+                        return
+                    }
+
+                    val pubkey = event["pubkey"]?.jsonPrimitive?.content ?: return
+                    val content = event["content"]?.jsonPrimitive?.content ?: ""
+                    val createdAt = event["created_at"]?.jsonPrimitive?.long ?: 0L
+                    val kind = event["kind"]?.jsonPrimitive?.int ?: 1
+                    val tags = event["tags"]?.jsonArray?.map { tagArray ->
+                        tagArray.jsonArray.map { it.jsonPrimitive.content }
+                    } ?: emptyList()
+
+                    val cachedEvent = CachedEvent(
+                        id = eventId,
+                        pubkey = pubkey,
+                        kind = kind,
+                        content = content,
+                        createdAt = createdAt,
+                        tags = tags
+                    )
+                    _cachedEvents.value = _cachedEvents.value + (eventId to cachedEvent)
+                    println("✅ Cached event ${eventId.take(8)}... from hint relay (kind $kind)")
+
+                    // Also request metadata for the event author
+                    if (!_userMetadata.value.containsKey(pubkey)) {
+                        CoroutineScope(Dispatchers.Default).launch {
+                            requestUserMetadata(setOf(pubkey))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            println("⚠️ Error parsing hint relay message: ${e.message}")
+        }
     }
 
     private fun handleMessage(msg: String, client: NostrGroupClient) {

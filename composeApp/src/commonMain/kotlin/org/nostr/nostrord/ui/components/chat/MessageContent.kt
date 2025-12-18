@@ -286,6 +286,8 @@ private fun NostrMentionChip(
         is Nip19.Entity.Nevent -> {
             QuotedEvent(
                 eventId = entity.eventId,
+                relayHints = entity.relays,  // Pass relay hints from nevent
+                author = entity.author,       // Pass author for outbox model
                 onClick = onClick,
                 modifier = modifier
             )
@@ -293,6 +295,8 @@ private fun NostrMentionChip(
         is Nip19.Entity.Note -> {
             QuotedEvent(
                 eventId = entity.eventId,
+                relayHints = emptyList(),  // note doesn't have relay hints
+                author = null,
                 onClick = onClick,
                 modifier = modifier
             )
@@ -359,6 +363,8 @@ private fun UserMentionChip(
 @Composable
 private fun QuotedEvent(
     eventId: String,
+    relayHints: List<String> = emptyList(),
+    author: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -366,9 +372,9 @@ private fun QuotedEvent(
     val userMetadata by NostrRepository.userMetadata.collectAsState()
     val event = cachedEvents[eventId]
 
-    LaunchedEffect(eventId) {
+    LaunchedEffect(eventId, relayHints, author) {
         if (!cachedEvents.containsKey(eventId)) {
-            NostrRepository.requestEventById(eventId)
+            NostrRepository.requestEventById(eventId, relayHints, author)
         }
     }
 
