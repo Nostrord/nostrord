@@ -48,6 +48,9 @@ object NostrRepository {
     
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
+
+    private val _isInitialized = MutableStateFlow(false)
+    val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
     
     private val _isBunkerConnected = MutableStateFlow(false)
     val isBunkerConnected: StateFlow<Boolean> = _isBunkerConnected.asStateFlow()
@@ -153,9 +156,11 @@ object NostrRepository {
                 
                 // Set logged in after bunker setup attempt
                 _isLoggedIn.value = true
-                
-                connect()
+
+                // Connect to metadata relay first to load user profile faster
                 connectToMetadataRelay()
+                connect()
+                _isInitialized.value = true
                 return
             } catch (e: Exception) {
                 println("❌ Failed to restore bunker session: ${e.message}")
@@ -175,15 +180,19 @@ object NostrRepository {
                 _isLoggedIn.value = true
                 _joinedGroups.value = SecureStorage.getJoinedGroupsForRelay(_currentRelayUrl.value)
                 println("✅ Loaded saved credentials and ${_joinedGroups.value.size} joined groups for relay")
-                connect()
+                // Connect to metadata relay first to load user profile faster
                 connectToMetadataRelay()
+                connect()
             } catch (e: Exception) {
                 println("❌ Failed to load saved credentials: ${e.message}")
                 SecureStorage.clearPrivateKey()
             }
         }
+
+        // Mark initialization as complete (whether logged in or not)
+        _isInitialized.value = true
     }
-    
+
    fun clearAuthUrl() {
     _authUrl.value = null
 }
@@ -241,10 +250,11 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     
     println("✅ Bunker login successful, user: ${userPubkey.take(16)}...")
     println("   Client pubkey: ${newNip46Client.clientPubkey.take(16)}...")
-    
-    connect()
+
+    // Connect to metadata relay first to load user profile faster
     connectToMetadataRelay()
-    
+    connect()
+
     return userPubkey
 } 
 
@@ -502,18 +512,25 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         try {
             val relayUrl = metadataRelays[currentMetadataRelayIndex]
             println("🔗 Connecting to metadata relay: $relayUrl")
-            
+
             val newMetadataClient = NostrGroupClient(relayUrl)
             metadataClient = newMetadataClient
-            
+
             newMetadataClient.connect { msg ->
                 handleMetadataMessage(msg, newMetadataClient)
             }
-            
+
             newMetadataClient.waitForConnection()
             println("✅ Connected to metadata relay: $relayUrl")
 
-            kotlinx.coroutines.delay(1000)
+            // Immediately fetch the logged-in user's metadata first (highest priority)
+            val pubKey = getPublicKey()
+            if (pubKey != null) {
+                println("👤 Fetching current user metadata first...")
+                newMetadataClient.requestMetadata(listOf(pubKey))
+            }
+
+            kotlinx.coroutines.delay(500)
             println("🔄 Loading kind:10009 joined groups...")
 
             loadJoinedGroupsFromNostr()
@@ -703,8 +720,9 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         SecureStorage.savePrivateKey(privKey)
         _isLoggedIn.value = true
         _isBunkerConnected.value = false
-        connect()
+        // Connect to metadata relay first to load user profile faster
         connectToMetadataRelay()
+        connect()
     }
     
     suspend fun logout() {

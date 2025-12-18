@@ -1,11 +1,15 @@
 package org.nostr.nostrord
 
-import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.ui.Screen
@@ -14,10 +18,12 @@ import org.nostr.nostrord.ui.screens.group.GroupScreen
 import org.nostr.nostrord.ui.screens.relay.RelaySettingsScreen
 import org.nostr.nostrord.ui.screens.login.NostrLoginScreen
 import org.nostr.nostrord.ui.screens.backup.BackupScreen
+import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
 fun App() {
     val isLoggedIn by NostrRepository.isLoggedIn.collectAsState()
+    val isInitialized by NostrRepository.isInitialized.collectAsState()
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     val scope = rememberCoroutineScope()
 
@@ -33,6 +39,20 @@ fun App() {
     }
 
     MaterialTheme {
+        // Wait for initialization before deciding which screen to show
+        if (!isInitialized) {
+            // Show loading screen with app background color
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(NostrordColors.Background),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = NostrordColors.Primary)
+            }
+            return@MaterialTheme
+        }
+
         if (!isLoggedIn) {
             // Show login screen if not logged in
             NostrLoginScreen {
