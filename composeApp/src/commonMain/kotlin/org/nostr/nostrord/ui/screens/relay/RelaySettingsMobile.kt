@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.screens.relay
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -25,6 +26,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RelaySettingsMobile(
+    listState: LazyListState,
     relays: List<RelayInfo>,
     currentRelay: String,
     connectionStatus: String,
@@ -79,6 +81,7 @@ fun RelaySettingsMobile(
             containerColor = NostrordColors.Background
         ) { paddingValues ->
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)

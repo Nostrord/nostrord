@@ -1,10 +1,13 @@
 package org.nostr.nostrord.ui.components.sidebars
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,22 +50,32 @@ fun GroupSidebar(
             )
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 12.dp)
-        ) {
-            item {
-                SectionHeader(title = "CHANNELS")
+        Box(modifier = Modifier.fillMaxSize()) {
+            val listState = rememberLazyListState()
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 12.dp)
+            ) {
+                item {
+                    SectionHeader(title = "CHANNELS")
+                }
+
+                items(channels) { channel ->
+                    PageItem(
+                        name = channel,
+                        selected = selectedId == channel,
+                        onClick = { onSelect(channel) }
+                    )
+                }
             }
 
-            items(channels) { channel ->
-                PageItem(
-                    name = channel,
-                    selected = selectedId == channel,
-                    onClick = { onSelect(channel) }
-                )
-            }
+            VerticalScrollbar(
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                adapter = rememberScrollbarAdapter(listState)
+            )
         }
     }
 }

@@ -2,6 +2,8 @@ package org.nostr.nostrord.ui.screens.home
 
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -10,7 +12,10 @@ import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.ui.Screen
 
 @Composable
-fun HomeScreen(onNavigate: (Screen) -> Unit) {
+fun HomeScreen(
+    gridState: LazyGridState = rememberLazyGridState(),
+    onNavigate: (Screen) -> Unit
+) {
     val scope = rememberCoroutineScope()
 
     val groups by NostrRepository.groups.collectAsState()
@@ -51,6 +56,7 @@ fun HomeScreen(onNavigate: (Screen) -> Unit) {
 
         if (isCompact) {
             HomeScreenMobile(
+                gridState = gridState,
                 onNavigate = onNavigate,
                 connectionStatus = connectionStatus,
                 pubKey = pubKey,
@@ -63,6 +69,7 @@ fun HomeScreen(onNavigate: (Screen) -> Unit) {
             )
         } else {
             HomeScreenDesktop(
+                gridState = gridState,
                 onNavigate = onNavigate,
                 connectionStatus = connectionStatus,
                 pubKey = pubKey,

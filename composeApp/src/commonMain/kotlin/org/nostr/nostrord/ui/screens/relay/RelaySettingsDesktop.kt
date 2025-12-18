@@ -1,9 +1,12 @@
 package org.nostr.nostrord.ui.screens.relay
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
@@ -23,6 +26,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
 fun RelaySettingsDesktop(
+    listState: LazyListState,
     relays: List<RelayInfo>,
     currentRelay: String,
     connectionStatus: String,
@@ -73,24 +77,32 @@ fun RelaySettingsDesktop(
             }
 
             // Content
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                items(relays) { relay ->
-                    RelayCard(
-                        relay = relay,
-                        isActive = relay.url == currentRelay,
-                        isCompact = false,
-                        onSelectRelay = { onSelectRelay(relay.url) }
-                    )
+            Box(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    items(relays) { relay ->
+                        RelayCard(
+                            relay = relay,
+                            isActive = relay.url == currentRelay,
+                            isCompact = false,
+                            onSelectRelay = { onSelectRelay(relay.url) }
+                        )
+                    }
+
+                    item {
+                        AddRelayCard(isCompact = false, onClick = onAddRelay)
+                    }
                 }
 
-                item {
-                    AddRelayCard(isCompact = false, onClick = onAddRelay)
-                }
+                VerticalScrollbar(
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                    adapter = rememberScrollbarAdapter(listState)
+                )
             }
         }
     }

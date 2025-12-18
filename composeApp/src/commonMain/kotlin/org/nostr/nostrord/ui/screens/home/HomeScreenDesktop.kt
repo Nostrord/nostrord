@@ -1,10 +1,13 @@
 package org.nostr.nostrord.ui.screens.home
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -22,6 +25,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
 fun HomeScreenDesktop(
+    gridState: LazyGridState,
     onNavigate: (Screen) -> Unit,
     connectionStatus: String,
     pubKey: String?,
@@ -105,18 +109,26 @@ fun HomeScreenDesktop(
                     Text("No groups found", color = NostrordColors.TextSecondary)
                 }
             } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(gridColumns),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(filteredGroups) { group ->
-                        GroupCard(group = group, onClick = {
-                            onNavigate(Screen.Group(group.id, group.name))
-                        })
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Fixed(gridColumns),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredGroups) { group ->
+                            GroupCard(group = group, onClick = {
+                                onNavigate(Screen.Group(group.id, group.name))
+                            })
+                        }
                     }
+
+                    VerticalScrollbar(
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                        adapter = rememberScrollbarAdapter(gridState)
+                    )
                 }
             }
         }

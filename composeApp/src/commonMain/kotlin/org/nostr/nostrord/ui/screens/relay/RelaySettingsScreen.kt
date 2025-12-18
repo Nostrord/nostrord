@@ -1,6 +1,8 @@
 package org.nostr.nostrord.ui.screens.relay
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -12,7 +14,10 @@ import org.nostr.nostrord.ui.screens.relay.model.RelayInfo
 import org.nostr.nostrord.ui.screens.relay.model.RelayStatus
 
 @Composable
-fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
+fun RelaySettingsScreen(
+    listState: LazyListState = rememberLazyListState(),
+    onNavigate: (Screen) -> Unit
+) {
     val scope = rememberCoroutineScope()
 
     val groups by NostrRepository.groups.collectAsState()
@@ -98,6 +103,7 @@ fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
 
         if (isCompact) {
             RelaySettingsMobile(
+                listState = listState,
                 relays = relays,
                 currentRelay = currentRelay,
                 connectionStatus = connectionStatus,
@@ -117,6 +123,7 @@ fun RelaySettingsScreen(onNavigate: (Screen) -> Unit) {
             )
         } else {
             RelaySettingsDesktop(
+                listState = listState,
                 relays = relays,
                 currentRelay = currentRelay,
                 connectionStatus = connectionStatus,

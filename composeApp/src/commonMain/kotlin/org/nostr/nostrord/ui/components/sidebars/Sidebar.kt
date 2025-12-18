@@ -1,9 +1,12 @@
 package org.nostr.nostrord.ui.components.sidebars
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -134,46 +137,55 @@ fun Sidebar(
             )
         } else {
             val joinedList = joinedGroups.toList()
-            LazyColumn {
-                items(joinedList.size) { index ->
-                    val groupId = joinedList[index]
-                    val group = groups.find { it.id == groupId }
-                    val groupName = group?.name ?: groupId
+            Box(modifier = Modifier.fillMaxSize()) {
+                val listState = rememberLazyListState()
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .background(NostrordColors.Background, RoundedCornerShape(8.dp))
-                            .clickable { onNavigate(Screen.Group(groupId, group?.name)) }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
+                LazyColumn(state = listState) {
+                    items(joinedList.size) { index ->
+                        val groupId = joinedList[index]
+                        val group = groups.find { it.id == groupId }
+                        val groupName = group?.name ?: groupId
+
+                        Row(
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(generateColorFromString(groupId)),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .background(NostrordColors.Background, RoundedCornerShape(8.dp))
+                                .clickable { onNavigate(Screen.Group(groupId, group?.name)) }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(generateColorFromString(groupId)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = groupName.take(1).uppercase(),
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
                             Text(
-                                text = groupName.take(1).uppercase(),
+                                text = groupName,
                                 color = Color.White,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
                             )
                         }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Text(
-                            text = groupName,
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
                     }
                 }
+
+                VerticalScrollbar(
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                    adapter = rememberScrollbarAdapter(listState)
+                )
             }
         }
     }

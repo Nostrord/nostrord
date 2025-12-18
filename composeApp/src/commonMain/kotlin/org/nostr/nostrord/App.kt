@@ -1,5 +1,9 @@
 package org.nostr.nostrord
 
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
@@ -16,14 +20,18 @@ fun App() {
     val isLoggedIn by NostrRepository.isLoggedIn.collectAsState()
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     val scope = rememberCoroutineScope()
-    
+
+    // Remember scroll states across navigation
+    val homeGridState = rememberLazyGridState()
+    val relayListState = rememberLazyListState()
+
     // Initialize repository on app start (checks for saved credentials)
     LaunchedEffect(Unit) {
         scope.launch {
             NostrRepository.initialize()
         }
     }
-    
+
     MaterialTheme {
         if (!isLoggedIn) {
             // Show login screen if not logged in
@@ -35,9 +43,12 @@ fun App() {
             // Show main app if logged in
             when (val screen = currentScreen) {
                 is Screen.Home -> {
-                    HomeScreen(onNavigate = { newScreen ->
-                        currentScreen = newScreen
-                    })
+                    HomeScreen(
+                        gridState = homeGridState,
+                        onNavigate = { newScreen ->
+                            currentScreen = newScreen
+                        }
+                    )
                 }
                 is Screen.Group -> {
                     GroupScreen(
@@ -48,15 +59,19 @@ fun App() {
                 }
                 is Screen.RelaySettings -> {
                     RelaySettingsScreen(
+                        listState = relayListState,
                         onNavigate = { newScreen ->
                             currentScreen = newScreen
                         }
                     )
                 }
                 is Screen.PAGE1 -> {
-                    HomeScreen(onNavigate = { newScreen ->
-                        currentScreen = newScreen
-                    })
+                    HomeScreen(
+                        gridState = homeGridState,
+                        onNavigate = { newScreen ->
+                            currentScreen = newScreen
+                        }
+                    )
                 }
                 is Screen.NostrLogin -> {
                     NostrLoginScreen {

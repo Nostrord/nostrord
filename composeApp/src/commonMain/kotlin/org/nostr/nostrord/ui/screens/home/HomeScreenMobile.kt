@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.screens.home
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +26,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreenMobile(
+    gridState: LazyGridState,
     onNavigate: (Screen) -> Unit,
     connectionStatus: String,
     pubKey: String?,
@@ -115,6 +117,7 @@ fun HomeScreenMobile(
                     }
                 } else {
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(1),
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),

@@ -1,10 +1,12 @@
 package org.nostr.nostrord.ui.screens.group.components
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -50,33 +52,40 @@ fun MessagesList(
             )
         }
     } else {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            items(chatItems, key = { item ->
-                when (item) {
-                    is ChatItem.DateSeparator -> "date_${item.date}"
-                    is ChatItem.SystemEvent -> "system_${item.id}"
-                    is ChatItem.Message -> "msg_${item.message.id}"
-                }
-            }) { item ->
-                when (item) {
-                    is ChatItem.DateSeparator -> DateSeparator(item.date)
-                    is ChatItem.SystemEvent -> SystemEventItem(
-                        pubkey = item.pubkey,
-                        action = item.action,
-                        createdAt = item.createdAt,
-                        metadata = userMetadata[item.pubkey]
-                    )
-                    is ChatItem.Message -> MessageItem(
-                        message = item.message,
-                        metadata = userMetadata[item.message.pubkey]
-                    )
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(chatItems, key = { item ->
+                    when (item) {
+                        is ChatItem.DateSeparator -> "date_${item.date}"
+                        is ChatItem.SystemEvent -> "system_${item.id}"
+                        is ChatItem.Message -> "msg_${item.message.id}"
+                    }
+                }) { item ->
+                    when (item) {
+                        is ChatItem.DateSeparator -> DateSeparator(item.date)
+                        is ChatItem.SystemEvent -> SystemEventItem(
+                            pubkey = item.pubkey,
+                            action = item.action,
+                            createdAt = item.createdAt,
+                            metadata = userMetadata[item.pubkey]
+                        )
+                        is ChatItem.Message -> MessageItem(
+                            message = item.message,
+                            metadata = userMetadata[item.message.pubkey]
+                        )
+                    }
                 }
             }
+
+            VerticalScrollbar(
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                adapter = rememberScrollbarAdapter(listState)
+            )
         }
 
         LaunchedEffect(chatItems.size) {
