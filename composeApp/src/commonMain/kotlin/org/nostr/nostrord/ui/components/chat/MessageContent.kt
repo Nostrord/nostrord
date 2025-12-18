@@ -3,6 +3,7 @@ package org.nostr.nostrord.ui.components.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
@@ -147,6 +148,24 @@ private fun parseContent(content: String): List<ContentPart> {
     return parts
 }
 
+/**
+ * Check if a content part should be rendered as a block element (on its own line)
+ */
+private fun isBlockPart(part: ContentPart): Boolean {
+    return when (part) {
+        is ContentPart.ImagePart -> true
+        is ContentPart.NostrMention -> {
+            // Quoted events (nevent, note) are block elements
+            when (part.reference.entity) {
+                is Nip19.Entity.Nevent, is Nip19.Entity.Note -> true
+                else -> false
+            }
+        }
+        else -> false
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MessageContent(
     content: String,
@@ -154,62 +173,108 @@ fun MessageContent(
 ) {
     val parts = remember(content) { parseContent(content) }
     val uriHandler = LocalUriHandler.current
-    val context = LocalPlatformContext.current
+
+    // Group parts into inline sequences and block elements
+    val groups = remember(parts) {
+        val result = mutableListOf<List<ContentPart>>()
+        var currentInlineGroup = mutableListOf<ContentPart>()
+
+        parts.forEach { part ->
+            if (isBlockPart(part)) {
+                // Flush current inline group if not empty
+                if (currentInlineGroup.isNotEmpty()) {
+                    result.add(currentInlineGroup.toList())
+                    currentInlineGroup = mutableListOf()
+                }
+                // Add block element as its own group
+                result.add(listOf(part))
+            } else {
+                currentInlineGroup.add(part)
+            }
+        }
+        // Flush remaining inline group
+        if (currentInlineGroup.isNotEmpty()) {
+            result.add(currentInlineGroup.toList())
+        }
+        result
+    }
 
     Column(modifier = modifier) {
-        parts.forEach { part ->
-            when (part) {
-                is ContentPart.TextPart -> {
-                    SelectionContainer {
-                        Text(
-                            text = part.text.trim(),
-                            color = NostrordColors.TextContent,
-                            style = MaterialTheme.typography.bodyMedium
+        groups.forEach { group ->
+            val firstPart = group.firstOrNull()
+
+            // Check if this is a block element group (single block element)
+            if (group.size == 1 && isBlockPart(firstPart!!)) {
+                when (firstPart) {
+                    is ContentPart.ImagePart -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        ChatImage(
+                            imageUrl = firstPart.url,
+                            onClick = {
+                                try {
+                                    uriHandler.openUri(firstPart.url)
+                                } catch (_: Exception) {}
+                            }
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
-                }
-
-                is ContentPart.LinkPart -> {
-                    Text(
-                        text = part.url,
-                        color = NostrordColors.Primary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.clickable {
-                            try {
-                                uriHandler.openUri(part.url)
-                            } catch (_: Exception) {
-                                // Ignore if can't open URL
+                    is ContentPart.NostrMention -> {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        NostrMentionChip(
+                            mention = firstPart,
+                            onClick = {
+                                try {
+                                    uriHandler.openUri(firstPart.reference.uri)
+                                } catch (_: Exception) {}
                             }
-                        }
-                    )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    else -> {}
                 }
-
-                is ContentPart.ImagePart -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    ChatImage(
-                        imageUrl = part.url,
-                        onClick = {
-                            try {
-                                uriHandler.openUri(part.url)
-                            } catch (_: Exception) {
-                                // Ignore if can't open URL
+            } else {
+                // Render inline group with FlowRow
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    group.forEach { part ->
+                        when (part) {
+                            is ContentPart.TextPart -> {
+                                SelectionContainer {
+                                    Text(
+                                        text = part.text,
+                                        color = NostrordColors.TextContent,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
                             }
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-
-                is ContentPart.NostrMention -> {
-                    NostrMentionChip(
-                        mention = part,
-                        onClick = {
-                            try {
-                                uriHandler.openUri(part.reference.uri)
-                            } catch (_: Exception) {
-                                // Ignore if can't open URI
+                            is ContentPart.LinkPart -> {
+                                Text(
+                                    text = part.url,
+                                    color = NostrordColors.Primary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.clickable {
+                                        try {
+                                            uriHandler.openUri(part.url)
+                                        } catch (_: Exception) {}
+                                    }
+                                )
                             }
+                            is ContentPart.NostrMention -> {
+                                // Inline mention (npub, nprofile, etc.)
+                                NostrMentionChip(
+                                    mention = part,
+                                    onClick = {
+                                        try {
+                                            uriHandler.openUri(part.reference.uri)
+                                        } catch (_: Exception) {}
+                                    }
+                                )
+                            }
+                            else -> {}
                         }
-                    )
+                    }
                 }
             }
         }
@@ -424,6 +489,7 @@ private fun QuotedEvent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuotedEventContent(
     content: String,
@@ -431,63 +497,116 @@ private fun QuotedEventContent(
 ) {
     val parts = remember(content) { parseContent(content) }
     val uriHandler = LocalUriHandler.current
-    val context = LocalPlatformContext.current
+
+    // Group parts into inline sequences and block elements
+    val groups = remember(parts) {
+        val result = mutableListOf<List<ContentPart>>()
+        var currentInlineGroup = mutableListOf<ContentPart>()
+
+        parts.forEach { part ->
+            if (isBlockPart(part)) {
+                if (currentInlineGroup.isNotEmpty()) {
+                    result.add(currentInlineGroup.toList())
+                    currentInlineGroup = mutableListOf()
+                }
+                result.add(listOf(part))
+            } else {
+                currentInlineGroup.add(part)
+            }
+        }
+        if (currentInlineGroup.isNotEmpty()) {
+            result.add(currentInlineGroup.toList())
+        }
+        result
+    }
 
     Column(modifier = modifier) {
-        parts.forEach { part ->
-            when (part) {
-                is ContentPart.TextPart -> {
-                    Text(
-                        text = part.text.trim(),
-                        color = NostrordColors.TextContent,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 6
-                    )
-                }
+        groups.forEach { group ->
+            val firstPart = group.firstOrNull()
 
-                is ContentPart.LinkPart -> {
-                    Text(
-                        text = part.url,
-                        color = NostrordColors.Primary,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.clickable {
-                            try {
-                                uriHandler.openUri(part.url)
-                            } catch (_: Exception) {}
-                        }
-                    )
-                }
-
-                is ContentPart.ImagePart -> {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    QuotedImage(
-                        imageUrl = part.url,
-                        onClick = {
-                            try {
-                                uriHandler.openUri(part.url)
-                            } catch (_: Exception) {}
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-
-                is ContentPart.NostrMention -> {
-                    // Show as simple text link to avoid infinite nesting
-                    Text(
-                        text = Nip19.getDisplayName(part.reference.entity),
-                        color = NostrordColors.Primary,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(NostrordColors.Primary.copy(alpha = 0.1f))
-                            .clickable {
+            if (group.size == 1 && isBlockPart(firstPart!!)) {
+                when (firstPart) {
+                    is ContentPart.ImagePart -> {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        QuotedImage(
+                            imageUrl = firstPart.url,
+                            onClick = {
                                 try {
-                                    uriHandler.openUri(part.reference.uri)
+                                    uriHandler.openUri(firstPart.url)
                                 } catch (_: Exception) {}
                             }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    is ContentPart.NostrMention -> {
+                        // Nested quoted event - show as simple link
+                        Text(
+                            text = Nip19.getDisplayName(firstPart.reference.entity),
+                            color = NostrordColors.Primary,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(NostrordColors.Primary.copy(alpha = 0.1f))
+                                .clickable {
+                                    try {
+                                        uriHandler.openUri(firstPart.reference.uri)
+                                    } catch (_: Exception) {}
+                                }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                    else -> {}
+                }
+            } else {
+                // Render inline group with FlowRow
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    group.forEach { part ->
+                        when (part) {
+                            is ContentPart.TextPart -> {
+                                Text(
+                                    text = part.text,
+                                    color = NostrordColors.TextContent,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 6
+                                )
+                            }
+                            is ContentPart.LinkPart -> {
+                                Text(
+                                    text = part.url,
+                                    color = NostrordColors.Primary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.clickable {
+                                        try {
+                                            uriHandler.openUri(part.url)
+                                        } catch (_: Exception) {}
+                                    }
+                                )
+                            }
+                            is ContentPart.NostrMention -> {
+                                // Inline mention in quoted content
+                                Text(
+                                    text = Nip19.getDisplayName(part.reference.entity),
+                                    color = NostrordColors.Primary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(NostrordColors.Primary.copy(alpha = 0.1f))
+                                        .clickable {
+                                            try {
+                                                uriHandler.openUri(part.reference.uri)
+                                            } catch (_: Exception) {}
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                            else -> {}
+                        }
+                    }
                 }
             }
         }
