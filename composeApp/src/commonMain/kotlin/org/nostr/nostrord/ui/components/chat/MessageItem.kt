@@ -1,7 +1,6 @@
 package org.nostr.nostrord.ui.components.chat
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,13 +53,7 @@ fun MessageItem(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            SelectionContainer {
-                Text(
-                    text = message.content,
-                    color = NostrordColors.TextContent,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
+            MessageContent(content = message.content)
         }
     }
 }

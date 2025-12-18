@@ -55,6 +55,9 @@ object NostrRepository {
     private val _userMetadata = MutableStateFlow<Map<String, UserMetadata>>(emptyMap())
     val userMetadata: StateFlow<Map<String, UserMetadata>> = _userMetadata.asStateFlow()
 
+    private val _cachedEvents = MutableStateFlow<Map<String, CachedEvent>>(emptyMap())
+    val cachedEvents: StateFlow<Map<String, CachedEvent>> = _cachedEvents.asStateFlow()
+
     private val _authUrl = MutableStateFlow<String?>(null)
     val authUrl: StateFlow<String?> = _authUrl.asStateFlow()
 
@@ -538,9 +541,34 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             }
             
             if (arr.size >= 3 && arr[0].jsonPrimitive.content == "EVENT") {
+                val subId = arr[1].jsonPrimitive.content
                 val event = arr[2].jsonObject
                 val kind = event["kind"]?.jsonPrimitive?.int
-                
+
+                // Handle event_* subscriptions (fetched events by ID)
+                if (subId.startsWith("event_")) {
+                    val eventId = event["id"]?.jsonPrimitive?.content ?: return
+                    val pubkey = event["pubkey"]?.jsonPrimitive?.content ?: return
+                    val content = event["content"]?.jsonPrimitive?.content ?: ""
+                    val createdAt = event["created_at"]?.jsonPrimitive?.long ?: 0L
+                    val eventKind = kind ?: 1
+                    val tags = event["tags"]?.jsonArray?.map { tagArray ->
+                        tagArray.jsonArray.map { it.jsonPrimitive.content }
+                    } ?: emptyList()
+
+                    val cachedEvent = CachedEvent(
+                        id = eventId,
+                        pubkey = pubkey,
+                        kind = eventKind,
+                        content = content,
+                        createdAt = createdAt,
+                        tags = tags
+                    )
+                    _cachedEvents.value = _cachedEvents.value + (eventId to cachedEvent)
+                    println("✅ Cached event ${eventId.take(8)}... (kind $eventKind)")
+                    return
+                }
+
                 if (kind == 10009) {
                     kind10009Received = true
                     println("🎯 Received kind:10009 event")
@@ -762,11 +790,31 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             }
             return
         }
-        
+
         println("📥 Requesting metadata for ${pubkeys.size} users: ${pubkeys.map { it.take(8) }}")
         currentMetadataClient.requestMetadata(pubkeys.toList())
     }
-    
+
+    suspend fun requestEventById(eventId: String) {
+        // Skip if already cached
+        if (_cachedEvents.value.containsKey(eventId)) {
+            return
+        }
+
+        val currentMetadataClient = metadataClient
+        if (currentMetadataClient == null) {
+            println("⚠️ Metadata client not connected, connecting now...")
+            connectToMetadataRelay()
+            metadataClient?.let {
+                it.requestEventById(eventId)
+            }
+            return
+        }
+
+        println("📥 Requesting event: ${eventId.take(8)}...")
+        currentMetadataClient.requestEventById(eventId)
+    }
+
     private fun handleMessage(msg: String, client: NostrGroupClient) {
         val groupMetadata = client.parseGroupMetadata(msg)
         if (groupMetadata != null && groupMetadata.name != null) {

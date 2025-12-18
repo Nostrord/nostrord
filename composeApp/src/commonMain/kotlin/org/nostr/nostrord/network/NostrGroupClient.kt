@@ -26,6 +26,15 @@ data class UserMetadata(
     val nip05: String?
 )
 
+data class CachedEvent(
+    val id: String,
+    val pubkey: String,
+    val kind: Int,
+    val content: String,
+    val createdAt: Long,
+    val tags: List<List<String>>
+)
+
 class NostrGroupClient(
     private val relayUrl: String = "wss://groups.fiatjaf.com"
 ) {
@@ -290,6 +299,18 @@ suspend fun requestGroupMessages(groupId: String, channel: String? = null) {
         }
         sendJson(req)
         println("📥 Requesting metadata for ${pubkeys.size} pubkeys")
+    }
+
+    suspend fun requestEventById(eventId: String) {
+        val req = buildJsonArray {
+            add("REQ")
+            add("event_$eventId")
+            add(buildJsonObject {
+                putJsonArray("ids") { add(eventId) }
+            })
+        }
+        sendJson(req)
+        println("📥 Requesting event: $eventId")
     }
 
     suspend fun disconnect() {
