@@ -18,11 +18,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.NostrRepository
+import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.ui.Screen
+import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.util.generateColorFromString
 
@@ -35,6 +38,15 @@ fun Sidebar(
     groups: List<GroupMetadata>
 ) {
     val scope = rememberCoroutineScope()
+    val userMetadata by NostrRepository.userMetadata.collectAsState()
+    val currentUserMetadata: UserMetadata? = pubKey?.let { userMetadata[it] }
+
+    // Request user metadata if not loaded
+    LaunchedEffect(pubKey) {
+        if (pubKey != null && !userMetadata.containsKey(pubKey)) {
+            NostrRepository.requestUserMetadata(setOf(pubKey))
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -73,21 +85,47 @@ fun Sidebar(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
         )
 
-        // Logged-in pubkey
+        // Logged-in user profile
         if (pubKey != null) {
             Spacer(modifier = Modifier.height(8.dp))
-            Box(
+
+            // User profile card
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
-                    .background(NostrordColors.Surface, shape = RoundedCornerShape(8.dp))
-                    .padding(vertical = 6.dp, horizontal = 12.dp)
+                    .background(NostrordColors.Background, shape = RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Logged in as: ${pubKey.take(8)}…",
-                    color = NostrordColors.TextSecondary,
-                    style = MaterialTheme.typography.bodySmall
+                val displayName = currentUserMetadata?.displayName
+                    ?: currentUserMetadata?.name
+                    ?: pubKey.take(8)
+
+                ProfileAvatar(
+                    imageUrl = currentUserMetadata?.picture,
+                    displayName = displayName,
+                    pubkey = pubKey,
+                    size = 44.dp
                 )
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = displayName,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${pubKey.take(8)}…",
+                        color = NostrordColors.TextSecondary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
