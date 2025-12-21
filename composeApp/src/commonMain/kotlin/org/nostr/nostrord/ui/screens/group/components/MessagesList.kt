@@ -1,12 +1,10 @@
 package org.nostr.nostrord.ui.screens.group.components
 
-import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,6 +17,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.ui.components.chat.DateSeparator
 import org.nostr.nostrord.ui.components.chat.MessageItem
 import org.nostr.nostrord.ui.components.chat.SystemEventItem
+import org.nostr.nostrord.ui.components.scrollbar.VerticalScrollbarWrapper
 import org.nostr.nostrord.ui.screens.group.model.ChatItem
 import org.nostr.nostrord.ui.theme.NostrordColors
 
@@ -82,9 +81,9 @@ fun MessagesList(
                 }
             }
 
-            VerticalScrollbar(
-                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-                adapter = rememberScrollbarAdapter(listState)
+            VerticalScrollbarWrapper(
+                listState = listState,
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight()
             )
         }
 

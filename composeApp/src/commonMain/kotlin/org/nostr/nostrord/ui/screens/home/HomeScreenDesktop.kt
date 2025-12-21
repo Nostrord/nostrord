@@ -1,13 +1,11 @@
 package org.nostr.nostrord.ui.screens.home
 
-import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -18,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import org.nostr.nostrord.network.GroupMetadata
+import org.nostr.nostrord.ui.components.scrollbar.VerticalScrollbarWrapper
 import org.nostr.nostrord.ui.Screen
 import org.nostr.nostrord.ui.components.sidebars.Sidebar
 import org.nostr.nostrord.ui.screens.home.components.GroupCard
@@ -125,9 +124,9 @@ fun HomeScreenDesktop(
                         }
                     }
 
-                    VerticalScrollbar(
-                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-                        adapter = rememberScrollbarAdapter(gridState)
+                    VerticalScrollbarWrapper(
+                        gridState = gridState,
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight()
                     )
                 }
             }

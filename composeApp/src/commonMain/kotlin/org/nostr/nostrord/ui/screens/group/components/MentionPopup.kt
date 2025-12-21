@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -13,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -21,7 +21,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.screens.group.model.MemberInfo
-import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
 fun MentionPopup(
@@ -48,7 +47,7 @@ fun MentionPopup(
             .width(300.dp)
             .heightIn(max = 320.dp),
         shape = RoundedCornerShape(4.dp),
-        color = Color(0xFF2B2D31), // Discord dark background
+        color = Color(0xFF2B2D31), // dark background
         shadowElevation = 16.dp,
         tonalElevation = 0.dp
     ) {
@@ -62,7 +61,7 @@ fun MentionPopup(
                 Text(
                     text = "Members",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFB5BAC1), // Discord muted text
+                    color = Color(0xFFB5BAC1), // muted text
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,
                     letterSpacing = 0.02.sp
@@ -96,11 +95,12 @@ private fun MentionItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
 
-    val backgroundColor = if (isHovered) {
-        Color(0xFF35373C) // Discord hover color
-    } else {
-        Color.Transparent
+    val backgroundColor = when {
+        isPressed -> Color(0xFF3F4147) // Slightly brighter for press feedback (mobile)
+        isHovered -> Color(0xFF35373C) // hover color (desktop)
+        else -> Color.Transparent
     }
 
     Row(
@@ -133,7 +133,7 @@ private fun MentionItem(
             Text(
                 text = member.displayName,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFDBDEE1), // Discord primary text
+                color = Color(0xFFDBDEE1), // primary text
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -142,7 +142,7 @@ private fun MentionItem(
             Text(
                 text = member.pubkey.take(8) + "..." + member.pubkey.takeLast(4),
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF949BA4), // Discord secondary text
+                color = Color(0xFF949BA4), // secondary text
                 fontSize = 11.sp,
                 maxLines = 1
             )

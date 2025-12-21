@@ -1,10 +1,8 @@
 package org.nostr.nostrord.ui.screens.backup
 
-import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -22,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import org.nostr.nostrord.ui.components.cards.InfoCard
 import org.nostr.nostrord.ui.components.cards.KeyCard
 import org.nostr.nostrord.ui.components.cards.WarningCard
+import org.nostr.nostrord.ui.components.scrollbar.VerticalScrollbarWrapper
 import org.nostr.nostrord.ui.screens.backup.components.NoKeyCard
 import org.nostr.nostrord.ui.theme.NostrordColors
 
@@ -173,9 +172,9 @@ fun BackupScreenDesktop(
         }
         }
 
-        VerticalScrollbar(
-            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-            adapter = rememberScrollbarAdapter(scrollState)
+        VerticalScrollbarWrapper(
+            scrollState = scrollState,
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight()
         )
     }
 }

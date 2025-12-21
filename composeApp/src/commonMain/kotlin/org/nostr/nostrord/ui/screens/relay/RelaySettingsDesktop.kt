@@ -1,12 +1,10 @@
 package org.nostr.nostrord.ui.screens.relay
 
-import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
@@ -18,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.ui.Screen
+import org.nostr.nostrord.ui.components.scrollbar.VerticalScrollbarWrapper
 import org.nostr.nostrord.ui.components.sidebars.Sidebar
 import org.nostr.nostrord.ui.screens.relay.components.AddRelayCard
 import org.nostr.nostrord.ui.screens.relay.components.RelayCard
@@ -99,9 +98,9 @@ fun RelaySettingsDesktop(
                     }
                 }
 
-                VerticalScrollbar(
-                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-                    adapter = rememberScrollbarAdapter(listState)
+                VerticalScrollbarWrapper(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight()
                 )
             }
         }

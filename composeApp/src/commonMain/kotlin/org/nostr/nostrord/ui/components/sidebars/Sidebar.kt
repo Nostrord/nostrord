@@ -1,12 +1,10 @@
 package org.nostr.nostrord.ui.components.sidebars
 
-import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -26,6 +24,7 @@ import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.ui.Screen
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
+import org.nostr.nostrord.ui.components.scrollbar.VerticalScrollbarWrapper
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.util.generateColorFromString
 
@@ -220,9 +219,9 @@ fun Sidebar(
                     }
                 }
 
-                VerticalScrollbar(
-                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-                    adapter = rememberScrollbarAdapter(listState)
+                VerticalScrollbarWrapper(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight()
                 )
             }
         }
