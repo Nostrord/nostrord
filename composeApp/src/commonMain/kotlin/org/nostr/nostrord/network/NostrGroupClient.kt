@@ -76,8 +76,14 @@ class NostrGroupClient(
         }
     }
 
-    suspend fun waitForConnection() {
-        connectionReady.receive()
+    suspend fun waitForConnection(timeoutMs: Long = 15000): Boolean {
+        return withTimeoutOrNull(timeoutMs) {
+            connectionReady.receive()
+            true
+        } ?: run {
+            println("⚠️ Connection timeout after ${timeoutMs}ms")
+            false
+        }
     }
 
     suspend fun send(message: String) {

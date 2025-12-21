@@ -51,7 +51,11 @@ object NostrRepository {
 
     private val _isInitialized = MutableStateFlow(false)
     val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
-    
+
+    fun forceInitialized() {
+        _isInitialized.value = true
+    }
+
     private val _isBunkerConnected = MutableStateFlow(false)
     val isBunkerConnected: StateFlow<Boolean> = _isBunkerConnected.asStateFlow()
 

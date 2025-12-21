@@ -10,7 +10,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.ui.Screen
 import org.nostr.nostrord.ui.screens.home.HomeScreen
@@ -32,9 +34,14 @@ fun App() {
     val relayListState = rememberLazyListState()
 
     // Initialize repository on app start (checks for saved credentials)
+    // Add timeout to prevent indefinite loading on mobile browsers
     LaunchedEffect(Unit) {
-        scope.launch {
+        withTimeoutOrNull(30000) {
             NostrRepository.initialize()
+        } ?: run {
+            println("⚠️ Initialization timeout - forcing completion")
+            // Force initialization to complete so the app is usable
+            NostrRepository.forceInitialized()
         }
     }
 
