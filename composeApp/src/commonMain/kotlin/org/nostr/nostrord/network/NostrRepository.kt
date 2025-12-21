@@ -1312,29 +1312,38 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         currentClient.requestGroupMessages(groupId, channel)
     }
 
-    suspend fun sendMessage(groupId: String, content: String, channel: String? = null) {
+    suspend fun sendMessage(groupId: String, content: String, channel: String? = null, mentions: Map<String, String> = emptyMap()) {
         val currentClient = client ?: run {
             println("⚠️ Cannot send message - not connected")
             return
         }
-        
+
         val pubKey = getPublicKey() ?: run {
             println("⚠️ Cannot send message - not logged in")
             return
         }
-        
+
         try {
             val tags = mutableListOf(listOf("h", groupId))
             if (channel != null && channel != "general") {
                 tags.add(listOf("channel", channel))
             }
-            
+
+            // Replace @displayName with nostr:npub... in content
+            var processedContent = content
+            mentions.forEach { (displayName, pubkeyHex) ->
+                val npub = org.nostr.nostrord.nostr.Nip19.encodeNpub(pubkeyHex)
+                processedContent = processedContent.replace("@$displayName", "nostr:$npub")
+                // Add p tag for mentioned user
+                tags.add(listOf("p", pubkeyHex))
+            }
+
             val event = Event(
                 pubkey = pubKey,
                 createdAt = epochMillis() / 1000,
                 kind = 9,
                 tags = tags,
-                content = content
+                content = processedContent
             )
             
             val signedEvent = signEvent(event)
@@ -1346,7 +1355,7 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             }.toString()
             
             currentClient.send(message)
-            println("📤 Sent message to group $groupId${if (channel != null && channel != "general") " in channel $channel" else " (general)"}: $content")
+            println("📤 Sent message to group $groupId${if (channel != null && channel != "general") " in channel $channel" else " (general)"}: $processedContent")
             
         } catch (e: Exception) {
             println("❌ Failed to send message: ${e.message}")

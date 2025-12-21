@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.NostrRepository
 import org.nostr.nostrord.ui.screens.group.model.buildChatItems
+import org.nostr.nostrord.ui.screens.group.model.MemberInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
@@ -42,8 +43,27 @@ fun GroupScreen(
     val userMetadata by NostrRepository.userMetadata.collectAsState()
 
     var messageInput by remember { mutableStateOf("") }
+    var mentions by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // displayName -> pubkey
     var showLeaveDialog by remember { mutableStateOf(false) }
     val isJoined = joinedGroups.contains(groupId)
+
+    // Derive group members from all message pubkeys
+    val groupMembers = remember(allGroupMessages, userMetadata) {
+        allGroupMessages
+            .map { it.pubkey }
+            .distinct()
+            .map { pubkey ->
+                val metadata = userMetadata[pubkey]
+                MemberInfo(
+                    pubkey = pubkey,
+                    displayName = metadata?.displayName
+                        ?: metadata?.name
+                        ?: pubkey.take(8) + "...",
+                    picture = metadata?.picture
+                )
+            }
+            .sortedBy { it.displayName.lowercase() }
+    }
 
     val connectionStatus = when (connectionState) {
         is NostrRepository.ConnectionState.Disconnected -> "Disconnected"
@@ -116,15 +136,19 @@ fun GroupScreen(
                 onMessageInputChange = { messageInput = it },
                 onSendMessage = {
                     scope.launch {
-                        NostrRepository.sendMessage(groupId, messageInput, selectedChannel)
+                        NostrRepository.sendMessage(groupId, messageInput, selectedChannel, mentions)
                         messageInput = ""
+                        mentions = emptyMap()
                     }
                 },
                 onJoinGroup = {
                     scope.launch { NostrRepository.joinGroup(groupId) }
                 },
                 onLeaveGroup = { showLeaveDialog = true },
-                onBack = onBack
+                onBack = onBack,
+                groupMembers = groupMembers,
+                mentions = mentions,
+                onMentionsChange = { mentions = it }
             )
         } else {
             GroupScreenDesktop(
@@ -141,15 +165,19 @@ fun GroupScreen(
                 onMessageInputChange = { messageInput = it },
                 onSendMessage = {
                     scope.launch {
-                        NostrRepository.sendMessage(groupId, messageInput, selectedChannel)
+                        NostrRepository.sendMessage(groupId, messageInput, selectedChannel, mentions)
                         messageInput = ""
+                        mentions = emptyMap()
                     }
                 },
                 onJoinGroup = {
                     scope.launch { NostrRepository.joinGroup(groupId) }
                 },
                 onLeaveGroup = { showLeaveDialog = true },
-                onBack = onBack
+                onBack = onBack,
+                groupMembers = groupMembers,
+                mentions = mentions,
+                onMentionsChange = { mentions = it }
             )
         }
     }

@@ -17,6 +17,7 @@ import org.nostr.nostrord.ui.components.sidebars.GroupSidebar
 import org.nostr.nostrord.ui.screens.group.components.MessageInput
 import org.nostr.nostrord.ui.screens.group.components.MessagesList
 import org.nostr.nostrord.ui.screens.group.model.ChatItem
+import org.nostr.nostrord.ui.screens.group.model.MemberInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
 
 @Composable
@@ -35,7 +36,10 @@ fun GroupScreenDesktop(
     onSendMessage: () -> Unit,
     onJoinGroup: () -> Unit,
     onLeaveGroup: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    groupMembers: List<MemberInfo> = emptyList(),
+    mentions: Map<String, String> = emptyMap(),
+    onMentionsChange: (Map<String, String>) -> Unit = {}
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
         GroupSidebar(
@@ -116,7 +120,10 @@ fun GroupScreenDesktop(
                 messageInput = messageInput,
                 onMessageInputChange = onMessageInputChange,
                 onSendMessage = onSendMessage,
-                onJoinGroup = onJoinGroup
+                onJoinGroup = onJoinGroup,
+                groupMembers = groupMembers,
+                mentions = mentions,
+                onMentionsChange = onMentionsChange
             )
         }
     }
