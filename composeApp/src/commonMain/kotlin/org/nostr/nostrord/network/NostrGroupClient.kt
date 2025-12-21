@@ -44,6 +44,28 @@ class NostrGroupClient(
     private var connectionJob: Job? = null
     private val connectionReady = Channel<Unit>(Channel.CONFLATED)
 
+    // NIP-42 AUTH callback - set this to handle AUTH challenges
+    var onAuthChallenge: ((challenge: String) -> Unit)? = null
+
+    fun getRelayUrl(): String = relayUrl
+
+    /**
+     * Parse NIP-42 AUTH challenge from relay
+     * Returns the challenge string if this is an AUTH message, null otherwise
+     */
+    fun parseAuthChallenge(message: String): String? {
+        return try {
+            val arr = json.parseToJsonElement(message).jsonArray
+            if (arr.size >= 2 && arr[0].jsonPrimitive.content == "AUTH") {
+                arr[1].jsonPrimitive.content
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     suspend fun connect(onMessage: (String) -> Unit) {
         connectionJob = CoroutineScope(Dispatchers.Default).launch {
             try {
@@ -285,6 +307,7 @@ suspend fun requestGroupMessages(groupId: String, channel: String? = null) {
                 }
                 "NOTICE" -> "⚠️ NOTICE: ${arr.getOrNull(1)?.jsonPrimitive?.content}"
                 "CLOSED" -> "🔒 CLOSED: Subscription ${arr.getOrNull(1)?.jsonPrimitive?.content} closed: ${arr.getOrNull(2)?.jsonPrimitive?.content}"
+                "AUTH" -> "🔐 AUTH: Challenge received: ${arr.getOrNull(1)?.jsonPrimitive?.content?.take(16)}..."
                 else -> "❓ Unknown message type: $message"
             }
         } catch (e: Exception) {

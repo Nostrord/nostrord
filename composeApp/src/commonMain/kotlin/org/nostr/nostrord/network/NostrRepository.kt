@@ -1149,6 +1149,16 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     }
 
     private fun handleMessage(msg: String, client: NostrGroupClient) {
+        // Handle NIP-42 AUTH challenge first
+        val authChallenge = client.parseAuthChallenge(msg)
+        if (authChallenge != null) {
+            println("🔐 AUTH challenge received from ${client.getRelayUrl()}")
+            CoroutineScope(Dispatchers.Default).launch {
+                handleAuthChallenge(client, authChallenge)
+            }
+            return
+        }
+
         val groupMetadata = client.parseGroupMetadata(msg)
         if (groupMetadata != null && groupMetadata.name != null) {
             _groups.value = (_groups.value + groupMetadata).distinctBy { it.id }
@@ -1188,6 +1198,49 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         }
     } 
 
+    /**
+     * Handle NIP-42 AUTH challenge from relay
+     */
+    private suspend fun handleAuthChallenge(client: NostrGroupClient, challenge: String) {
+        val pubKey = getPublicKey() ?: run {
+            println("⚠️ Cannot respond to AUTH - not logged in")
+            return
+        }
+
+        try {
+            // Create AUTH event (kind 22242)
+            val authEvent = Event(
+                pubkey = pubKey,
+                createdAt = epochMillis() / 1000,
+                kind = 22242,
+                tags = listOf(
+                    listOf("relay", client.getRelayUrl()),
+                    listOf("challenge", challenge)
+                ),
+                content = ""
+            )
+
+            val signedEvent = signEvent(authEvent)
+
+            // Send AUTH response
+            val message = buildJsonArray {
+                add("AUTH")
+                add(signedEvent.toJsonObject())
+            }.toString()
+
+            client.send(message)
+            println("🔐 AUTH response sent to ${client.getRelayUrl()}")
+
+            // Re-request groups after authentication
+            kotlinx.coroutines.delay(500)
+            client.requestGroups()
+            println("📋 Re-requested groups after AUTH")
+
+        } catch (e: Exception) {
+            println("❌ Failed to respond to AUTH: ${e.message}")
+        }
+    }
+
     private fun extractGroupIdFromMessage(msg: String): String? {
         return try {
             val json = Json { ignoreUnknownKeys = true }
@@ -1195,7 +1248,7 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             if (arr.size < 3) return null
             val event = arr[2].jsonObject
             val tags = event["tags"]?.jsonArray ?: return null
-            
+
             tags.firstOrNull { tag ->
                 val tagArray = tag.jsonArray
                 tagArray.size >= 2 && tagArray[0].jsonPrimitive.content == "h"
@@ -1204,7 +1257,7 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             null
         }
     }
-    
+
     suspend fun joinGroup(groupId: String) {
         val currentClient = client ?: run {
             println("⚠️ Cannot join group - not connected")
