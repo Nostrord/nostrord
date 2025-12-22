@@ -16,7 +16,7 @@ import org.nostr.nostrord.utils.urlDecode
 
 object NostrRepository {
     private var client: NostrGroupClient? = null
-    private var metadataClient: NostrGroupClient? = null
+    private val metadataClients = mutableMapOf<String, NostrGroupClient>()
     private var isConnecting = false
 
     private var keyPair: KeyPair? = null
@@ -28,8 +28,9 @@ object NostrRepository {
     
     private val metadataRelays = listOf(
         "wss://relay.damus.io",
+        "wss://nos.lol",
+        "wss://relay.nostr.net",
     )
-    private var currentMetadataRelayIndex = 0
     
     private val _currentRelayUrl = MutableStateFlow("wss://groups.fiatjaf.com")
     val currentRelayUrl: StateFlow<String> = _currentRelayUrl.asStateFlow()
@@ -427,7 +428,7 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     // NEW: Load kind:10009 from Nostr
     private suspend fun loadJoinedGroupsFromNostr() {
         val pubKey = getPublicKey() ?: return
-        val currentClient = metadataClient ?: run {
+        val currentClient = getMetadataClient() ?: run {
             println("⚠️ No metadata client available")
             return
         }
@@ -490,8 +491,8 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
 
     // NIP-65: Load user's relay list (kind:10002)
     private suspend fun loadUserRelayList(pubKey: String) {
-        val currentClient = metadataClient ?: run {
-            println("⚠️ No metadata client available for NIP-65")
+        if (metadataClients.isEmpty()) {
+            println("⚠️ No metadata clients available for NIP-65")
             return
         }
 
@@ -513,8 +514,9 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
                 add(filter)
             }.toString()
 
-            currentClient.send(message)
-            println("📥 Requesting NIP-65 relay list (kind:10002)")
+            // Send to all connected metadata relays
+            sendToAllMetadataRelays(message)
+            println("📥 Requesting NIP-65 relay list (kind:10002) from ${metadataClients.size} relays")
 
             // Don't wait for this - it will be processed asynchronously
         } catch (e: Exception) {
@@ -528,27 +530,27 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             println("⚠️ Cannot publish kind:10009 - not logged in")
             return
         }
-        val currentClient = metadataClient ?: run {
-            println("⚠️ Cannot publish kind:10009 - metadata client not connected")
+        if (metadataClients.isEmpty()) {
+            println("⚠️ Cannot publish kind:10009 - no metadata clients connected")
             return
         }
-        
+
         try {
             val currentRelayGroups = _joinedGroups.value
             allRelayGroups[_currentRelayUrl.value] = currentRelayGroups.toMutableSet()
-            
+
             val tags = mutableListOf<List<String>>()
             allRelayGroups.forEach { (relayUrl, groupIds) ->
                 groupIds.forEach { groupId ->
                     tags.add(listOf("group", groupId, relayUrl))
                 }
             }
-            
+
             println("🔄 Merging groups from ${allRelayGroups.size} relay(s):")
             allRelayGroups.forEach { (relay, groups) ->
                 println("   • $relay: ${groups.size} group(s)")
             }
-            
+
             val event = Event(
                 pubkey = pubKey,
                 createdAt = epochMillis() / 1000,
@@ -556,17 +558,18 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
                 tags = tags,
                 content = ""
             )
-            
+
             val signedEvent = signEvent(event)
-            
+
             val message = buildJsonArray {
                 add("EVENT")
                 add(signedEvent.toJsonObject())
             }.toString()
-            
-            currentClient.send(message)
+
+            // Publish to all connected metadata relays
+            sendToAllMetadataRelays(message)
             val totalGroups = tags.size
-            println("📤 Published kind:10009 with $totalGroups total group(s) across ${allRelayGroups.size} relay(s)")
+            println("📤 Published kind:10009 with $totalGroups total group(s) to ${metadataClients.size} relays")
             println("   Current relay (${_currentRelayUrl.value}): ${currentRelayGroups.size} group(s)")
         } catch (e: Exception) {
             println("❌ Failed to publish joined groups: ${e.message}")
@@ -575,37 +578,74 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     }
     
     private suspend fun connectToMetadataRelay() {
-        try {
-            val relayUrl = metadataRelays[currentMetadataRelayIndex]
-            println("🔗 Connecting to metadata relay: $relayUrl")
+        println("🔗 Connecting to ${metadataRelays.size} metadata relays...")
 
-            val newMetadataClient = NostrGroupClient(relayUrl)
-            metadataClient = newMetadataClient
+        // Connect to all metadata relays in parallel
+        metadataRelays.forEach { relayUrl ->
+            CoroutineScope(Dispatchers.Default).launch {
+                try {
+                    println("🔗 Connecting to metadata relay: $relayUrl")
+                    val newClient = NostrGroupClient(relayUrl)
 
-            newMetadataClient.connect { msg ->
-                handleMetadataMessage(msg, newMetadataClient)
+                    newClient.connect { msg ->
+                        handleMetadataMessage(msg, newClient)
+                    }
+
+                    newClient.waitForConnection()
+                    metadataClients[relayUrl] = newClient
+                    println("✅ Connected to metadata relay: $relayUrl")
+                } catch (e: Exception) {
+                    println("❌ Failed to connect to metadata relay $relayUrl: ${e.message}")
+                }
             }
+        }
 
-            newMetadataClient.waitForConnection()
-            println("✅ Connected to metadata relay: $relayUrl")
-
-            // Immediately fetch the logged-in user's metadata and NIP-65 relay list first (highest priority)
-            val pubKey = getPublicKey()
-            if (pubKey != null) {
-                println("👤 Fetching current user metadata and relay list first...")
-                newMetadataClient.requestMetadata(listOf(pubKey))
-                loadUserRelayList(pubKey)
+        // Wait for at least one connection to succeed (with timeout)
+        kotlinx.coroutines.withTimeoutOrNull(10000) {
+            while (metadataClients.isEmpty()) {
+                kotlinx.coroutines.delay(100)
             }
+        }
 
-            kotlinx.coroutines.delay(500)
-            println("🔄 Loading kind:10009 joined groups...")
+        if (metadataClients.isEmpty()) {
+            println("⚠️ No metadata relays connected")
+            return
+        }
 
-            loadJoinedGroupsFromNostr()
-        } catch (e: Exception) {
-            println("❌ Failed to connect to metadata relay: ${e.message}")
-            if (currentMetadataRelayIndex < metadataRelays.size - 1) {
-                currentMetadataRelayIndex++
-                connectToMetadataRelay()
+        println("✅ Connected to ${metadataClients.size}/${metadataRelays.size} metadata relays")
+
+        // Immediately fetch the logged-in user's metadata and NIP-65 relay list from all connected relays
+        val pubKey = getPublicKey()
+        if (pubKey != null) {
+            println("👤 Fetching current user metadata and relay list from all relays...")
+            metadataClients.values.forEach { client ->
+                client.requestMetadata(listOf(pubKey))
+            }
+            loadUserRelayList(pubKey)
+        }
+
+        kotlinx.coroutines.delay(500)
+        println("🔄 Loading kind:10009 joined groups...")
+
+        loadJoinedGroupsFromNostr()
+    }
+
+    /**
+     * Get the first available metadata client (for sending requests)
+     */
+    private fun getMetadataClient(): NostrGroupClient? {
+        return metadataClients.values.firstOrNull()
+    }
+
+    /**
+     * Send a message to all connected metadata relays
+     */
+    private suspend fun sendToAllMetadataRelays(message: String) {
+        metadataClients.values.forEach { client ->
+            try {
+                client.send(message)
+            } catch (e: Exception) {
+                println("⚠️ Failed to send to ${client.getRelayUrl()}: ${e.message}")
             }
         }
     } 
@@ -846,9 +886,10 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     
     suspend fun logout() {
         disconnect()
-        metadataClient?.disconnect()
-        metadataClient = null
-        
+        // Disconnect all metadata clients
+        metadataClients.values.forEach { it.disconnect() }
+        metadataClients.clear()
+
         // Clear bunker session but KEEP the client private key
         // This allows re-login with the same bunker URI
         nip46Client?.disconnect()
@@ -903,42 +944,43 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         
         kind10009Received = false
         eoseReceived = false
-        
-        val currentMetadataClient = metadataClient
-        if (currentMetadataClient == null) {
-            println("🔄 Metadata client not connected, connecting...")
+
+        if (metadataClients.isEmpty()) {
+            println("🔄 No metadata clients connected, connecting...")
             connectToMetadataRelay()
             kotlinx.coroutines.delay(2000)
         } else {
             kotlinx.coroutines.delay(1000)
         }
-        
+
         println("🔄 Loading kind:10009 for new relay...")
         loadJoinedGroupsFromNostr()
     }
 
     suspend fun requestUserMetadata(pubkeys: Set<String>) {
-        val currentMetadataClient = metadataClient
-        if (currentMetadataClient == null) {
-            println("⚠️ Metadata client not connected, connecting now...")
+        if (metadataClients.isEmpty()) {
+            println("⚠️ No metadata clients connected, connecting now...")
             connectToMetadataRelay()
-            metadataClient?.let {
-                it.requestMetadata(pubkeys.toList())
-            }
+        }
+
+        if (metadataClients.isEmpty()) {
+            println("⚠️ Failed to connect to any metadata relay")
             return
         }
 
-        println("📥 Requesting metadata for ${pubkeys.size} users: ${pubkeys.map { it.take(8) }}")
-        currentMetadataClient.requestMetadata(pubkeys.toList())
+        println("📥 Requesting metadata for ${pubkeys.size} users from ${metadataClients.size} relays: ${pubkeys.map { it.take(8) }}")
+        // Request from all connected metadata relays
+        metadataClients.values.forEach { client ->
+            client.requestMetadata(pubkeys.toList())
+        }
     }
 
     /**
      * Request NIP-65 relay lists for given pubkeys
      */
     suspend fun requestRelayLists(pubkeys: Set<String>) {
-        val currentMetadataClient = metadataClient
-        if (currentMetadataClient == null) {
-            println("⚠️ Metadata client not connected for relay list request")
+        if (metadataClients.isEmpty()) {
+            println("⚠️ No metadata clients connected for relay list request")
             return
         }
 
@@ -965,7 +1007,8 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             add(filter)
         }.toString()
 
-        currentMetadataClient.send(message)
+        // Send to all connected metadata relays
+        sendToAllMetadataRelays(message)
         println("📥 Requesting NIP-65 relay lists for ${toRequest.size} users")
     }
 
@@ -981,7 +1024,7 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     }
 
     /**
-     * Outbox model: Select relays based on query parameters
+     * Outbox model: Select relays based on query parameters (NIP-65)
      *
      * @param authors Pubkeys of content authors (use their WRITE/outbox relays)
      * @param taggedPubkeys Pubkeys tagged in content (use their READ/inbox relays)
@@ -994,6 +1037,7 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         explicitRelays: List<String> = emptyList()
     ): List<String> {
         val relays = mutableListOf<String>()
+        var hasAuthorRelays = false
 
         // 1. Explicit relays always come first (highest priority)
         explicitRelays.forEach { relay ->
@@ -1006,6 +1050,9 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         if (authors.isNotEmpty()) {
             authors.forEach { author ->
                 val authorRelays = getRelayListForPubkey(author)
+                if (authorRelays.isNotEmpty()) {
+                    hasAuthorRelays = true
+                }
                 authorRelays
                     .filter { it.write }
                     .forEach { relay ->
@@ -1032,7 +1079,11 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
 
         // 4. If no authors or tagged users, use current user's READ relays
         if (authors.isEmpty() && taggedPubkeys.isEmpty()) {
-            _userRelayList.value
+            val userRelays = _userRelayList.value
+            if (userRelays.isNotEmpty()) {
+                hasAuthorRelays = true
+            }
+            userRelays
                 .filter { it.read }
                 .forEach { relay ->
                     if (relay.url !in relays) {
@@ -1041,11 +1092,23 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
                 }
         }
 
-        // 5. Always add fallback metadata relays at the end
+        // 5. Add current NIP-29 relay as fallback (default Nostrord relay)
+        // This is important when users don't have a NIP-65 relay list
+        val currentNip29Relay = _currentRelayUrl.value
+        if (currentNip29Relay !in relays) {
+            relays.add(currentNip29Relay)
+        }
+
+        // 6. Always add fallback metadata relays at the end
         metadataRelays.forEach { relay ->
             if (relay !in relays) {
                 relays.add(relay)
             }
+        }
+
+        // Log if we're using fallback relays due to missing NIP-65 data
+        if (!hasAuthorRelays && authors.isNotEmpty()) {
+            println("ℹ️ NIP-65: No relay list found for authors, using default relays")
         }
 
         return relays
@@ -1087,10 +1150,8 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
 
     // Get or create a client for a hint relay
     private suspend fun getOrConnectHintRelay(relayUrl: String): NostrGroupClient? {
-        // Check if it's our main metadata relay
-        if (metadataClient != null && metadataRelays.contains(relayUrl)) {
-            return metadataClient
-        }
+        // Check if it's one of our metadata relays
+        metadataClients[relayUrl]?.let { return it }
 
         // Check if we already have a connection
         hintRelayClients[relayUrl]?.let { return it }
@@ -1199,6 +1260,8 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
                     println("🔍 Requesting metadata for new user: ${message.pubkey.take(8)}")
                     CoroutineScope(Dispatchers.Default).launch {
                         requestUserMetadata(setOf(message.pubkey))
+                        // Also request NIP-65 relay list for outbox model support
+                        requestRelayLists(setOf(message.pubkey))
                     }
                 }
                 
