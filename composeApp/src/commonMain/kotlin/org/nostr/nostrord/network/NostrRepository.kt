@@ -262,23 +262,30 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
     bunkerUserPubkey = userPubkey
     isBunkerLogin = true
     keyPair = null
-    
+
     // Save bunker URL, user pubkey, AND client private key for session persistence
     SecureStorage.saveBunkerUrl(bunkerUrl)
     SecureStorage.saveBunkerUserPubkey(userPubkey)
     SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
     SecureStorage.clearPrivateKey()
-    
-    _isLoggedIn.value = true
+
     _isBunkerConnected.value = true
     _authUrl.value = null
-    
+
     println("✅ Bunker login successful, user: ${userPubkey.take(16)}...")
     println("   Client pubkey: ${newNip46Client.clientPubkey.take(16)}...")
 
-    // Connect to metadata relay first to load user profile faster
+    // Connect to relays BEFORE setting isLoggedIn
+    // This prevents the UI from transitioning and cancelling the coroutine
+    println("🔐 Bunker Login: Connecting to metadata relay...")
     connectToMetadataRelay()
+    println("🔐 Bunker Login: Connecting to NIP-29 relay...")
     connect()
+
+    // Only set logged in AFTER connections are established
+    // This ensures the coroutine isn't cancelled by UI recomposition
+    println("🔐 Bunker Login: Connection established, setting logged in state")
+    _isLoggedIn.value = true
 
     return userPubkey
 } 
@@ -819,14 +826,22 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         SecureStorage.clearBunkerUrl()
         SecureStorage.clearBunkerUserPubkey()
         SecureStorage.clearBunkerClientPrivateKey()
-        
+
         keyPair = KeyPair.fromPrivateKeyHex(privKey)
         SecureStorage.savePrivateKey(privKey)
-        _isLoggedIn.value = true
         _isBunkerConnected.value = false
-        // Connect to metadata relay first to load user profile faster
+
+        // Connect to relays BEFORE setting isLoggedIn
+        // This prevents the UI from transitioning and cancelling the coroutine
+        println("🔐 Login: Connecting to metadata relay...")
         connectToMetadataRelay()
+        println("🔐 Login: Connecting to NIP-29 relay...")
         connect()
+
+        // Only set logged in AFTER connections are established
+        // This ensures the coroutine isn't cancelled by UI recomposition
+        println("🔐 Login: Connection established, setting logged in state")
+        _isLoggedIn.value = true
     }
     
     suspend fun logout() {
