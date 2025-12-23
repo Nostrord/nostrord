@@ -10,24 +10,19 @@ import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.outbox.EventDeduplicator
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
-import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Event
-import org.nostr.nostrord.nostr.Nip46Client
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.utils.epochMillis
 import org.nostr.nostrord.utils.urlDecode
 
+/**
+ * Repository for Nostr operations.
+ * Manages relay connections, group operations, and coordinates with AuthManager for authentication.
+ */
 object NostrRepository {
     private var client: NostrGroupClient? = null
     private var isConnecting = false
 
-    private var keyPair: KeyPair? = null
-
-    // NIP-46 Bunker support
-    private var nip46Client: Nip46Client? = null
-    private var isBunkerLogin = false
-    private var bunkerUserPubkey: String? = null
-    
     private val _currentRelayUrl = MutableStateFlow("wss://groups.fiatjaf.com")
     val currentRelayUrl: StateFlow<String> = _currentRelayUrl.asStateFlow()
     
@@ -42,9 +37,6 @@ object NostrRepository {
     
     private val _joinedGroups = MutableStateFlow<Set<String>>(emptySet())
     val joinedGroups: StateFlow<Set<String>> = _joinedGroups.asStateFlow()
-    
-    private val _isLoggedIn = MutableStateFlow(false)
-    val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
     private val _isInitialized = MutableStateFlow(false)
     val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
@@ -53,17 +45,16 @@ object NostrRepository {
         _isInitialized.value = true
     }
 
-    private val _isBunkerConnected = MutableStateFlow(false)
-    val isBunkerConnected: StateFlow<Boolean> = _isBunkerConnected.asStateFlow()
+    // Delegate auth state to AuthManager
+    val isLoggedIn: StateFlow<Boolean> = AuthManager.isLoggedIn
+    val isBunkerConnected: StateFlow<Boolean> = AuthManager.isBunkerConnected
+    val authUrl: StateFlow<String?> = AuthManager.authUrl
 
     private val _userMetadata = MutableStateFlow<Map<String, UserMetadata>>(emptyMap())
     val userMetadata: StateFlow<Map<String, UserMetadata>> = _userMetadata.asStateFlow()
 
     private val _cachedEvents = MutableStateFlow<Map<String, CachedEvent>>(emptyMap())
     val cachedEvents: StateFlow<Map<String, CachedEvent>> = _cachedEvents.asStateFlow()
-
-    private val _authUrl = MutableStateFlow<String?>(null)
-    val authUrl: StateFlow<String?> = _authUrl.asStateFlow()
 
     // NIP-65 Outbox Model: Relay list manager and event deduplicator
     private val relayListManager = RelayListManager(
@@ -105,314 +96,62 @@ object NostrRepository {
     }
     
     suspend fun initialize() {
+        // Load saved relay URL
         val savedRelayUrl = SecureStorage.getCurrentRelayUrl()
         if (savedRelayUrl != null) {
             _currentRelayUrl.value = savedRelayUrl
             println("✅ Loaded saved relay URL: $savedRelayUrl")
         }
-        
-        // Check for bunker login first
-        val savedBunkerUrl: String? = SecureStorage.getBunkerUrl()
-        val savedUserPubkey: String? = SecureStorage.getBunkerUserPubkey()
-        
-        if (savedBunkerUrl != null && savedUserPubkey != null) {
-            try {
-                println("🔐 Restoring bunker session...")
-                val bunkerInfo = parseBunkerUrl(savedBunkerUrl)
-                val savedClientPrivateKey = SecureStorage.getBunkerClientPrivateKey()
-                
-                // Use saved client private key to maintain session identity
-                val newNip46Client = if (savedClientPrivateKey != null) {
-                    println("   Using saved client keypair for session continuity")
-                    Nip46Client(savedClientPrivateKey)
-                } else {
-                    println("   No saved client key, generating new (may need re-authorization)")
-                    Nip46Client()
-                }
-                
-                // Set the user pubkey immediately from saved value
-                bunkerUserPubkey = savedUserPubkey
-                isBunkerLogin = true
-                _joinedGroups.value = SecureStorage.getJoinedGroupsForRelay(savedUserPubkey, _currentRelayUrl.value)
-                
-                println("✅ Loaded bunker user pubkey: ${savedUserPubkey.take(16)}...")
-                
-                // Connect to bunker - wait for it to complete
-                try {
-                    try {
-                        newNip46Client.connect(
-                            remoteSignerPubkey = bunkerInfo.pubkey,
-                            relays = bunkerInfo.relays,
-                            secret = bunkerInfo.secret
-                        )
-                    } catch (e: Exception) {
-                        // "already connected" means the signer remembers us - this is success!
-                        if (e.message?.contains("already connected", ignoreCase = true) == true) {
-                            println("✅ Signer reports already connected - reusing session")
-                        } else {
-                            throw e
-                        }
-                    }
-                    
-                    nip46Client = newNip46Client
-                    _isBunkerConnected.value = true
-                    
-                    // Save client key if it was newly generated
-                    if (savedClientPrivateKey == null) {
-                        SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
-                    }
-                    
-                    // Verify the pubkey matches
-                    try {
-                        val actualUserPubkey = newNip46Client.getPublicKey()
-                        if (actualUserPubkey != savedUserPubkey) {
-                            println("⚠️ Bunker returned different pubkey, updating...")
-                            bunkerUserPubkey = actualUserPubkey
-                            SecureStorage.saveBunkerUserPubkey(actualUserPubkey)
-                        }
-                    } catch (e: Exception) {
-                        println("⚠️ Could not verify pubkey, using saved: ${savedUserPubkey.take(16)}...")
-                    }
-                    
-                    println("✅ Restored bunker connection for ${bunkerUserPubkey?.take(16)}...")
-                } catch (e: Exception) {
-                    println("⚠️ Initial bunker reconnection failed: ${e.message}")
-                    println("   Will retry when signing is needed")
-                    // Don't set _isBunkerConnected to true, signEvent will try to reconnect
-                }
-                
-                // Set logged in after bunker setup attempt
-                _isLoggedIn.value = true
 
-                // Connect to metadata relay first to load user profile faster
-                initializeOutboxModel()
-                connect()
-                _isInitialized.value = true
-                return
-            } catch (e: Exception) {
-                println("❌ Failed to restore bunker session: ${e.message}")
-                SecureStorage.clearBunkerUrl()
-                SecureStorage.clearBunkerUserPubkey()
-                SecureStorage.clearBunkerClientPrivateKey()
-                isBunkerLogin = false
-                bunkerUserPubkey = null
+        // Try to restore auth session via AuthManager
+        val restored = AuthManager.restoreSession()
+        if (restored) {
+            val pubkey = AuthManager.getPublicKey()
+            if (pubkey != null) {
+                _joinedGroups.value = SecureStorage.getJoinedGroupsForRelay(pubkey, _currentRelayUrl.value)
+                println("✅ Loaded ${_joinedGroups.value.size} joined groups for relay")
             }
-        }
-        
-        // Fall back to private key login
-        val savedPrivateKey = SecureStorage.getPrivateKey()
-        if (savedPrivateKey != null) {
-            try {
-                keyPair = KeyPair.fromPrivateKeyHex(savedPrivateKey)
-                _isLoggedIn.value = true
-                _joinedGroups.value = SecureStorage.getJoinedGroupsForRelay(keyPair!!.publicKeyHex, _currentRelayUrl.value)
-                println("✅ Loaded saved credentials and ${_joinedGroups.value.size} joined groups for relay")
-                // Connect to metadata relay first to load user profile faster
-                initializeOutboxModel()
-                connect()
-            } catch (e: Exception) {
-                println("❌ Failed to load saved credentials: ${e.message}")
-                SecureStorage.clearPrivateKey()
-            }
+            // Connect to relays
+            initializeOutboxModel()
+            connect()
         }
 
-        // Mark initialization as complete (whether logged in or not)
         _isInitialized.value = true
     }
 
-   fun clearAuthUrl() {
-    _authUrl.value = null
-}
-
-suspend fun loginWithBunker(bunkerUrl: String): String {
-    val bunkerInfo = parseBunkerUrl(bunkerUrl)
-    
-    // Check if we have an existing client key (from previous session with same signer)
-    val existingClientKey = SecureStorage.getBunkerClientPrivateKey()
-    val newNip46Client = if (existingClientKey != null) {
-        println("🔑 Reusing existing client keypair for bunker connection")
-        Nip46Client(existingClientKey)
-    } else {
-        println("🔑 Generating new client keypair for bunker connection")
-        Nip46Client(null)
-    }
-    
-    // Set up auth URL callback
-    newNip46Client.onAuthUrl = { url ->
-        println("🔐 Auth URL received: $url")
-        _authUrl.value = url
-    }
-    
-    try {
-        newNip46Client.connect(
-            remoteSignerPubkey = bunkerInfo.pubkey,
-            relays = bunkerInfo.relays,
-            secret = bunkerInfo.secret
-        )
-    } catch (e: Exception) {
-        // "already connected" means the signer remembers us - this is success!
-        if (e.message?.contains("already connected", ignoreCase = true) == true) {
-            println("✅ Signer reports already connected - reusing session")
-        } else {
-            throw e
-        }
-    }
-    
-    val userPubkey = newNip46Client.getPublicKey()
-    
-    nip46Client = newNip46Client
-    bunkerUserPubkey = userPubkey
-    isBunkerLogin = true
-    keyPair = null
-
-    // Save bunker URL, user pubkey, AND client private key for session persistence
-    SecureStorage.saveBunkerUrl(bunkerUrl)
-    SecureStorage.saveBunkerUserPubkey(userPubkey)
-    SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
-    SecureStorage.clearPrivateKey()
-
-    _isBunkerConnected.value = true
-    _authUrl.value = null
-
-    println("✅ Bunker login successful, user: ${userPubkey.take(16)}...")
-    println("   Client pubkey: ${newNip46Client.clientPubkey.take(16)}...")
-
-    // Connect to relays BEFORE setting isLoggedIn
-    // This prevents the UI from transitioning and cancelling the coroutine
-    println("🔐 Bunker Login: Connecting to metadata relay...")
-    initializeOutboxModel()
-    println("🔐 Bunker Login: Connecting to NIP-29 relay...")
-    connect()
-
-    // Only set logged in AFTER connections are established
-    // This ensures the coroutine isn't cancelled by UI recomposition
-    println("🔐 Bunker Login: Connection established, setting logged in state")
-    _isLoggedIn.value = true
-
-    return userPubkey
-} 
-
-    // Reconnect to bunker if disconnected
-    private suspend fun reconnectBunker(): Boolean {
-        val savedBunkerUrl = SecureStorage.getBunkerUrl() ?: return false
-        val savedClientPrivateKey = SecureStorage.getBunkerClientPrivateKey()
-        
-        try {
-            println("🔄 Attempting to reconnect bunker...")
-            val bunkerInfo = parseBunkerUrl(savedBunkerUrl)
-            
-            // Use saved client private key to maintain session identity
-            val newNip46Client = if (savedClientPrivateKey != null) {
-                println("   Using saved client keypair for session continuity")
-                Nip46Client(savedClientPrivateKey)
-            } else {
-                println("   No saved client key, generating new (will need re-authorization)")
-                Nip46Client()
-            }
-            
-            // Set up auth URL callback for re-authorization
-            newNip46Client.onAuthUrl = { url ->
-                println("🔐 Auth URL received for reconnection: $url")
-                _authUrl.value = url
-            }
-            
-            try {
-                newNip46Client.connect(
-                    remoteSignerPubkey = bunkerInfo.pubkey,
-                    relays = bunkerInfo.relays,
-                    secret = bunkerInfo.secret
-                )
-            } catch (e: Exception) {
-                // "already connected" means the signer remembers us - this is success!
-                if (e.message?.contains("already connected", ignoreCase = true) == true) {
-                    println("✅ Signer reports already connected - reusing session")
-                } else {
-                    throw e
-                }
-            }
-            
-            nip46Client = newNip46Client
-            _isBunkerConnected.value = true
-            
-            // Save client key if it was newly generated
-            if (savedClientPrivateKey == null) {
-                SecureStorage.saveBunkerClientPrivateKey(newNip46Client.clientPrivateKey)
-            }
-            
-            // Verify pubkey
-            try {
-                val actualUserPubkey = newNip46Client.getPublicKey()
-                val savedUserPubkey = SecureStorage.getBunkerUserPubkey()
-                if (actualUserPubkey != savedUserPubkey) {
-                    bunkerUserPubkey = actualUserPubkey
-                    SecureStorage.saveBunkerUserPubkey(actualUserPubkey)
-                }
-            } catch (e: Exception) {
-                // If getPublicKey fails but we have saved pubkey, use that
-                val savedUserPubkey = SecureStorage.getBunkerUserPubkey()
-                if (savedUserPubkey != null) {
-                    println("⚠️ Could not verify pubkey, using saved: ${savedUserPubkey.take(16)}...")
-                } else {
-                    throw e
-                }
-            }
-            
-            println("✅ Bunker reconnected successfully")
-            return true
-        } catch (e: Exception) {
-            println("❌ Bunker reconnection failed: ${e.message}")
-            return false
-        }
+    fun clearAuthUrl() {
+        AuthManager.clearAuthUrl()
     }
 
-    // Sign event using bunker or local keypair
+    /**
+     * Login with NIP-46 bunker URL
+     */
+    suspend fun loginWithBunker(bunkerUrl: String): String {
+        val userPubkey = AuthManager.loginWithBunker(bunkerUrl)
+
+        // Connect to relays BEFORE setting logged in
+        println("🔐 Bunker Login: Connecting to relays...")
+        initializeOutboxModel()
+        connect()
+
+        // Set logged in after connections established
+        AuthManager.setLoggedIn(true)
+        println("🔐 Bunker Login: Complete")
+
+        return userPubkey
+    }
+
+    /**
+     * Sign event using AuthManager
+     */
     private suspend fun signEvent(event: Event): Event {
-        return if (isBunkerLogin) {
-            // Try to reconnect if bunker is not connected
-            if (nip46Client == null) {
-                val reconnected = reconnectBunker()
-                if (!reconnected) {
-                    throw Exception("Bunker not connected and reconnection failed. Please try logging in again.")
-                }
-            }
-            
-            val bunker = nip46Client ?: throw Exception("Bunker not connected")
-            try {
-                val eventJson = event.toJsonString()
-                val signedEventJson = bunker.signEvent(eventJson)
-                parseSignedEvent(signedEventJson)
-            } catch (e: Exception) {
-                // Handle permission errors - need to re-authorize
-                if (e.message?.contains("no permission", ignoreCase = true) == true ||
-                    e.message?.contains("not authorized", ignoreCase = true) == true ||
-                    e.message?.contains("permission denied", ignoreCase = true) == true) {
-                    
-                    println("🔐 Permission denied - clearing session, please login again")
-                    // Clear the bunker session so user can re-login
-                    nip46Client?.disconnect()
-                    nip46Client = null
-                    _isBunkerConnected.value = false
-                    SecureStorage.clearBunkerUrl()
-                    SecureStorage.clearBunkerUserPubkey()
-                    SecureStorage.clearBunkerClientPrivateKey()
-                    isBunkerLogin = false
-                    bunkerUserPubkey = null
-                    _isLoggedIn.value = false
-                    
-                    throw Exception("Signing permission denied. Please login again and approve signing permission in your signer app.")
-                }
-                throw e
-            }
-        } else {
-            val kp = keyPair ?: throw Exception("Not logged in")
-            event.sign(kp)
-        }
+        return AuthManager.signEvent(event)
     }
 
     private fun parseSignedEvent(jsonString: String): Event {
         val json = Json { ignoreUnknownKeys = true }
         val obj = json.parseToJsonElement(jsonString).jsonObject
-        
+
         return Event(
             id = obj["id"]?.jsonPrimitive?.content,
             pubkey = obj["pubkey"]?.jsonPrimitive?.content ?: "",
@@ -863,9 +602,9 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
             println("✅ Repository connected to $relayUrl")
             
             // Only send AUTH if using local keypair (not bunker)
-            if (!isBunkerLogin) {
-                keyPair?.let { kp ->
-                    newClient.sendAuth(kp.privateKeyHex)
+            if (!AuthManager.isUsingBunker()) {
+                AuthManager.getPrivateKey()?.let { privateKey ->
+                    newClient.sendAuth(privateKey)
                 }
             }
             newClient.requestGroups()
@@ -879,107 +618,60 @@ suspend fun loginWithBunker(bunkerUrl: String): String {
         }
     }
 
-    fun getPublicKey(): String? {
-        return if (isBunkerLogin) {
-            bunkerUserPubkey
-        } else {
-            keyPair?.publicKeyHex
-        }
-    }
+    // Delegate auth functions to AuthManager
+    fun getPublicKey(): String? = AuthManager.getPublicKey()
+    fun getPrivateKey(): String? = AuthManager.getPrivateKey()
+    fun isUsingBunker(): Boolean = AuthManager.isUsingBunker()
+    fun isBunkerReady(): Boolean = AuthManager.isBunkerReady()
 
-    fun getPrivateKey(): String? {
-        return if (isBunkerLogin) {
-            null // Bunker doesn't expose private key
-        } else {
-            keyPair?.privateKeyHex
-        }
-    }
-    
-    fun isUsingBunker(): Boolean = isBunkerLogin
-    
-    fun isBunkerReady(): Boolean = isBunkerLogin && nip46Client != null
-    
     suspend fun ensureBunkerConnected(): Boolean {
-        if (!isBunkerLogin) return true // Not using bunker, nothing to do
-        if (nip46Client != null) return true // Already connected
-        return reconnectBunker()
+        return AuthManager.ensureBunkerConnected()
     }
 
+    /**
+     * Login with private key
+     */
     suspend fun loginSuspend(privKey: String, pubKey: String) {
-        // Clear any bunker session
-        nip46Client?.disconnect()
-        nip46Client = null
-        isBunkerLogin = false
-        bunkerUserPubkey = null
-        SecureStorage.clearBunkerUrl()
-        SecureStorage.clearBunkerUserPubkey()
-        SecureStorage.clearBunkerClientPrivateKey()
+        AuthManager.loginWithPrivateKey(privKey, pubKey)
 
-        keyPair = KeyPair.fromPrivateKeyHex(privKey)
-        SecureStorage.savePrivateKey(privKey)
-        _isBunkerConnected.value = false
-
-        // Connect to relays BEFORE setting isLoggedIn
-        // This prevents the UI from transitioning and cancelling the coroutine
-        println("🔐 Login: Connecting to metadata relay...")
+        // Connect to relays
+        println("🔐 Login: Connecting to relays...")
         initializeOutboxModel()
-        println("🔐 Login: Connecting to NIP-29 relay...")
         connect()
 
-        // Only set logged in AFTER connections are established
-        // This ensures the coroutine isn't cancelled by UI recomposition
-        println("🔐 Login: Connection established, setting logged in state")
-        _isLoggedIn.value = true
+        AuthManager.setLoggedIn(true)
+        println("🔐 Login: Complete")
     }
-    
-    suspend fun logout() {
-        disconnect()
-        // Disconnect all relay pool connections
-        relayPool.values.forEach { it.disconnect() }
-        relayPool.clear()
-        relayListManager.clear()
 
-        // Clear bunker session but KEEP the client private key
-        // This allows re-login with the same bunker URI
-        nip46Client?.disconnect()
-        nip46Client = null
-        isBunkerLogin = false
-        // Clear account-specific joined groups BEFORE clearing credentials
+    /**
+     * Logout - clear all state
+     */
+    suspend fun logout() {
+        // Clear account-specific data before logout
         getPublicKey()?.let { pubKey ->
             SecureStorage.clearAllJoinedGroupsForAccount(pubKey)
         }
 
-        bunkerUserPubkey = null
-        SecureStorage.clearBunkerUrl()
-        SecureStorage.clearBunkerUserPubkey()
-        // NOTE: We intentionally do NOT clear BunkerClientPrivateKey here
-        // This allows the user to re-login with the same bunker URI
-        // The client private key will only be cleared when:
-        // 1. User calls forgetBunkerConnection() explicitly
-        // 2. User logs in with private key (loginSuspend)
-        // 3. Permission is denied by signer
+        // Disconnect relays
+        disconnect()
+        relayPool.values.forEach { it.disconnect() }
+        relayPool.clear()
+        relayListManager.clear()
 
-        SecureStorage.clearPrivateKey()
-        keyPair = null
-        _isLoggedIn.value = false
-        _isBunkerConnected.value = false
+        // Clear auth via AuthManager
+        AuthManager.logout()
+
+        // Clear local state
         _joinedGroups.value = emptySet()
         allRelayGroups.clear()
-        println("👋 Logged out (bunker client key preserved for re-login)")
+        println("👋 Logged out")
     }
-    
-    // Call this to completely forget the bunker connection
-    // User will need a new bunker URI after this
-    suspend fun forgetBunkerConnection() {
-        nip46Client?.disconnect()
-        nip46Client = null
-        isBunkerLogin = false
-        bunkerUserPubkey = null
-        SecureStorage.clearBunkerUrl()
-        SecureStorage.clearBunkerUserPubkey()
-        SecureStorage.clearBunkerClientPrivateKey()
-        _isBunkerConnected.value = false
-        println("🗑️ Bunker connection completely forgotten - need new bunker URI")
+
+    /**
+     * Completely forget bunker connection
+     */
+    fun forgetBunkerConnection() {
+        AuthManager.forgetBunkerConnection()
     }
 
     suspend fun switchRelay(newRelayUrl: String) {
