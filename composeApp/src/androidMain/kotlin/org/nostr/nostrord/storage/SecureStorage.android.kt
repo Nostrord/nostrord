@@ -78,17 +78,17 @@ actual object SecureStorage {
         println("🗑️ Cleared current relay URL")
     }
     
-    actual fun saveJoinedGroupsForRelay(relayUrl: String, groupIds: Set<String>) {
+    actual fun saveJoinedGroupsForRelay(pubkey: String, relayUrl: String, groupIds: Set<String>) {
         ensureInitialized()
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = Json.encodeToString(groupIds.toList())
         prefs.edit().putString(key, json).apply()
-        println("💾 Saved ${groupIds.size} joined groups for relay: $relayUrl")
+        println("💾 Saved ${groupIds.size} joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun getJoinedGroupsForRelay(relayUrl: String): Set<String> {
+
+    actual fun getJoinedGroupsForRelay(pubkey: String, relayUrl: String): Set<String> {
         ensureInitialized()
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = prefs.getString(key, null) ?: return emptySet()
         return try {
             Json.decodeFromString<List<String>>(json).toSet()
@@ -97,36 +97,26 @@ actual object SecureStorage {
             emptySet()
         }
     }
-    
-    actual fun clearJoinedGroupsForRelay(relayUrl: String) {
+
+    actual fun clearJoinedGroupsForRelay(pubkey: String, relayUrl: String) {
         ensureInitialized()
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         prefs.edit().remove(key).apply()
-        println("🗑️ Cleared joined groups for relay: $relayUrl")
+        println("🗑️ Cleared joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun clearAllJoinedGroups() {
+
+    actual fun clearAllJoinedGroupsForAccount(pubkey: String) {
         ensureInitialized()
-        // Note: We can't iterate over all keys with EncryptedSharedPreferences
-        // as getAll() may fail if any key is corrupted.
-        // Instead, we clear known relay-specific keys by using clearAll and re-saving other data,
-        // or we just clear the entire storage and let the user re-login.
-        // For now, we'll just try-catch and if it fails, we clear everything.
+        val accountPrefix = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_"
         try {
             val editor = prefs.edit()
-            prefs.all.keys.filter { it.startsWith(JOINED_GROUPS_PREFIX) }.forEach { key ->
+            prefs.all.keys.filter { it.startsWith(accountPrefix) }.forEach { key ->
                 editor.remove(key)
             }
             editor.apply()
-            println("🗑️ Cleared all relay-specific joined groups")
+            println("🗑️ Cleared all joined groups for account ${pubkey.take(8)}")
         } catch (e: Exception) {
-            println("⚠️ Failed to clear joined groups normally, clearing all storage: ${e.message}")
-            try {
-                prefs.edit().clear().apply()
-                println("🗑️ Cleared all storage due to decryption error")
-            } catch (e2: Exception) {
-                println("❌ Failed to clear storage: ${e2.message}")
-            }
+            println("⚠️ Failed to clear joined groups for account: ${e.message}")
         }
     }
     

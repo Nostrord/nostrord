@@ -96,15 +96,16 @@ actual object SecureStorage {
         println("🗑️ Cleared current relay URL")
     }
     
-    actual fun saveJoinedGroupsForRelay(relayUrl: String, groupIds: Set<String>) {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+    actual fun saveJoinedGroupsForRelay(pubkey: String, relayUrl: String, groupIds: Set<String>) {
+        // Account-scoped key: prefix + pubkey hash + relay hash
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = Json.encodeToString(groupIds.toList())
         saveString(key, json)
-        println("💾 Saved ${groupIds.size} joined groups for relay: $relayUrl")
+        println("💾 Saved ${groupIds.size} joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun getJoinedGroupsForRelay(relayUrl: String): Set<String> {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+
+    actual fun getJoinedGroupsForRelay(pubkey: String, relayUrl: String): Set<String> {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = getString(key) ?: return emptySet()
         return try {
             Json.decodeFromString<List<String>>(json).toSet()
@@ -113,24 +114,25 @@ actual object SecureStorage {
             emptySet()
         }
     }
-    
-    actual fun clearJoinedGroupsForRelay(relayUrl: String) {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+
+    actual fun clearJoinedGroupsForRelay(pubkey: String, relayUrl: String) {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         remove(key)
-        println("🗑️ Cleared joined groups for relay: $relayUrl")
+        println("🗑️ Cleared joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun clearAllJoinedGroups() {
+
+    actual fun clearAllJoinedGroupsForAccount(pubkey: String) {
         try {
+            val accountPrefix = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_"
             prefs.keys().forEach { key ->
-                if (key.startsWith(JOINED_GROUPS_PREFIX)) {
+                if (key.startsWith(accountPrefix)) {
                     prefs.remove(key)
                 }
             }
             prefs.flush()
-            println("🗑️ Cleared all relay-specific joined groups")
+            println("🗑️ Cleared all joined groups for account ${pubkey.take(8)}")
         } catch (e: Exception) {
-            println("❌ Failed to clear all joined groups: ${e.message}")
+            println("❌ Failed to clear joined groups for account: ${e.message}")
         }
     }
     

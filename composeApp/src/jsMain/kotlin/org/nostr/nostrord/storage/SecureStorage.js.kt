@@ -42,35 +42,36 @@ actual object SecureStorage {
         println("🗑️ Cleared current relay URL")
     }
     
-    actual fun saveJoinedGroupsForRelay(relayUrl: String, groupIds: Set<String>) {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+    actual fun saveJoinedGroupsForRelay(pubkey: String, relayUrl: String, groupIds: Set<String>) {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = groupIds.joinToString(",")
         localStorage.setItem(key, json)
-        println("💾 Saved ${groupIds.size} joined groups for relay: $relayUrl")
+        println("💾 Saved ${groupIds.size} joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun getJoinedGroupsForRelay(relayUrl: String): Set<String> {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+
+    actual fun getJoinedGroupsForRelay(pubkey: String, relayUrl: String): Set<String> {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = localStorage.getItem(key) ?: return emptySet()
         return if (json.isBlank()) emptySet() else json.split(",").toSet()
     }
-    
-    actual fun clearJoinedGroupsForRelay(relayUrl: String) {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+
+    actual fun clearJoinedGroupsForRelay(pubkey: String, relayUrl: String) {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         localStorage.removeItem(key)
-        println("🗑️ Cleared joined groups for relay: $relayUrl")
+        println("🗑️ Cleared joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun clearAllJoinedGroups() {
+
+    actual fun clearAllJoinedGroupsForAccount(pubkey: String) {
+        val accountPrefix = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_"
         val keysToRemove = mutableListOf<String>()
         for (i in 0 until localStorage.length) {
             val key = localStorage.key(i)
-            if (key != null && key.startsWith(JOINED_GROUPS_PREFIX)) {
+            if (key != null && key.startsWith(accountPrefix)) {
                 keysToRemove.add(key)
             }
         }
         keysToRemove.forEach { localStorage.removeItem(it) }
-        println("🗑️ Cleared all joined groups")
+        println("🗑️ Cleared all joined groups for account ${pubkey.take(8)}")
     }
     
     // NIP-46 Bunker URL support

@@ -58,31 +58,32 @@ actual object SecureStorage {
         println("🗑️ Cleared current relay URL")
     }
     
-    actual fun saveJoinedGroupsForRelay(relayUrl: String, groupIds: Set<String>) {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+    actual fun saveJoinedGroupsForRelay(pubkey: String, relayUrl: String, groupIds: Set<String>) {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = groupIds.joinToString(",")
         jsSetItem(key, json)
-        println("💾 Saved ${groupIds.size} joined groups for relay: $relayUrl")
+        println("💾 Saved ${groupIds.size} joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun getJoinedGroupsForRelay(relayUrl: String): Set<String> {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+
+    actual fun getJoinedGroupsForRelay(pubkey: String, relayUrl: String): Set<String> {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         val json = jsGetItem(key) ?: return emptySet()
         return if (json.isBlank()) emptySet() else json.split(",").toSet()
     }
-    
-    actual fun clearJoinedGroupsForRelay(relayUrl: String) {
-        val key = JOINED_GROUPS_PREFIX + relayUrl.hashCode()
+
+    actual fun clearJoinedGroupsForRelay(pubkey: String, relayUrl: String) {
+        val key = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_" + relayUrl.hashCode()
         jsRemoveItem(key)
-        println("🗑️ Cleared joined groups for relay: $relayUrl")
+        println("🗑️ Cleared joined groups for ${pubkey.take(8)} on relay: $relayUrl")
     }
-    
-    actual fun clearAllJoinedGroups() {
-        val keys = jsGetKeysWithPrefix(JOINED_GROUPS_PREFIX)
+
+    actual fun clearAllJoinedGroupsForAccount(pubkey: String) {
+        val accountPrefix = JOINED_GROUPS_PREFIX + pubkey.hashCode() + "_"
+        val keys = jsGetKeysWithPrefix(accountPrefix)
         for (i in 0 until keys.length) {
             jsRemoveItem(keys[i].toString())
         }
-        println("🗑️ Cleared all joined groups")
+        println("🗑️ Cleared all joined groups for account ${pubkey.take(8)}")
     }
     
     // NIP-46 Bunker URL support

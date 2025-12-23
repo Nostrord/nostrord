@@ -14,10 +14,11 @@ expect object SecureStorage {
     fun getCurrentRelayUrl(): String?
     fun clearCurrentRelayUrl()
     
-    fun saveJoinedGroupsForRelay(relayUrl: String, groupIds: Set<String>)
-    fun getJoinedGroupsForRelay(relayUrl: String): Set<String>
-    fun clearJoinedGroupsForRelay(relayUrl: String)
-    fun clearAllJoinedGroups()
+    // Account-scoped joined groups (namespaced by pubkey)
+    fun saveJoinedGroupsForRelay(pubkey: String, relayUrl: String, groupIds: Set<String>)
+    fun getJoinedGroupsForRelay(pubkey: String, relayUrl: String): Set<String>
+    fun clearJoinedGroupsForRelay(pubkey: String, relayUrl: String)
+    fun clearAllJoinedGroupsForAccount(pubkey: String)
     
     // NIP-46 Bunker support
     fun saveBunkerUrl(bunkerUrl: String)
@@ -38,15 +39,18 @@ expect object SecureStorage {
     fun clearAll()
 }
 
-// Legacy support functions can stay in common
+// Legacy support functions (deprecated - use account-scoped versions)
+@Deprecated("Use account-scoped saveJoinedGroupsForRelay with pubkey")
 suspend fun SecureStorage.saveJoinedGroups(groups: Set<String>) {
-    saveJoinedGroupsForRelay("legacy", groups)
+    saveJoinedGroupsForRelay("legacy", "legacy", groups)
 }
 
+@Deprecated("Use account-scoped getJoinedGroupsForRelay with pubkey")
 suspend fun SecureStorage.getJoinedGroups(): Set<String> {
-    return getJoinedGroupsForRelay("legacy")
+    return getJoinedGroupsForRelay("legacy", "legacy")
 }
 
+@Deprecated("Use account-scoped clearJoinedGroupsForRelay with pubkey")
 suspend fun SecureStorage.clearJoinedGroups() {
-    clearJoinedGroupsForRelay("legacy")
+    clearJoinedGroupsForRelay("legacy", "legacy")
 }
