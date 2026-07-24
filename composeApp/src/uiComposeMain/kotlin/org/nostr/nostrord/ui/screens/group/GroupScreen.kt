@@ -62,6 +62,9 @@ private fun decodeGroupMentions(encoded: Map<String, String>): Map<String, Group
 fun GroupScreen(
     groupId: String,
     groupName: String?,
+    // Relay the route carried; scopes the VM (and keys it) so same-id groups on two
+    // relays get separate screens instead of sharing one.
+    relayUrl: String? = null,
     onNavigateHome: () -> Unit = {},
     onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit = { _, _, _, _ -> },
     onOpenRelay: (relayUrl: String) -> Unit = {},
@@ -73,7 +76,9 @@ fun GroupScreen(
     targetMessageId: String? = null,
     onTargetMessageConsumed: () -> Unit = {},
 ) {
-    val vm = viewModel(key = groupId) { GroupViewModel(AppModule.nostrRepository, groupId) }
+    val vm = viewModel(key = relayUrl?.let { "$it|$groupId" } ?: groupId) {
+        GroupViewModel(AppModule.nostrRepository, groupId, relayUrl)
+    }
 
     var selectedChannel by remember { mutableStateOf("general") }
 

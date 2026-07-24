@@ -122,7 +122,7 @@ fun ManageGroupModal(
     /** Navigate to a group/channel (Hierarchy rows); the caller closes the modal. */
     onOpenGroup: ((groupId: String) -> Unit)? = null,
 ) {
-    val vm = viewModel(key = groupId) { GroupViewModel(AppModule.nostrRepository, groupId) }
+    val vm = viewModel(key = "$relayUrl|$groupId") { GroupViewModel(AppModule.nostrRepository, groupId, relayUrl) }
     var tab by remember { mutableStateOf(initialTab) }
 
     // Hierarchy only makes sense where the relay hosts subgroups; hide that tab otherwise.

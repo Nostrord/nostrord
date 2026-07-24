@@ -334,7 +334,7 @@ internal fun ChildrenBuilder.discoverGroupCard(
     // and flips off (skeleton stops) once the list arrives or the fetch times out.
     val peopleLoading = dg.peopleLoading
     button {
-        key = meta.id
+        key = "${dg.relayUrl}/${meta.id}"
         // Non-interactive in onboarding: the card itself does nothing (no pointer); only
         // the Join button acts, so the user can join several groups without leaving.
         className = ClassName(if (interactive) "group-card" else "group-card static")

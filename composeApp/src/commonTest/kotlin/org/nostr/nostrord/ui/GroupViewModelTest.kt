@@ -8,7 +8,9 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.nostr.nostrord.network.FakeNostrRepository
+import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.managers.PendingGroupInvite
+import org.nostr.nostrord.ui.screens.group.GroupAccess
 import org.nostr.nostrord.ui.screens.group.GroupMembership
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.ui.screens.group.deriveMembershipStatus
@@ -41,6 +43,55 @@ class GroupViewModelTest {
     }
 
     private fun vm(fake: FakeNostrRepository = FakeNostrRepository()) = GroupViewModel(fake, "test-group")
+
+    // -------------------------------------------------------------------------
+    // Host-relay scoping: the same id on two relays is two independent groups
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `explicit relay registers a relay hint so repo routing follows the route`() = runTest {
+        val fake = FakeNostrRepository()
+        GroupViewModel(fake, "dev", "wss://b")
+
+        assertEquals("wss://b", fake.relayHints["dev"])
+    }
+
+    @Test
+    fun `no relay leaves routing unhinted`() = runTest {
+        val fake = FakeNostrRepository()
+        GroupViewModel(fake, "dev")
+
+        assertNull(fake.relayHints["dev"])
+    }
+
+    @Test
+    fun `groupAccess reads the host relay's metadata, not a same-id group elsewhere`() = runTest {
+        val fake = FakeNostrRepository()
+        val closed = GroupMetadata(id = "dev", name = "Dev A", about = null, picture = null, isPublic = false, isOpen = false)
+        val open = GroupMetadata(id = "dev", name = "Dev B", about = null, picture = null, isPublic = true, isOpen = true)
+        fake._groups.value = listOf(open)
+        fake._groupsByRelay.value = mapOf("wss://a" to listOf(closed), "wss://b" to listOf(open))
+
+        val vmA = GroupViewModel(fake, "dev", "wss://a")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(GroupAccess(isPrivate = true, isOpen = false), vmA.groupAccess.value)
+    }
+
+    @Test
+    fun `membership counts only the host relay's joined set`() = runTest {
+        val fake = FakeNostrRepository()
+        fake.fakePublicKey = "me"
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("dev"))
+
+        val vmA = GroupViewModel(fake, "dev", "wss://a")
+        val vmB = GroupViewModel(fake, "dev", "wss://b")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Joined on A (member list not arrived yet -> resolving); a stranger on B.
+        assertEquals(GroupMembership.RESOLVING, vmA.membershipState.value.status)
+        assertEquals(GroupMembership.NONE, vmB.membershipState.value.status)
+    }
 
     // -------------------------------------------------------------------------
     // State passthrough

@@ -103,6 +103,12 @@ import org.nostr.nostrord.ui.screens.group.pendingJoinRequests as computePending
 
 external interface ChatScreenProps : Props {
     var group: GroupMetadata
+
+    /**
+     * Relay the route carried; scopes the shared GroupViewModel so same-id groups on
+     * two relays don't share membership/metadata state.
+     */
+    var relayUrl: String?
     var onLeave: () -> Unit
 
     /** A deep-linked (&e=) message to scroll to + highlight once it's loaded, or null. */
@@ -1046,7 +1052,9 @@ val ChatScreen =
         val repo = AppModule.nostrRepository
         // Shared screen logic. Keyed by group.id so the VM (and its scope) is recreated
         // when the open group changes while this component stays mounted.
-        val vm = useViewModel(group.id) { GroupViewModel(AppModule.nostrRepository, group.id) }
+        val vm = useViewModel("${props.relayUrl}|${group.id}") {
+            GroupViewModel(AppModule.nostrRepository, group.id, props.relayUrl)
+        }
 
         val messagesByGroup = useStateFlow(vm.messages)
         val messageStatus = useStateFlow(vm.messageStatus)

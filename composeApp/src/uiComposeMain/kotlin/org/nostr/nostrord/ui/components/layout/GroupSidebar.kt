@@ -101,7 +101,9 @@ fun GroupSidebar(
     onNavigateRelay: (String) -> Unit = {},
     onNavigateHome: () -> Unit = {},
 ) {
-    val vm = viewModel(key = route.groupId) { GroupViewModel(AppModule.nostrRepository, route.groupId) }
+    val vm = viewModel(key = "${route.relayUrl}|${route.groupId}") {
+        GroupViewModel(AppModule.nostrRepository, route.groupId, route.relayUrl)
+    }
     val groupsByRelay by vm.groupsByRelay.collectAsState()
     val childrenByParent by vm.childrenByParent.collectAsState()
     val groupMembers by vm.groupMembers.collectAsState()

@@ -156,7 +156,23 @@ internal fun deriveMembershipStatus(
 class GroupViewModel(
     private val repo: NostrRepositoryApi,
     val groupId: String,
+    relayUrl: String? = null,
 ) : ViewModel() {
+    /**
+     * Relay the route carried (normalized), when the caller knows it. The same id can name
+     * two independent groups on two relays, so membership/metadata/orphan checks are scoped
+     * to this relay and the repo's relay routing is pinned to it. Null (legacy callers,
+     * modals riding an already-open screen) keeps the cross-relay fallbacks.
+     */
+    private val hostRelay: String? = relayUrl?.normalizeRelayUrl()
+
+    init {
+        if (hostRelay != null) repo.setGroupRelayHint(groupId, hostRelay)
+    }
+
+    /** Value under [hostRelay]'s key, tolerating maps keyed by non-normalized URLs. */
+    private fun <T> Map<String, T>.atHostRelay(): T? = hostRelay?.let { hr -> this[hr] ?: entries.firstOrNull { it.key.normalizeRelayUrl() == hr }?.value }
+
     /**
      * Chat messages with NIP-51 muted authors filtered out. The raw repo cache stays
      * untouched (membership derivation below reads it directly), so an unmute restores
@@ -266,6 +282,7 @@ class GroupViewModel(
                 AppModule.accountStore.activeId,
                 repo.pendingApprovalSince,
                 repo.leftGroups,
+                repo.groupsByRelay,
             ),
         ) { arr ->
             val joinedByRelay = arr[0] as Map<String, Set<String>>
@@ -275,15 +292,29 @@ class GroupViewModel(
             val allGroups = arr[4] as List<GroupMetadata>
             val pendingByGroup = arr[6] as Map<String, Long>
             val leftSet = arr[7] as Set<String>
+            val byRelay = arr[8] as Map<String, List<GroupMetadata>>
 
             val pubkey = repo.getPublicKey()
             val locallyLeft = groupId in leftSet
-            val joined = joinedByRelay.values.any { groupId in it }
+            // With an explicit host relay only ITS joined set counts: being in the same-id
+            // group on another relay is membership in a different group.
+            val joined =
+                if (hostRelay != null) {
+                    joinedByRelay.atHostRelay()?.contains(groupId) == true
+                } else {
+                    joinedByRelay.values.any { groupId in it }
+                }
             val members = membersByGroup[groupId].orEmpty()
             val admins = adminsByGroup[groupId].orEmpty()
             // Absent metadata defaults to open (the permissive NIP-29 default), so we don't
             // wrongly hold a group as pending before its kind:39000 arrives.
-            val isOpen = allGroups.find { it.id == groupId }?.isOpen ?: true
+            val meta =
+                if (hostRelay != null) {
+                    byRelay.atHostRelay()?.firstOrNull { it.id == groupId }
+                } else {
+                    allGroups.find { it.id == groupId }
+                }
+            val isOpen = meta?.isOpen ?: true
             // Outstanding join request: prefer the LOCAL pendingApprovalSince (set on our 9021, cleared
             // the instant we leave / are approved) — it is the reliable in-session truth. The kind:9021
             // in the message feed is the fallback that survives a restart, but it is gated on `joined`:
@@ -318,8 +349,13 @@ class GroupViewModel(
      * this for the badges and the Join-vs-Request-to-Join label.
      */
     val groupAccess: StateFlow<GroupAccess> =
-        combine(repo.groups, repo.restrictedGroups) { groups, restricted ->
-            val meta = groups.find { it.id == groupId }
+        combine(repo.groups, repo.groupsByRelay, repo.restrictedGroups) { groups, byRelay, restricted ->
+            val meta =
+                if (hostRelay != null) {
+                    byRelay.atHostRelay()?.firstOrNull { it.id == groupId }
+                } else {
+                    groups.find { it.id == groupId }
+                }
             if (meta != null) {
                 GroupAccess(isPrivate = !meta.isPublic, isOpen = meta.isOpen)
             } else {
@@ -346,14 +382,22 @@ class GroupViewModel(
     @OptIn(ExperimentalCoroutinesApi::class)
     val isOrphaned: StateFlow<Boolean> =
         combine(
-            repo.groups,
+            combine(repo.groups, repo.groupsByRelay) { g, br -> g to br },
             repo.completeGroupLoadRelays,
             repo.restrictedGroups,
             repo.currentRelayUrl,
             repo.connectionState,
-        ) { groups, doneRelays, restricted, currentRelay, connState ->
-            val hasMetadata = groups.any { it.id == groupId }
-            val relayDone = currentRelay.normalizeRelayUrl() in doneRelays
+        ) { (groups, byRelay), doneRelays, restricted, currentRelay, connState ->
+            // With an explicit host relay, only ITS listing proves existence and only ITS
+            // EOSE proves absence: same-id metadata from another relay must not mask a
+            // deleted group, nor its deletion orphan a live one.
+            val hasMetadata =
+                if (hostRelay != null) {
+                    byRelay.atHostRelay()?.any { it.id == groupId } == true
+                } else {
+                    groups.any { it.id == groupId }
+                }
+            val relayDone = (hostRelay ?: currentRelay.normalizeRelayUrl()) in doneRelays
             relayDone &&
                 !hasMetadata &&
                 groupId !in restricted &&
@@ -367,7 +411,7 @@ class GroupViewModel(
                     // Fast no-op on public relays (short challenge grace); on auth-gating relays
                     // waits out the sign budget so the post-AUTH group-list replay can deliver
                     // the withheld private 39000 before the verdict.
-                    repo.awaitRelayAuthSettled(repo.currentRelayUrl.value)
+                    repo.awaitRelayAuthSettled(hostRelay ?: repo.currentRelayUrl.value)
                     delay(4_000)
                     emit(true)
                 }

@@ -220,7 +220,7 @@ val ProfilePage =
                         groups.forEach { group ->
                             val groupName = group.meta.name ?: group.meta.id
                             button {
-                                key = group.meta.id
+                                key = "${group.relayUrl}/${group.meta.id}"
                                 className = ClassName("profile-group-row")
                                 onClick = { props.onOpenGroup(GroupRoute(group.relayUrl, group.meta.id)) }
                                 WebAvatar {

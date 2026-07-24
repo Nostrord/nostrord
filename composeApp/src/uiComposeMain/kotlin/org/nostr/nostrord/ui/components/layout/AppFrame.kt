@@ -797,6 +797,7 @@ private fun FrameContent(
                     GroupScreen(
                         groupId = route.groupId,
                         groupName = name,
+                        relayUrl = route.relayUrl,
                         onNavigateHome = onCloseGroup,
                         onNavigateToGroup = { gid, _, relay, mid ->
                             onNavigate(GroupRoute(relay ?: route.relayUrl, gid, messageId = mid))
