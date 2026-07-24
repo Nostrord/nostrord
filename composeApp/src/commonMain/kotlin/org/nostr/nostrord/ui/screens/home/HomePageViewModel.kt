@@ -193,6 +193,7 @@ class HomePageViewModel(
                 repo.following,
                 repo.userMetadata,
                 _membersResolved,
+                repo.groupMembersByRelay,
             ),
         ) { arr ->
             val groupsByRelay = arr[0] as Map<String, List<GroupMetadata>>
@@ -201,11 +202,15 @@ class HomePageViewModel(
             val following = arr[3] as Set<String>
             val meta = arr[4] as Map<String, UserMetadata>
             val resolved = arr[5] as Set<String>
+            val membersByRelay = arr[6] as Map<String, Map<String, List<String>>>
             joinedByRelay
                 .flatMap { (relay, ids) ->
                     val metas = groupsByRelay[relay].orEmpty().associateBy { it.id }
+                    // This relay's own member lists first: a same-id group elsewhere
+                    // must not paint this card's people row.
+                    val relayMembers = membersByRelay[relay].orEmpty()
                     ids.map { id ->
-                        val memberPks = members[id].orEmpty()
+                        val memberPks = relayMembers[id] ?: members[id].orEmpty()
                         // Small joined groups (<=5 members) include your own avatar so the
                         // row isn't near-empty; larger ones still omit it (My groups only).
                         val preview = previewPeople(

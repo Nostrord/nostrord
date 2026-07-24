@@ -21,6 +21,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrRepositoryApi
+import org.nostr.nostrord.network.RoleDefinition
 import org.nostr.nostrord.network.UserGroupRef
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.ConnectionManager
@@ -226,9 +227,36 @@ class GroupViewModel(
                 }.toMap()
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.reactions.value)
-    val groupMembers = repo.groupMembers
-    val groupAdmins = repo.groupAdmins
-    val groupRoles = repo.groupRoles
+
+    /**
+     * Member/admin/role lists, host-relay scoped: entries the host relay published win
+     * over the flat compat maps (where a same-id group on another relay overwrites).
+     * The flat value stays the fallback while the per-relay mirror is still cold.
+     */
+    val groupMembers: StateFlow<Map<String, List<String>>> =
+        if (hostRelay == null) {
+            repo.groupMembers
+        } else {
+            combine(repo.groupMembers, repo.groupMembersByRelay) { flat, byRelay ->
+                byRelay.atHostRelay()?.let { flat + it } ?: flat
+            }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupMembers.value)
+        }
+    val groupAdmins: StateFlow<Map<String, List<String>>> =
+        if (hostRelay == null) {
+            repo.groupAdmins
+        } else {
+            combine(repo.groupAdmins, repo.groupAdminsByRelay) { flat, byRelay ->
+                byRelay.atHostRelay()?.let { flat + it } ?: flat
+            }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupAdmins.value)
+        }
+    val groupRoles: StateFlow<Map<String, List<RoleDefinition>>> =
+        if (hostRelay == null) {
+            repo.groupRoles
+        } else {
+            combine(repo.groupRoles, repo.groupRolesByRelay) { flat, byRelay ->
+                byRelay.atHostRelay()?.let { flat + it } ?: flat
+            }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupRoles.value)
+        }
     val loadingMembers = repo.loadingMembers
     val restrictedGroups = repo.restrictedGroups
     val isLoadingMore = repo.isLoadingMore
@@ -286,8 +314,10 @@ class GroupViewModel(
         combine(
             listOf(
                 repo.joinedGroupsByRelay,
-                repo.groupMembers,
-                repo.groupAdmins,
+                // The VM's own host-relay-scoped lists, so a same-id group on another
+                // relay can't decide membership here.
+                groupMembers,
+                groupAdmins,
                 repo.messages,
                 repo.groups,
                 AppModule.accountStore.activeId,
@@ -668,7 +698,7 @@ class GroupViewModel(
         // timeout error still on screen. The kind:9000/9001 echo updating the member or
         // admin list is the visible success signal; a change invalidates the error.
         viewModelScope.launch {
-            combine(repo.groupMembers, repo.groupAdmins) { members, admins ->
+            combine(groupMembers, groupAdmins) { members, admins ->
                 members[groupId] to admins[groupId]
             }
                 .distinctUntilChanged()

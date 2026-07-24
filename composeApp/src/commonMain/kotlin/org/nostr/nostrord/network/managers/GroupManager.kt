@@ -546,6 +546,43 @@ class GroupManager(
     private val adminEventTimestamps = mutableMapOf<String, Long>()
     private val roleEventTimestamps = mutableMapOf<String, Long>()
 
+    // Per-relay mirror of the kind:39001/2/3 lists (relay -> groupId -> list). The flat
+    // maps above stay the compat view where the last relay to publish wins on an id
+    // collision; relay-scoped readers (GroupViewModel with a host relay, home cards)
+    // prefer these so same-id groups on two relays don't overwrite each other's lists.
+    private val _groupMembersByRelay = MutableStateFlow<Map<String, Map<String, List<String>>>>(emptyMap())
+    val groupMembersByRelay: StateFlow<Map<String, Map<String, List<String>>>> = _groupMembersByRelay.asStateFlow()
+    private val _groupAdminsByRelay = MutableStateFlow<Map<String, Map<String, List<String>>>>(emptyMap())
+    val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>> = _groupAdminsByRelay.asStateFlow()
+    private val _groupRolesByRelay = MutableStateFlow<Map<String, Map<String, List<RoleDefinition>>>>(emptyMap())
+    val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>> = _groupRolesByRelay.asStateFlow()
+
+    // Per-(relay, group) staleness guards for the mirrors: the flat guards are bare-id,
+    // so one relay's newer event must not get the other relay's list rejected as stale.
+    private val scopedMemberEventTimestamps = mutableMapOf<String, Long>()
+    private val scopedAdminEventTimestamps = mutableMapOf<String, Long>()
+    private val scopedRoleEventTimestamps = mutableMapOf<String, Long>()
+
+    /** Write one relay's kind:39001/2/3 list into its per-relay mirror, under its own guard. */
+    private fun <T> updateRelayScopedList(
+        flow: MutableStateFlow<Map<String, Map<String, T>>>,
+        guards: MutableMap<String, Long>,
+        relayUrl: String?,
+        groupId: String,
+        createdAt: Long,
+        value: T,
+    ) {
+        val relay = relayUrl?.normalizeRelayUrl() ?: return
+        val key = "$relay|$groupId"
+        val existing = guards[key] ?: 0L
+        if (createdAt > 0L && createdAt < existing) return
+        if (createdAt > 0L) guards[key] = createdAt
+        flow.update { byRelay ->
+            val forRelay = byRelay[relay].orEmpty()
+            if (forRelay[groupId] == value) byRelay else byRelay + (relay to (forRelay + (groupId to value)))
+        }
+    }
+
     // Groups whose subscriptions were closed with "restricted" by the relay.
     // For private groups, the relay denies access to non-members (including metadata).
     // The UI uses this to show a "Private Group" placeholder with invite code input.
@@ -3684,6 +3721,9 @@ class GroupManager(
             _loadingMembers.value = _loadingMembers.value - members.groupId
             return emptyList()
         }
+        // Before the flat guard: a same-id group on another relay may carry a newer
+        // timestamp there, which must not starve THIS relay's mirror.
+        updateRelayScopedList(_groupMembersByRelay, scopedMemberEventTimestamps, relayUrl, members.groupId, createdAt, members.members)
         val existing = memberEventTimestamps[members.groupId] ?: 0L
         if (createdAt > 0L && createdAt < existing) {
             // Stale event from a slower relay — skip state update.
@@ -4060,8 +4100,9 @@ class GroupManager(
     /**
      * Handle incoming group admins (kind 39001)
      */
-    fun handleGroupAdmins(admins: GroupAdmins, createdAt: Long = 0L) {
+    fun handleGroupAdmins(admins: GroupAdmins, createdAt: Long = 0L, relayUrl: String? = null) {
         if (isRecentlyLeft(admins.groupId)) return
+        updateRelayScopedList(_groupAdminsByRelay, scopedAdminEventTimestamps, relayUrl, admins.groupId, createdAt, admins.admins)
         val existing = adminEventTimestamps[admins.groupId] ?: 0L
         if (createdAt > 0L && createdAt < existing) {
             connStats?.onStateConflict(admins.groupId)
@@ -4104,8 +4145,9 @@ class GroupManager(
     /**
      * Handle incoming group roles (kind 39003)
      */
-    fun handleGroupRoles(roles: GroupRoles, createdAt: Long = 0L) {
+    fun handleGroupRoles(roles: GroupRoles, createdAt: Long = 0L, relayUrl: String? = null) {
         if (isRecentlyLeft(roles.groupId)) return
+        updateRelayScopedList(_groupRolesByRelay, scopedRoleEventTimestamps, relayUrl, roles.groupId, createdAt, roles.roles)
         val existing = roleEventTimestamps[roles.groupId] ?: 0L
         if (createdAt > 0L && createdAt < existing) {
             connStats?.onStateConflict(roles.groupId)
@@ -4183,6 +4225,25 @@ class GroupManager(
                 discardPendingInvite(groupId)
             }
         }
+        // Mirror the add/remove into the per-relay record under its own scoped guard,
+        // before the flat guard below (which a same-id group elsewhere can inflate).
+        if (relayUrl != null && (message.kind == 9000 || message.kind == 9001)) {
+            val relay = relayUrl.normalizeRelayUrl()
+            val scopedTs = scopedMemberEventTimestamps["$relay|$groupId"] ?: 0L
+            if (message.createdAt > scopedTs) {
+                _groupMembersByRelay.update { byRelay ->
+                    val forRelay = byRelay[relay] ?: return@update byRelay
+                    val members = forRelay[groupId] ?: return@update byRelay
+                    val updated = when {
+                        message.kind == 9000 && targetPubkey !in members -> members + targetPubkey
+                        message.kind == 9001 && targetPubkey in members -> members - targetPubkey
+                        else -> return@update byRelay
+                    }
+                    byRelay + (relay to (forRelay + (groupId to updated)))
+                }
+            }
+        }
+
         // Skip historical events older than the authoritative member list.
         val memberListTimestamp = memberEventTimestamps[groupId] ?: 0L
         if (message.createdAt <= memberListTimestamp) return
@@ -4909,6 +4970,12 @@ class GroupManager(
         memberEventTimestamps.clear()
         adminEventTimestamps.clear()
         roleEventTimestamps.clear()
+        _groupMembersByRelay.value = emptyMap()
+        _groupAdminsByRelay.value = emptyMap()
+        _groupRolesByRelay.value = emptyMap()
+        scopedMemberEventTimestamps.clear()
+        scopedAdminEventTimestamps.clear()
+        scopedRoleEventTimestamps.clear()
         _pendingApprovalSince.value = emptyMap()
         recentlyLeftAt.clear()
         // Pubkey-scoped: the next account reloads its own set from storage in loadJoinedGroupsFromStorage.

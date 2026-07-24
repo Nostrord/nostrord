@@ -112,10 +112,19 @@ interface NostrRepositoryApi {
     val zaps: StateFlow<Map<String, ZapManager.ZapInfo>>
     val groupMembers: StateFlow<Map<String, List<String>>>
 
+    /**
+     * Per-relay mirror of the member/admin/role lists (relay -> groupId -> list). The flat
+     * maps above collapse by bare id (last relay wins on a same-id collision); relay-scoped
+     * readers prefer these.
+     */
+    val groupMembersByRelay: StateFlow<Map<String, Map<String, List<String>>>>
+
     /** groupId -> epochMillis of our outstanding kind:9021 join request awaiting approval. */
     val pendingApprovalSince: StateFlow<Map<String, Long>>
     val groupAdmins: StateFlow<Map<String, List<String>>>
+    val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>>
     val groupRoles: StateFlow<Map<String, List<RoleDefinition>>>
+    val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>>
     val loadingMembers: StateFlow<Set<String>>
 
     /** Groups whose subscriptions were CLOSED with "restricted" — private group, non-member. */
