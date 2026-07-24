@@ -8,7 +8,9 @@
         // Preserves the path so the SPA can handle routing
         // Based on: https://github.com/rafgraph/spa-github-pages
 
-        const pathSegmentsToKeep = 1; // Keep repo name in path (e.g., /repo-name/)
+        // 0: site is served at the domain root (web.nostrord.com). A value of 1 (repo-name
+        // subpath hosting) keeps the unknown segment in the path and redirect-loops on 404.
+        const pathSegmentsToKeep = 0;
 
         const l = window.location;
         const path = l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +

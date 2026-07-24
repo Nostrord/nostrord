@@ -6,6 +6,7 @@ import org.nostr.nostrord.startup.ExternalLaunchContext
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.toHash
+import org.nostr.nostrord.utils.parseGroupJoinInput
 import org.nostr.nostrord.utils.toRelayUrl
 import org.nostr.nostrord.web.WebApp
 import org.nostr.nostrord.web.bridge.launchApp
@@ -16,6 +17,39 @@ import react.create
 import react.dom.client.createRoot
 import web.dom.ElementId
 import web.dom.document
+
+/**
+ * People share groups as https://web.nostrord.com/<naddr1...> (or the hash variant
+ * /#/naddr1...). The hosting layer keeps the path form alive (sw.js serves index.html on
+ * 404; 404.html's ?/ redirect covers the first, uncontrolled visit; historyApiFallback on
+ * the dev server), so the app boots with the naddr as the last path segment or in the
+ * hash. Decode it (kind 39000 + relay hint, via parseGroupJoinInput) and rewrite to the
+ * canonical #/g/<relay>/<id>[?invite=Z] hash route before render. Undecodable naddrs
+ * fall through.
+ */
+private fun redirectNaddrPath() {
+    val path = window.location.pathname.trimEnd('/')
+    val pathSegment = path.substringAfterLast('/')
+    val hashSegment = window.location.hash.trimStart('#', '/').substringBefore('?')
+    val segment =
+        when {
+            pathSegment.startsWith("naddr1") -> pathSegment
+            hashSegment.startsWith("naddr1") -> hashSegment
+            else -> return
+        }
+    val target = parseGroupJoinInput(segment) ?: return
+    // ?invite=Z rides either the real query (/naddr1...?invite=Z) or the hash's own
+    // query (#/naddr1...?invite=Z).
+    val query = window.location.search.removePrefix("?").ifBlank { window.location.hash.substringAfter('?', "") }
+    val invite =
+        query.split("&")
+            .firstOrNull { it.startsWith("invite=") }
+            ?.substringAfter('=')?.takeIf { it.isNotBlank() }
+    val route = GroupRoute(relayUrl = target.relayUrl, groupId = target.groupId, inviteCode = invite)
+    // Hash form leaves the path untouched; path form strips the naddr segment.
+    val base = path.removeSuffix(segment).ifEmpty { "/" }
+    window.history.replaceState(null, "", base + route.toHash())
+}
 
 /**
  * Parse URL query parameters for deep linking.
@@ -101,6 +135,7 @@ fun main() {
     // theme preference so a light-theme user doesn't get a dark first paint.
     applyTheme(AppModule.appearanceSettings.theme.value)
     applyDimenTokens()
+    redirectNaddrPath()
     parseDeepLinkFromUrl()
     val container =
         document.getElementById(ElementId("composeApplication"))
