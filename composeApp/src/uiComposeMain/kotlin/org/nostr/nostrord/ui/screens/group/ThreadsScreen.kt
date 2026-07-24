@@ -77,7 +77,9 @@ fun ThreadsScreen(
     // in the same ViewModelStore, so a bare groupId key here collided with it and the two evicted +
     // recreated each other every recomposition - churning the thread sub so it never loaded
     // (blank/stuck list on the mobile layout where the sidebar VM is also composed).
-    val vm = viewModel(key = "threads:${route.groupId}") { ThreadsViewModel(AppModule.nostrRepository, route.groupId) }
+    val vm = viewModel(key = "threads:${route.relayUrl}|${route.groupId}") {
+        ThreadsViewModel(AppModule.nostrRepository, route.groupId, route.relayUrl)
+    }
     val threads by vm.threads.collectAsState()
     val isLoading by vm.isLoading.collectAsState()
     val openThread by vm.openThread.collectAsState()

@@ -15,6 +15,7 @@ import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /** One row in the threads list: a kind:11 root plus stats derived from its kind:1111 replies. */
 data class ThreadSummary(
@@ -84,7 +85,13 @@ internal fun buildThreadSummaries(
 class ThreadsViewModel(
     private val repo: NostrRepositoryApi,
     val groupId: String,
+    relayUrl: String? = null,
 ) : ViewModel() {
+    /** Route-carried relay; scopes the bare-id thread buckets like GroupViewModel.messages. */
+    private val hostRelay: String? = relayUrl?.normalizeRelayUrl()
+
+    private fun scoped(list: List<NostrGroupClient.NostrMessage>): List<NostrGroupClient.NostrMessage> = if (hostRelay == null) list else list.filter { it.relayUrl == null || it.relayUrl == hostRelay }
+
     val userMetadata = repo.userMetadata
 
     /** Optimistic-send status per event id (Sending / Failed) - shared with chat via the repo. */
@@ -95,15 +102,15 @@ class ThreadsViewModel(
 
     val threads: StateFlow<List<ThreadSummary>> =
         combine(repo.threadRoots, repo.threadReplies) { rootsMap, repliesMap ->
-            buildThreadSummaries(rootsMap[groupId] ?: emptyList(), repliesMap[groupId] ?: emptyList())
+            buildThreadSummaries(scoped(rootsMap[groupId] ?: emptyList()), scoped(repliesMap[groupId] ?: emptyList()))
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _openRootId = MutableStateFlow<String?>(null)
     val openThread: StateFlow<ThreadDetail?> =
         combine(_openRootId, repo.threadRoots, repo.threadReplies) { rootId, rootsMap, repliesMap ->
             rootId ?: return@combine null
-            val root = rootsMap[groupId]?.firstOrNull { it.id == rootId } ?: return@combine null
-            val replies = (repliesMap[groupId] ?: emptyList())
+            val root = scoped(rootsMap[groupId] ?: emptyList()).firstOrNull { it.id == rootId } ?: return@combine null
+            val replies = scoped(repliesMap[groupId] ?: emptyList())
                 .filter { it.threadRootIdTag() == rootId }
                 .sortedBy { it.createdAt }
             ThreadDetail(root, replies)
