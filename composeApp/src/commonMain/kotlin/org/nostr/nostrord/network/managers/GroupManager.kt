@@ -592,6 +592,18 @@ class GroupManager(
     private val _latestMessageRelayByGroup = MutableStateFlow<Map<String, String>>(emptyMap())
     fun getLatestMessageRelayForGroup(groupId: String): String? = _latestMessageRelayByGroup.value[groupId]
 
+    // Relay the open group screen navigated to (route-carried, normalized). The same id
+    // can name two independent groups on two relays; the hint pins the opened group's
+    // reads/sends to the relay the user actually chose instead of the first relay the
+    // by-id scan finds. Last-opened wins while both are loaded (per-group stores are
+    // still keyed by bare id).
+    private val groupRelayHints = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    fun setGroupRelayHint(groupId: String, relayUrl: String) {
+        val normalized = relayUrl.normalizeRelayUrl()
+        groupRelayHints.update { if (it[groupId] == normalized) it else it + (groupId to normalized) }
+    }
+
     private fun isRecentlyLeft(groupId: String): Boolean {
         val at = recentlyLeftAt[groupId] ?: return false
         if (epochMillis() - at < LEFT_GROUP_GRACE_MS) return true
@@ -804,7 +816,8 @@ class GroupManager(
      * Returns the relay URL that hosts the given group, by scanning the per-relay cache.
      * Uses an immutable snapshot of _groupsByRelay so no lock is needed.
      */
-    fun getRelayForGroup(groupId: String): String? = _groupsByRelay.value.entries.firstOrNull { (_, groups) -> groups.any { it.id == groupId } }?.key
+    fun getRelayForGroup(groupId: String): String? = groupRelayHints.value[groupId]
+        ?: _groupsByRelay.value.entries.firstOrNull { (_, groups) -> groups.any { it.id == groupId } }?.key
         // Fallback: private groups may not appear in kind 39000 listing but are
         // tracked in _joinedGroupsByRelay (from kind 10009). Without this,
         // clientForGroup() falls back to the focused client which may be wrong.
@@ -4839,6 +4852,7 @@ class GroupManager(
         groupMessageRecency.clear()
         _messageStatus.value = emptyMap()
         _latestMessageRelayByGroup.value = emptyMap()
+        groupRelayHints.value = emptyMap()
         // Joined-group sets and restricted-group markers are pubkey-scoped.
         // Leaving them in place lets isJoined() / isRestricted() report the
         // PREVIOUS account's data while the new account's flow is still

@@ -404,6 +404,15 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     override fun getMessagesForGroup(groupId: String): List<NostrGroupClient.NostrMessage> = messages.value[groupId] ?: emptyList()
 
+    var relayHints = mutableMapOf<String, String>()
+
+    override fun setGroupRelayHint(
+        groupId: String,
+        relayUrl: String,
+    ) {
+        relayHints[groupId] = relayUrl
+    }
+
     override fun markGroupAsRead(groupId: String) {}
 
     override fun markGroupAsReadUpTo(groupId: String, timestamp: Long) {}

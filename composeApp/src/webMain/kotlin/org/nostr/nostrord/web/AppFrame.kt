@@ -295,7 +295,7 @@ val AppFrame =
                         railRoots.forEach { group ->
                             val name = group.meta.name ?: group.meta.id
                             div {
-                                key = group.meta.id
+                                key = "${group.relayUrl}/${group.meta.id}"
                                 className = ClassName("rail-group")
                                 button {
                                     className =
@@ -677,6 +677,7 @@ val AppFrame =
                         ChatScreen {
                             key = "${r.relayUrl}/${r.groupId}"
                             group = selectedGroup
+                            relayUrl = r.relayUrl
                             onLeave = { pushHome() }
                             // Jump to + flash the message a notification (or shared link)
                             // pointed at; clear ?e= afterward so new messages or a back/

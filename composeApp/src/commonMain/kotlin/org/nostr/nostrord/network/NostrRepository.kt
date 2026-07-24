@@ -3595,6 +3595,11 @@ class NostrRepository(
 
     override fun getMessagesForGroup(groupId: String): List<NostrGroupClient.NostrMessage> = groupManager.getMessagesForGroup(groupId)
 
+    override fun setGroupRelayHint(
+        groupId: String,
+        relayUrl: String,
+    ) = groupManager.setGroupRelayHint(groupId, relayUrl)
+
     // Unread message operations
     override fun markGroupAsRead(groupId: String) {
         unreadManager.markAsRead(groupId)

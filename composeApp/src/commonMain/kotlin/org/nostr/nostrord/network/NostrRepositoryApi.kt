@@ -612,6 +612,16 @@ interface NostrRepositoryApi {
 
     fun getMessagesForGroup(groupId: String): List<NostrGroupClient.NostrMessage>
 
+    /**
+     * Pin [groupId]'s relay routing to [relayUrl] (the relay the open route carried).
+     * The same id can name independent groups on two relays; without the hint the
+     * repo resolves the relay by scanning and can pick the wrong one.
+     */
+    fun setGroupRelayHint(
+        groupId: String,
+        relayUrl: String,
+    )
+
     fun markGroupAsRead(groupId: String)
 
     /** Advance the last-read timestamp for partial-read tracking. See UnreadManager.markAsReadUpTo. */

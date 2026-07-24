@@ -65,6 +65,30 @@ class HomePageViewModelTest {
     }
 
     @Test
+    fun `same group id on two relays stays as two groups`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value =
+            mapOf(
+                "wss://a" to listOf(meta("dev", "Dev on A")),
+                "wss://b" to listOf(meta("dev", "Dev on B")),
+            )
+        fake._joinedGroupsByRelay.value =
+            mapOf(
+                "wss://a" to setOf("dev"),
+                "wss://b" to setOf("dev"),
+            )
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Two independent groups, each with its own relay's metadata; both on the rail.
+        assertEquals(
+            listOf("wss://a" to "Dev on A", "wss://b" to "Dev on B"),
+            vm.myGroups.value.map { it.relayUrl to it.meta.name },
+        )
+        assertEquals(2, vm.railRootGroups.value.size)
+    }
+
+    @Test
     fun `query filters by name and description`() = runTest {
         val fake = FakeNostrRepository()
         fake._groupsByRelay.value =

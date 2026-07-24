@@ -53,7 +53,9 @@ external interface GroupSidebarProps : Props {
 val GroupSidebar =
     FC<GroupSidebarProps> { props ->
         val route = props.route
-        val vm = useViewModel(route.groupId) { GroupViewModel(AppModule.nostrRepository, route.groupId) }
+        val vm = useViewModel("${route.relayUrl}|${route.groupId}") {
+            GroupViewModel(AppModule.nostrRepository, route.groupId, route.relayUrl)
+        }
         val groupsByRelay = useStateFlow(vm.groupsByRelay)
         val childrenByParent = useStateFlow(vm.childrenByParent)
         val groupMembers = useStateFlow(vm.groupMembers)
