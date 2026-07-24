@@ -310,6 +310,7 @@ fun GroupSidebar(
         MembersModal(
             groupId = rootId,
             onDismiss = { showMembers = false },
+            relayUrl = route.relayUrl,
         )
     }
     if (showManage) {

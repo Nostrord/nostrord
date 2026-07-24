@@ -1,8 +1,10 @@
 package org.nostr.nostrord.web.modals
 
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.utils.shortNpub
 import org.nostr.nostrord.web.bridge.useStateFlow
+import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.icon
@@ -17,6 +19,9 @@ import web.cssom.ClassName
 
 external interface MembersModalProps : Props {
     var groupId: String
+
+    /** Relay hosting the group; scopes the roster (same-id groups elsewhere stay out). */
+    var relayUrl: String?
     var onClose: () -> Unit
 }
 
@@ -28,8 +33,9 @@ external interface MembersModalProps : Props {
 val MembersModal =
     FC<MembersModalProps> { props ->
         val repo = AppModule.nostrRepository
-        val members = useStateFlow(repo.groupMembers)[props.groupId].orEmpty()
-        val admins = useStateFlow(repo.groupAdmins)[props.groupId].orEmpty().toSet()
+        val vm = useViewModel("${props.relayUrl}|${props.groupId}") { GroupViewModel(repo, props.groupId, props.relayUrl) }
+        val members = useStateFlow(vm.groupMembers)[props.groupId].orEmpty()
+        val admins = useStateFlow(vm.groupAdmins)[props.groupId].orEmpty().toSet()
         val userMetadata = useStateFlow(repo.userMetadata)
         val (selected, setSelected) = useState<String?> { null }
         useEscClose { props.onClose() }

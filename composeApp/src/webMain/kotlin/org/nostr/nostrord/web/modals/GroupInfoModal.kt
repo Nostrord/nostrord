@@ -5,8 +5,10 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.ui.navigation.RelayRoute
+import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
+import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.AvatarKind
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.WebAvatar
@@ -29,6 +31,9 @@ import web.cssom.ClassName
 
 external interface GroupInfoModalProps : Props {
     var group: GroupMetadata
+
+    /** Relay hosting the group; scopes the member count and the RELAY link. */
+    var relayUrl: String?
     var onLeave: () -> Unit
     var onClose: () -> Unit
 }
@@ -48,12 +53,16 @@ val GroupInfoModal =
         val defaultLevel = useStateFlow(notificationSettings.defaultLevel)
         val level = groupLevels[group.id] ?: defaultLevel
         val userMetadata = useStateFlow(AppModule.nostrRepository.userMetadata)
-        val memberCount = useStateFlow(AppModule.nostrRepository.groupMembers)[group.id]?.size ?: 0
+        // Through the relay-scoped VM: the flat map's count can belong to a same-id group
+        // on another relay.
+        val vm = useViewModel("${props.relayUrl}|${group.id}") { GroupViewModel(AppModule.nostrRepository, group.id, props.relayUrl) }
+        val memberCount = useStateFlow(vm.groupMembers)[group.id]?.size ?: 0
         // Leaving is about the user's own kind:10009 list, so it must be offered whenever the
         // group is in that list (any relay), even if the relay is dead and membership/posting
         // can't be confirmed. Gating on "can post" would hide the only exit from a broken relay.
         val isJoined = useStateFlow(AppModule.nostrRepository.joinedGroupsByRelay).values.any { group.id in it }
-        val relayUrl = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
+        val focusedRelay = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
+        val relayUrl = props.relayUrl ?: focusedRelay
         val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)
         // Mention click in the description opens that user's profile on top.
         val (profilePubkey, setProfilePubkey) = useState<String?> { null }

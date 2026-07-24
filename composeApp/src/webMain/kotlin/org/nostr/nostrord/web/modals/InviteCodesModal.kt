@@ -2,8 +2,10 @@ package org.nostr.nostrord.web.modals
 
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.groupIdentifiers
+import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
+import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.IdentifierRow
 import org.nostr.nostrord.web.components.copyToClipboard
@@ -19,6 +21,9 @@ import web.cssom.ClassName
 
 external interface InviteCodesModalProps : Props {
     var groupId: String
+
+    /** Relay hosting the group; scopes the code list (same-id groups elsewhere stay out). */
+    var relayUrl: String?
     var onClose: () -> Unit
 }
 
@@ -30,8 +35,12 @@ external interface InviteCodesModalProps : Props {
 val InviteCodesModal =
     FC<InviteCodesModalProps> { props ->
         val repo = AppModule.nostrRepository
-        val msgs = useStateFlow(repo.messages)[props.groupId].orEmpty()
-        val relayUrl = useStateFlow(repo.currentRelayUrl)
+        // Relay-scoped VM: the raw bucket can hold a same-id group's kind:9009s from
+        // another relay.
+        val vm = useViewModel("${props.relayUrl}|${props.groupId}") { GroupViewModel(repo, props.groupId, props.relayUrl) }
+        val msgs = useStateFlow(vm.messages)[props.groupId].orEmpty()
+        val focusedRelay = useStateFlow(repo.currentRelayUrl)
+        val relayUrl = props.relayUrl ?: focusedRelay
         val (busy, setBusy) = useState { false }
 
         val revoked =
