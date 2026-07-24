@@ -19,17 +19,21 @@ class GroupCacheHydrationTest {
     fun `opening a group renders its messages from the persistent cache`() = runTest {
         val scope = TestScope(testScheduler)
         val cache = InMemoryCacheStore()
-        // A previously-seen group's history already sits in the cache (e.g. a prior session).
+        // A previously-seen group's history already sits in the cache (e.g. a prior
+        // session), under its relay-scoped slot.
+        val slot = "wss://cache.relay|$HYDRATE_GROUP"
         cache.upsertMessages(
             HYDRATE_PUBKEY,
-            HYDRATE_GROUP,
+            slot,
             listOf(
-                CachedMsg("m1", HYDRATE_GROUP, "p", createdAt = 100, kind = 9, content = "hi", tagsJson = "[]"),
-                CachedMsg("m2", HYDRATE_GROUP, "p", createdAt = 200, kind = 9, content = "there", tagsJson = "[]"),
+                CachedMsg("m1", slot, "p", createdAt = 100, kind = 9, content = "hi", tagsJson = "[]"),
+                CachedMsg("m2", slot, "p", createdAt = 200, kind = 9, content = "there", tagsJson = "[]"),
             ),
         )
         val manager = GroupManager(connectionManager = ConnectionManager(scope), scope = scope, cacheStore = cache)
         manager.setCurrentPubkey(HYDRATE_PUBKEY)
+        // The slot is picked by the group's resolved relay.
+        manager.setGroupRelayHint(HYDRATE_GROUP, "wss://cache.relay")
 
         // Opening the group hydrates from cache with no relay round-trip.
         manager.setActiveGroupId(HYDRATE_GROUP)

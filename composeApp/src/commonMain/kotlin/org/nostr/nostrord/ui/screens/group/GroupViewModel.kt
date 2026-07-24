@@ -180,10 +180,21 @@ class GroupViewModel(
      */
     val messages: StateFlow<Map<String, List<NostrGroupClient.NostrMessage>>> =
         combine(repo.messages, repo.mutedPubkeys) { byGroup, muted ->
+            // Same-id groups on other relays share the bare-id buckets; with an explicit
+            // host relay keep only its events. Unstamped messages (rare pre-tag
+            // constructions) stay visible so an own send never vanishes.
+            val scoped =
+                if (hostRelay == null) {
+                    byGroup
+                } else {
+                    byGroup.mapValues { (_, list) ->
+                        list.filter { it.relayUrl == null || it.relayUrl == hostRelay }
+                    }
+                }
             if (muted.isEmpty()) {
-                byGroup
+                scoped
             } else {
-                byGroup.mapValues { (_, list) -> list.filter { it.pubkey !in muted } }
+                scoped.mapValues { (_, list) -> list.filter { it.pubkey !in muted } }
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.messages.value)
 
@@ -322,7 +333,9 @@ class GroupViewModel(
             // feed no longer reads as pending. (`leaveGroup` clears the feed and a re-fetch races, which
             // is why the feed alone left a left group stuck on "Request pending" until a reload.)
             val localPendingAt = pendingByGroup[groupId]
-            val ownEvents = messagesByGroup[groupId].orEmpty().asSequence().filter { it.pubkey == pubkey }
+            val ownEvents = messagesByGroup[groupId].orEmpty().asSequence()
+                .filter { it.pubkey == pubkey }
+                .filter { hostRelay == null || it.relayUrl == null || it.relayUrl == hostRelay }
             val lastJoinReq = ownEvents.filter { it.kind == 9021 }.maxOfOrNull { it.createdAt }
             val lastLeave = ownEvents.filter { it.kind == 9022 }.maxOfOrNull { it.createdAt }
             val feedRequestedAt =

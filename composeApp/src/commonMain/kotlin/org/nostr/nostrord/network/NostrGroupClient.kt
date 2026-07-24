@@ -1828,6 +1828,13 @@ class NostrGroupClient(
         val createdAt: Long,
         val kind: Int,
         val tags: List<List<String>> = emptyList(),
+        /**
+         * Relay that delivered (or will receive) this event, normalized. Not part of the
+         * NIP-01 event: it scopes readers of the shared bare-id message buckets, because
+         * the same group id on two relays is two independent groups. Null when the origin
+         * is unknown (pre-tag construction sites); such messages show everywhere.
+         */
+        val relayUrl: String? = null,
     )
 
     @Immutable

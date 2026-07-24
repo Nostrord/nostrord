@@ -74,7 +74,9 @@ external interface ThreadsScreenProps : Props {
 val ThreadsScreen =
     FC<ThreadsScreenProps> { props ->
         val route = props.route
-        val vm = useViewModel(route.groupId) { ThreadsViewModel(AppModule.nostrRepository, route.groupId) }
+        val vm = useViewModel("${route.relayUrl}|${route.groupId}") {
+            ThreadsViewModel(AppModule.nostrRepository, route.groupId, route.relayUrl)
+        }
         val threads = useStateFlow(vm.threads)
         val isLoading = useStateFlow(vm.isLoading)
         val openThread = useStateFlow(vm.openThread)

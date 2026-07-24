@@ -2905,6 +2905,9 @@ class GroupManager(
                 createdAt = event.createdAt,
                 kind = event.kind,
                 tags = event.tags,
+                // Stamp the send target so the optimistic bubble stays scoped to the
+                // group's own relay (same-id groups on other relays must not show it).
+                relayUrl = getRelayForGroup(groupId)?.normalizeRelayUrl(),
             ),
         )
         _messageStatus.update { it + (eventId to MessageStatus.Sending) }
@@ -3632,10 +3635,11 @@ class GroupManager(
      */
     private suspend fun loadOlderFromCache(groupId: String): Boolean {
         val account = currentPubkey ?: return false
+        val relay = getRelayForGroup(groupId) ?: return false
         val oldestInMemory = _messages.value[groupId]?.minOfOrNull { it.createdAt } ?: return false
         val olderPage =
             try {
-                cacheStore.loadBefore(account, groupId, oldestInMemory, PAGE_SIZE)
+                cacheStore.loadBefore(account, cacheSlot(relay, groupId), oldestInMemory, PAGE_SIZE)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
@@ -3646,7 +3650,7 @@ class GroupManager(
                 return false
             }
         if (olderPage.isEmpty()) return false
-        val restored = olderPage.map { it.toNostrMessage() }
+        val restored = olderPage.map { it.toNostrMessage().withOriginRelay(relay) }
         var added = false
         _messages.update { current ->
             val existing = current[groupId] ?: emptyList()
@@ -4266,7 +4270,7 @@ class GroupManager(
             if (!eventDeduplicator.tryAddSync(message.id)) return null
             val groupId = extractGroupIdFromMessage(rawMsg) ?: return null
             if (isRecentlyLeft(groupId)) return null
-            applyThreadEvent(groupId, message)
+            applyThreadEvent(groupId, message.withOriginRelay(relayUrl))
             return message.pubkey
         }
 
@@ -4318,10 +4322,27 @@ class GroupManager(
 
         // Enqueue to the ordering buffer; the buffer flushes after 300 ms of inactivity
         // for this group, applying the entire batch in one sorted StateFlow update.
-        eventOrderingBuffer.enqueue(groupId, message)
+        eventOrderingBuffer.enqueue(groupId, message.withOriginRelay(relayUrl))
 
         return message.pubkey
     }
+
+    /**
+     * Stamp the delivering relay onto a message (normalized), so readers can scope the
+     * shared bare-id buckets: the same id on two relays is two independent groups.
+     * An already-stamped or relay-less message passes through unchanged.
+     */
+    private fun NostrGroupClient.NostrMessage.withOriginRelay(relayUrl: String?): NostrGroupClient.NostrMessage = if (relayUrl == null || this.relayUrl != null) this else copy(relayUrl = relayUrl.normalizeRelayUrl())
+
+    /**
+     * Disk-cache slot for a group's history on one relay. Relay-scoped so same-id groups
+     * on two relays never mix on disk; '|' cannot appear in a relay URL or group id.
+     * A null relay falls back to the legacy bare-id slot.
+     */
+    private fun cacheSlot(
+        relayUrl: String?,
+        groupId: String,
+    ): String = relayUrl?.let { "${it.normalizeRelayUrl()}|$groupId" } ?: groupId
 
     /**
      * Apply a pre-sorted batch of messages for [groupId] to [_messages] in one atomic update.
@@ -4423,7 +4444,12 @@ class GroupManager(
         if (messages.isEmpty()) return
         scope.launch {
             try {
-                cacheStore.upsertMessages(account, groupId, messages.map { it.toCachedMsg(groupId) })
+                // One slot per origin relay: same-id groups on two relays keep separate
+                // disk histories (a mux flush batch can mix relays for one bare id).
+                messages.groupBy { it.relayUrl }.forEach { (relay, batch) ->
+                    val slot = cacheSlot(relay, groupId)
+                    cacheStore.upsertMessages(account, slot, batch.map { it.toCachedMsg(slot) })
+                }
             } catch (_: Exception) {
             }
         }
@@ -4480,14 +4506,18 @@ class GroupManager(
      */
     private suspend fun hydrateMessagesFromCache(groupId: String) {
         val account = currentPubkey ?: return
+        // The group's relay picks the slot; restored messages are stamped with it so the
+        // relay-scoped screens accept them. Pre-slot legacy rows (bare id) are skipped:
+        // they can't be attributed to a relay, and the live REQ re-fills and re-caches.
+        val relay = getRelayForGroup(groupId) ?: return
         val cached =
             try {
-                cacheStore.loadLatest(account, groupId, CACHE_HYDRATE_LIMIT)
+                cacheStore.loadLatest(account, cacheSlot(relay, groupId), CACHE_HYDRATE_LIMIT)
             } catch (_: Exception) {
                 return
             }
         if (cached.isEmpty()) return
-        val restored = cached.map { it.toNostrMessage() }
+        val restored = cached.map { it.toNostrMessage().withOriginRelay(relay) }
         _messages.update { current ->
             val existing = current[groupId] ?: emptyList()
             val index = messageIdIndex.getOrPut(groupId) { existing.mapTo(mutableSetOf()) { it.id } }

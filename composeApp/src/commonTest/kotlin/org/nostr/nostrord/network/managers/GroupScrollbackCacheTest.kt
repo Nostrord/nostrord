@@ -21,7 +21,9 @@ class GroupScrollbackCacheTest {
     @AfterTest
     fun cleanup() = SecureStorage.clearAllMessagesForAccount(SB_PUBKEY)
 
-    private fun cached(id: String, createdAt: Long) = CachedMsg(id, SB_GROUP, "p", createdAt, kind = 9, content = "c", tagsJson = "[]")
+    private val slot = "wss://cache.relay|$SB_GROUP"
+
+    private fun cached(id: String, createdAt: Long) = CachedMsg(id, slot, "p", createdAt, kind = 9, content = "c", tagsJson = "[]")
 
     @Test
     fun `scroll-back serves an older page from the cache without hitting the relay`() = runTest {
@@ -29,10 +31,11 @@ class GroupScrollbackCacheTest {
         val cache = InMemoryCacheStore()
         val manager = GroupManager(connectionManager = ConnectionManager(scope), scope = scope, cacheStore = cache)
         manager.setCurrentPubkey(SB_PUBKEY)
+        manager.setGroupRelayHint(SB_GROUP, "wss://cache.relay")
 
-        // The cache holds the full history m1..m10; memory only has the recent tail m8..m10
-        // (as if older messages were evicted or never hydrated).
-        cache.upsertMessages(SB_PUBKEY, SB_GROUP, (1L..10L).map { cached("m$it", it) })
+        // The cache holds the full history m1..m10 under the relay-scoped slot; memory only
+        // has the recent tail m8..m10 (as if older messages were evicted or never hydrated).
+        cache.upsertMessages(SB_PUBKEY, slot, (1L..10L).map { cached("m$it", it) })
         SecureStorage.saveMessagesForGroup(
             SB_PUBKEY,
             SB_GROUP,

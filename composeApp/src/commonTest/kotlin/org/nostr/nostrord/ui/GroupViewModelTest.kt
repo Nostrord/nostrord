@@ -79,6 +79,28 @@ class GroupViewModelTest {
     }
 
     @Test
+    fun `messages are scoped to the host relay, unstamped ones stay`() = runTest {
+        val fake = FakeNostrRepository()
+        fun msg(id: String, relay: String?) = org.nostr.nostrord.network.NostrGroupClient.NostrMessage(
+            id = id,
+            pubkey = "pk",
+            content = "hi",
+            createdAt = 1L,
+            kind = 9,
+            relayUrl = relay,
+        )
+        fake._messages.value =
+            mapOf("dev" to listOf(msg("m1", "wss://a"), msg("m2", "wss://b"), msg("m3", null)))
+
+        val vmA = GroupViewModel(fake, "dev", "wss://a")
+        val vmAll = GroupViewModel(fake, "dev")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("m1", "m3"), vmA.messages.value["dev"]?.map { it.id })
+        assertEquals(listOf("m1", "m2", "m3"), vmAll.messages.value["dev"]?.map { it.id })
+    }
+
+    @Test
     fun `membership counts only the host relay's joined set`() = runTest {
         val fake = FakeNostrRepository()
         fake.fakePublicKey = "me"
