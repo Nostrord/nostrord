@@ -82,6 +82,11 @@ val ChatMessageList =
         // can never yank a reader back to the tail. The at-bottom follow and open settle still
         // pin as normal — native gates its single pin purely on the at-bottom latch.
         val userScrolledUp = useRef(false)
+        // True while a jump-to-bottom smooth scroll is in flight; cleared on arrival or on a
+        // real upward gesture. Tapping the FAB blurs the composer on mobile, so the keyboard
+        // closes mid-jump and the visualViewport resize handler would otherwise cancel the
+        // smooth scroll with a scrollTop delta that lands the view short of the bottom.
+        val jumpingToBottom = useRef(false)
         val lastScrollTop = useRef(0.0)
         val markDebounce = useRef<Int>(null)
         val prevScrollHeight = useRef(0.0)
@@ -122,6 +127,7 @@ val ChatMessageList =
                 openedAt.current = window.performance.now()
                 loadingOlder.current = false
                 userScrolledUp.current = false
+                jumpingToBottom.current = false
                 lastScrollTop.current = node.scrollTop.toDouble()
                 if (atBottom.current != true) {
                     atBottom.current = true
@@ -250,7 +256,9 @@ val ChatMessageList =
                     // we touch scrollTop (otherwise the shift fights the in-flight relayout).
                     window.requestAnimationFrame {
                         val node = el.current ?: return@requestAnimationFrame
-                        if (atBottom.current == true && loadingOlder.current != true) {
+                        if ((atBottom.current == true || jumpingToBottom.current == true) &&
+                            loadingOlder.current != true
+                        ) {
                             node.scrollTop = node.scrollHeight.toDouble()
                         } else {
                             // delta > 0 when the keyboard opened (viewport shrank): scroll down
@@ -284,6 +292,7 @@ val ChatMessageList =
             if ((props.jumpNonce ?: 0) <= 0) return@useEffect
             val node = el.current ?: return@useEffect
             userScrolledUp.current = false
+            jumpingToBottom.current = true
             node.asDynamic().scrollTo(js("({ top: node.scrollHeight, behavior: 'smooth' })"))
         }
 
@@ -327,7 +336,10 @@ val ChatMessageList =
                 // or an overflow-anchor restore only ever increases it, so this never trips on
                 // content growth. Marks the reader as scrolled-up so every auto-pin lets go.
                 val scrolledUpNow = st < (lastScrollTop.current ?: 0.0) - 1.0
-                if (scrolledUpNow) userScrolledUp.current = true
+                if (scrolledUpNow) {
+                    userScrolledUp.current = true
+                    jumpingToBottom.current = false
+                }
                 lastScrollTop.current = st
                 // 80px threshold matches the prototype: the jump pill appears once the
                 // user is more than ~80px up from the bottom.
@@ -338,7 +350,10 @@ val ChatMessageList =
                 // TRANSITION in that case, so this must run unconditionally: with the flag stuck
                 // true, the next growth (unmute re-inserting that author's history) would skip the
                 // pin and strand the view mid-feed.
-                if (isAtBottom) userScrolledUp.current = false
+                if (isAtBottom) {
+                    userScrolledUp.current = false
+                    jumpingToBottom.current = false
+                }
                 // During the open settle window, ignore a transient "not at bottom" reading caused
                 // by content still growing/reflowing — flipping the latch there would disarm the pin
                 // and strand the open above the true bottom. But a genuine scroll-up (scrollTop
