@@ -415,9 +415,12 @@ class NostrRepository(
     // NIP-57 zap totals per zapped event id.
     override val zaps: StateFlow<Map<String, ZapManager.ZapInfo>> = zapManager.zaps
     override val groupMembers: StateFlow<Map<String, List<String>>> = groupManager.groupMembers
+    override val groupMembersByRelay: StateFlow<Map<String, Map<String, List<String>>>> = groupManager.groupMembersByRelay
     override val pendingApprovalSince: StateFlow<Map<String, Long>> = groupManager.pendingApprovalSince
     override val groupAdmins: StateFlow<Map<String, List<String>>> = groupManager.groupAdmins
+    override val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>> = groupManager.groupAdminsByRelay
     override val groupRoles: StateFlow<Map<String, List<RoleDefinition>>> = groupManager.groupRoles
+    override val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>> = groupManager.groupRolesByRelay
     override val loadingMembers: StateFlow<Set<String>> = groupManager.loadingMembers
     override val restrictedGroups: StateFlow<Map<String, String>> = groupManager.restrictedGroups
     override val leftGroups: StateFlow<Set<String>> = groupManager.leftGroups
@@ -4859,13 +4862,13 @@ class NostrRepository(
                     39001 -> {
                         val groupAdmins = client.parseGroupAdmins(event) ?: return
                         val createdAt = event["created_at"]?.jsonPrimitive?.long ?: 0L
-                        groupManager.handleGroupAdmins(groupAdmins, createdAt)
+                        groupManager.handleGroupAdmins(groupAdmins, createdAt, client.getRelayUrl())
                     }
 
                     39003 -> {
                         val groupRoles = client.parseGroupRoles(event) ?: return
                         val createdAt = event["created_at"]?.jsonPrimitive?.long ?: 0L
-                        groupManager.handleGroupRoles(groupRoles, createdAt)
+                        groupManager.handleGroupRoles(groupRoles, createdAt, client.getRelayUrl())
                     }
 
                     9008 -> {

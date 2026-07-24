@@ -114,6 +114,11 @@ class FakeNostrRepository : NostrRepositoryApi {
     override suspend fun resetGroupLoadingState(groupId: String) {}
     override val reactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> = _reactions
     override val groupMembers: StateFlow<Map<String, List<String>>> = _groupMembers
+    val _groupMembersByRelay = MutableStateFlow<Map<String, Map<String, List<String>>>>(emptyMap())
+    override val groupMembersByRelay: StateFlow<Map<String, Map<String, List<String>>>> = _groupMembersByRelay
+    val _groupAdminsByRelay = MutableStateFlow<Map<String, Map<String, List<String>>>>(emptyMap())
+    override val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>> = _groupAdminsByRelay
+    override val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>> = MutableStateFlow(emptyMap())
     override val pendingApprovalSince: StateFlow<Map<String, Long>> = MutableStateFlow(emptyMap())
     override val groupAdmins: StateFlow<Map<String, List<String>>> = _groupAdmins
     override val userMetadata: StateFlow<Map<String, UserMetadata>> = _userMetadata

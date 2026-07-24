@@ -101,6 +101,28 @@ class GroupViewModelTest {
     }
 
     @Test
+    fun `member list prefers the host relay's mirror over the flat map`() = runTest {
+        val fake = FakeNostrRepository()
+        // Flat map holds the OTHER relay's list (last writer wins there); the per-relay
+        // mirror holds each relay's own.
+        fake._groupMembers.value = mapOf("dev" to listOf("only-b"))
+        fake._groupMembersByRelay.value =
+            mapOf(
+                "wss://a" to mapOf("dev" to listOf("alice", "bob")),
+                "wss://b" to mapOf("dev" to listOf("only-b")),
+            )
+
+        val vmA = GroupViewModel(fake, "dev", "wss://a")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("alice", "bob"), vmA.groupMembers.value["dev"])
+        // A group the host relay hasn't described yet falls back to the flat map.
+        val vmC = GroupViewModel(fake, "dev", "wss://c")
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf("only-b"), vmC.groupMembers.value["dev"])
+    }
+
+    @Test
     fun `membership counts only the host relay's joined set`() = runTest {
         val fake = FakeNostrRepository()
         fake.fakePublicKey = "me"
