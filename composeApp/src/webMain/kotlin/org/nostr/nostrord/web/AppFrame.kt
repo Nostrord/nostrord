@@ -291,7 +291,10 @@ val AppFrame =
                         className = ClassName("rail-scroll")
                         // An open channel highlights its root's rail chip (the chip a click
                         // would re-open); badge counts aggregate the root's whole subtree.
+                        // Matched by (relay, id): a same-id group on another relay is a
+                        // different chip and must not light up too.
                         val activeRootId = groupRoute?.groupId?.let { open -> rootGroupId(open) { groupParents[it] } }
+                        val activeRelay = groupRoute?.relayUrl?.normalizeRelayUrl()
                         railRoots.forEach { group ->
                             val name = group.meta.name ?: group.meta.id
                             div {
@@ -300,7 +303,14 @@ val AppFrame =
                                 button {
                                     className =
                                         ClassName(
-                                            if (activeRootId == group.meta.id && !notificationsOpen) "rail-group-btn active" else "rail-group-btn",
+                                            if (activeRootId == group.meta.id &&
+                                                activeRelay == group.relayUrl.normalizeRelayUrl() &&
+                                                !notificationsOpen
+                                            ) {
+                                                "rail-group-btn active"
+                                            } else {
+                                                "rail-group-btn"
+                                            },
                                         )
                                     title = name
                                     onClick = { pushRoute(GroupRoute(group.relayUrl, group.meta.id)) }

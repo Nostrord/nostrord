@@ -370,14 +370,19 @@ fun AppFrame() {
                 ) {
                     // An open channel highlights its root's rail chip (the chip a click
                     // would re-open); badge counts aggregate the root's whole subtree.
+                    // Matched by (relay, id): a same-id group on another relay is a
+                    // different chip and must not light up too.
                     val activeRootId = groupRoute?.groupId?.let { open -> rootGroupId(open) { groupParents[it] } }
+                    val activeRelay = groupRoute?.relayUrl?.normalizeRelayUrl()
                     railRoots.forEach { group ->
                         RailGroupButton(
                             name = group.meta.name ?: group.meta.id,
                             picture = group.meta.picture,
                             groupId = group.meta.id,
                             unread = railUnread[group.meta.id] ?: 0,
-                            active = activeRootId == group.meta.id && !showNotifications,
+                            active = activeRootId == group.meta.id &&
+                                activeRelay == group.relayUrl.normalizeRelayUrl() &&
+                                !showNotifications,
                         ) {
                             history.navigate(GroupRoute(group.relayUrl, group.meta.id))
                             closeDrawer()
