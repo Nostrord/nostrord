@@ -53,6 +53,13 @@ external interface ManageGroupModalProps : Props {
 
     /** Tab to open on first render (case-insensitive name, e.g. "members"). Defaults to Info. */
     var initialTab: String?
+
+    /**
+     * Relay hosting this group (route-carried). Scopes the member/request reads so a
+     * same-id group on another relay doesn't leak into this modal; null falls back to
+     * the focused relay (legacy callers).
+     */
+    var relayUrl: String?
 }
 
 private enum class ManageTab(val label: String, val ic: Ic) {
@@ -81,7 +88,8 @@ val ManageGroupModal =
 
         // The Hierarchy tab only makes sense where the relay advertises NIP-29 subgroup support
         // (nip29:{subgroups:true} in its NIP-11); hide it elsewhere.
-        val relayUrl = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
+        val focusedRelay = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
+        val relayUrl = props.relayUrl ?: focusedRelay
         val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)
         val supportsSubgroups =
             (relayMetadata[relayUrl] ?: relayMetadata[relayUrl.normalizeRelayUrl()])?.supportsSubgroups == true
@@ -133,12 +141,17 @@ val ManageGroupModal =
                                     this.relayUrl = relayUrl
                                     onClose = props.onClose
                                 }
-                            ManageTab.Members -> ManageMembersSection { groupId = group.id }
+                            ManageTab.Members ->
+                                ManageMembersSection {
+                                    groupId = group.id
+                                    this.relayUrl = relayUrl
+                                }
                             ManageTab.Invites -> ManageInvitesSection { groupId = group.id }
                             ManageTab.Requests ->
                                 ManageRequestsSection {
                                     groupId = group.id
                                     isOpen = group.isOpen
+                                    this.relayUrl = relayUrl
                                 }
                             ManageTab.Hierarchy ->
                                 ManageHierarchySection {
@@ -373,6 +386,9 @@ private val ManageDangerSection =
 
 private external interface ManageGroupIdProps : Props {
     var groupId: String
+
+    /** Relay hosting the group; scopes VM reads (same-id groups on other relays stay out). */
+    var relayUrl: String?
 }
 
 private val ManageMembersSection =
@@ -380,11 +396,11 @@ private val ManageMembersSection =
         val repo = AppModule.nostrRepository
         // Same shared VM as the native manage modal: moderation actions surface relay
         // rejections/timeouts in moderationError instead of failing silently (#174).
-        val vm = useViewModel(props.groupId) { GroupViewModel(repo, props.groupId) }
+        val vm = useViewModel("${props.relayUrl}|${props.groupId}") { GroupViewModel(repo, props.groupId, props.relayUrl) }
         val moderationError = useStateFlow(vm.moderationError)
         val moderationBusy = useStateFlow(vm.moderationBusy)
-        val members = useStateFlow(repo.groupMembers)[props.groupId].orEmpty()
-        val admins = useStateFlow(repo.groupAdmins)[props.groupId].orEmpty().toSet()
+        val members = useStateFlow(vm.groupMembers)[props.groupId].orEmpty()
+        val admins = useStateFlow(vm.groupAdmins)[props.groupId].orEmpty().toSet()
         val userMetadata = useStateFlow(repo.userMetadata)
         val (tab, setTab) = useState { "All" }
         val (query, setQuery) = useState { "" }
@@ -1141,6 +1157,9 @@ private val ManageInvitesSection =
 private external interface ManageRequestsProps : Props {
     var groupId: String
     var isOpen: Boolean
+
+    /** Relay hosting the group; scopes the 9021 feed (same-id groups elsewhere stay out). */
+    var relayUrl: String?
 }
 
 private val ManageRequestsSection =
@@ -1148,8 +1167,11 @@ private val ManageRequestsSection =
         // Hooks must run unconditionally and in a stable order, so they precede the
         // open-group early return (React errors with "rendered more hooks" otherwise).
         val repo = AppModule.nostrRepository
-        val msgs = useStateFlow(repo.messages)[props.groupId].orEmpty()
-        val members = useStateFlow(repo.groupMembers)[props.groupId].orEmpty().toSet()
+        // Through the relay-scoped VM, not repo.messages: the raw bucket is keyed by bare
+        // id and would show a same-id group's join requests from another relay.
+        val vm = useViewModel("${props.relayUrl}|${props.groupId}") { GroupViewModel(repo, props.groupId, props.relayUrl) }
+        val msgs = useStateFlow(vm.messages)[props.groupId].orEmpty()
+        val members = useStateFlow(vm.groupMembers)[props.groupId].orEmpty().toSet()
         val userMetadata = useStateFlow(repo.userMetadata)
 
         val pending = pendingJoinRequests(msgs, members)

@@ -140,13 +140,19 @@ fun GroupScreen(
     val isOrphaned by vm.isOrphaned.collectAsState()
     val childrenByParent by vm.childrenByParent.collectAsState()
     // Subgroup UI is gated on the relay advertising nip29:{subgroups:true} in its NIP-11 (mirrors GroupSidebar).
+    val screenRelay = relayUrl ?: currentRelayUrl
     val supportsSubgroups =
-        (relayMetadata[currentRelayUrl] ?: relayMetadata[currentRelayUrl.normalizeRelayUrl()])?.supportsSubgroups == true
+        (relayMetadata[screenRelay] ?: relayMetadata[screenRelay.normalizeRelayUrl()])?.supportsSubgroups == true
     val currentUserPubkey = vm.getPublicKey()
 
+    // This relay's kind:39000 first: a same-id group on another relay must not paint this
+    // screen's name/about. The flat list stays the fallback while the route has no relay.
     val currentGroupMetadata =
-        remember(groups, groupId) {
-            groups.find { it.id == groupId }
+        remember(groups, allGroupsByRelay, groupId, relayUrl) {
+            relayUrl?.let { r ->
+                (allGroupsByRelay[r] ?: allGroupsByRelay.entries.firstOrNull { it.key.normalizeRelayUrl() == r.normalizeRelayUrl() }?.value)
+                    ?.firstOrNull { it.id == groupId }
+            } ?: groups.find { it.id == groupId }
         }
 
     // %group mention candidates: only joined + friends' groups (the new discovery),
@@ -486,7 +492,7 @@ fun GroupScreen(
             groupId = groupId,
             groupName = groupName,
             groupMetadata = currentGroupMetadata,
-            relayUrl = currentRelayUrl,
+            relayUrl = relayUrl ?: currentRelayUrl,
             onOpenRelay = onOpenRelay,
             isMember = isJoined,
             memberCount = groupMembers.size,
@@ -509,19 +515,19 @@ fun GroupScreen(
         ManageGroupModal(
             groupId = groupId,
             currentMetadata = currentGroupMetadata,
-            relayUrl = currentRelayUrl,
+            relayUrl = relayUrl ?: currentRelayUrl,
             onDismiss = { showEditGroupModal = false },
             onDeleted = {
                 showEditGroupModal = false
                 // Deleting a channel lands on its parent group; only a root delete goes home.
                 val parentId = currentGroupMetadata?.parent
-                if (parentId != null) onNavigateToGroup(parentId, parentGroupName, currentRelayUrl, null) else onNavigateHome()
+                if (parentId != null) onNavigateToGroup(parentId, parentGroupName, relayUrl ?: currentRelayUrl, null) else onNavigateHome()
             },
             initialTab = ManageTab.Info,
             supportsSubgroups = supportsSubgroups,
             onOpenGroup = { id ->
                 showEditGroupModal = false
-                onNavigateToGroup(id, null, currentRelayUrl, null)
+                onNavigateToGroup(id, null, relayUrl ?: currentRelayUrl, null)
             },
         )
     }
@@ -532,18 +538,18 @@ fun GroupScreen(
         ManageGroupModal(
             groupId = groupId,
             currentMetadata = currentGroupMetadata,
-            relayUrl = currentRelayUrl,
+            relayUrl = relayUrl ?: currentRelayUrl,
             onDismiss = { showMemberManagementModal = false },
             onDeleted = {
                 showMemberManagementModal = false
                 val parentId = currentGroupMetadata?.parent
-                if (parentId != null) onNavigateToGroup(parentId, parentGroupName, currentRelayUrl, null) else onNavigateHome()
+                if (parentId != null) onNavigateToGroup(parentId, parentGroupName, relayUrl ?: currentRelayUrl, null) else onNavigateHome()
             },
             initialTab = ManageTab.Members,
             supportsSubgroups = supportsSubgroups,
             onOpenGroup = { id ->
                 showMemberManagementModal = false
-                onNavigateToGroup(id, null, currentRelayUrl, null)
+                onNavigateToGroup(id, null, relayUrl ?: currentRelayUrl, null)
             },
         )
     }
@@ -561,7 +567,7 @@ fun GroupScreen(
                 createdInviteCode = null
                 if (moderationError != null) vm.clearModerationError()
             },
-            relayUrl = currentRelayUrl,
+            relayUrl = relayUrl ?: currentRelayUrl,
             groupId = groupId,
             createdCode = createdInviteCode,
             errorMessage = moderationError,
@@ -838,18 +844,18 @@ fun GroupScreen(
         ManageGroupModal(
             groupId = groupId,
             currentMetadata = currentGroupMetadata,
-            relayUrl = currentRelayUrl,
+            relayUrl = relayUrl ?: currentRelayUrl,
             onDismiss = { showJoinRequestsModal = false },
             onDeleted = {
                 showJoinRequestsModal = false
                 val parentId = currentGroupMetadata?.parent
-                if (parentId != null) onNavigateToGroup(parentId, parentGroupName, currentRelayUrl, null) else onNavigateHome()
+                if (parentId != null) onNavigateToGroup(parentId, parentGroupName, relayUrl ?: currentRelayUrl, null) else onNavigateHome()
             },
             initialTab = ManageTab.Requests,
             supportsSubgroups = supportsSubgroups,
             onOpenGroup = { id ->
                 showJoinRequestsModal = false
-                onNavigateToGroup(id, null, currentRelayUrl, null)
+                onNavigateToGroup(id, null, relayUrl ?: currentRelayUrl, null)
             },
         )
     }
@@ -896,7 +902,7 @@ fun GroupScreen(
                 GroupScreenMobile(
                     groupId = groupId,
                     groupName = groupName,
-                    relayUrl = currentRelayUrl,
+                    relayUrl = relayUrl ?: currentRelayUrl,
                     groupMetadata = currentGroupMetadata,
                     selectedChannel = selectedChannel,
                     onChannelSelect = { selectedChannel = it },
@@ -1037,7 +1043,7 @@ fun GroupScreen(
                 GroupScreenDesktop(
                     groupId = groupId,
                     groupName = groupName,
-                    relayUrl = currentRelayUrl,
+                    relayUrl = relayUrl ?: currentRelayUrl,
                     groupMetadata = currentGroupMetadata,
                     selectedChannel = selectedChannel,
                     onChannelSelect = { selectedChannel = it },

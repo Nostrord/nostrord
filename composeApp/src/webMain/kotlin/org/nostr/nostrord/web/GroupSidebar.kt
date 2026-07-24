@@ -357,6 +357,7 @@ val GroupSidebar =
                 ManageGroupModal {
                     group = rootMeta ?: placeholderMeta(rootId)
                     initialTab = manageTab
+                    relayUrl = route.relayUrl
                     onClose = { setShowManage(false) }
                 }
             }

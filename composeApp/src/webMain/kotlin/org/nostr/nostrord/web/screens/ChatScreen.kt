@@ -2473,6 +2473,7 @@ val ChatScreen =
                 "edit" ->
                     ManageGroupModal {
                         this.group = group
+                        this.relayUrl = props.relayUrl
                         onClose = { setModal(null) }
                     }
                 "share" ->
@@ -2484,6 +2485,7 @@ val ChatScreen =
                     ManageGroupModal {
                         this.group = group
                         initialTab = "members"
+                        this.relayUrl = props.relayUrl
                         onClose = { setModal(null) }
                     }
                 "addmember" ->
@@ -2506,6 +2508,7 @@ val ChatScreen =
                     ManageGroupModal {
                         this.group = group
                         initialTab = "requests"
+                        this.relayUrl = props.relayUrl
                         onClose = { setModal(null) }
                     }
             }
