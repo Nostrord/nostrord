@@ -571,7 +571,8 @@ class HomePageViewModel(
                 // Hidden groups are not discoverable (NIP-29); never recommend them.
                 .filter { !it.meta.isHidden }
                 .filter { matchesQuery(it.meta, needle) }
-                .distinctBy { it.meta.id }
+                // (relay, id): the same id on two relays is two independent groups.
+                .distinctBy { it.relayUrl to it.meta.id }
             // Off Main: the previewPeople / associateBy / distinctBy transform is O(groups x members)
             // and re-runs for each of the ~50 metadata events that arrive in waves on home open;
             // running it on viewModelScope's Main dispatcher made it compete with composition. The

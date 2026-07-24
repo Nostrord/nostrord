@@ -2438,6 +2438,7 @@ val ChatScreen =
             if (infoOpen) {
                 GroupInfoModal {
                     this.group = group
+                    this.relayUrl = props.relayUrl
                     onLeave = {
                         setInfoOpen(false)
                         // App-lifetime scope: the leave publish must survive the
@@ -2496,6 +2497,7 @@ val ChatScreen =
                 "invite" ->
                     InviteCodesModal {
                         groupId = group.id
+                        this.relayUrl = props.relayUrl
                         onClose = { setModal(null) }
                     }
                 "joincode" ->

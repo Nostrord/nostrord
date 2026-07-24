@@ -146,7 +146,11 @@ val ManageGroupModal =
                                     groupId = group.id
                                     this.relayUrl = relayUrl
                                 }
-                            ManageTab.Invites -> ManageInvitesSection { groupId = group.id }
+                            ManageTab.Invites ->
+                                ManageInvitesSection {
+                                    groupId = group.id
+                                    this.relayUrl = relayUrl
+                                }
                             ManageTab.Requests ->
                                 ManageRequestsSection {
                                     groupId = group.id
@@ -1058,8 +1062,12 @@ private val ManageHierarchySection =
 private val ManageInvitesSection =
     FC<ManageGroupIdProps> { props ->
         val repo = AppModule.nostrRepository
-        val msgs = useStateFlow(repo.messages)[props.groupId].orEmpty()
-        val relayUrl = useStateFlow(repo.currentRelayUrl)
+        // Relay-scoped VM, same rationale as ManageRequestsSection: the raw bucket can
+        // hold a same-id group's kind:9009s from another relay.
+        val vm = useViewModel("${props.relayUrl}|${props.groupId}") { GroupViewModel(repo, props.groupId, props.relayUrl) }
+        val msgs = useStateFlow(vm.messages)[props.groupId].orEmpty()
+        val focusedRelay = useStateFlow(repo.currentRelayUrl)
+        val relayUrl = props.relayUrl ?: focusedRelay
         val relayMetadata = useStateFlow(repo.relayMetadata)
         val (busy, setBusy) = useState { false }
         val (error, setError) = useState<String?> { null }

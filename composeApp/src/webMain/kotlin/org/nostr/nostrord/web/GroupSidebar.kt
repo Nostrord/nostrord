@@ -347,6 +347,7 @@ val GroupSidebar =
         if (showMembers) {
             Portal {
                 MembersModal {
+                    relayUrl = route.relayUrl
                     groupId = rootId
                     onClose = { setShowMembers(false) }
                 }

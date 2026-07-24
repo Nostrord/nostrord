@@ -37,10 +37,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.viewmodel.compose.viewModel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.components.ModalTitleBar
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
+import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.Spacing
 
@@ -53,10 +55,13 @@ import org.nostr.nostrord.ui.theme.Spacing
 fun MembersModal(
     groupId: String,
     onDismiss: () -> Unit,
+    // Relay hosting the group; scopes the roster (same-id groups elsewhere stay out).
+    relayUrl: String? = null,
 ) {
     val repo = AppModule.nostrRepository
-    val members = repo.groupMembers.collectAsState().value[groupId].orEmpty()
-    val admins = repo.groupAdmins.collectAsState().value[groupId].orEmpty().toSet()
+    val vm = viewModel(key = "members:$relayUrl|$groupId") { GroupViewModel(repo, groupId, relayUrl) }
+    val members = vm.groupMembers.collectAsState().value[groupId].orEmpty()
+    val admins = vm.groupAdmins.collectAsState().value[groupId].orEmpty().toSet()
     val userMetadata by repo.userMetadata.collectAsState()
     var selected by remember { mutableStateOf<String?>(null) }
 
