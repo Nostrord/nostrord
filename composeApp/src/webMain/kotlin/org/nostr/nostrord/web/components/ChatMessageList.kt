@@ -88,6 +88,13 @@ val ChatMessageList =
         // smooth scroll with a scrollTop delta that lands the view short of the bottom.
         val jumpingToBottom = useRef(false)
         val lastScrollTop = useRef(0.0)
+        // Reader's distance from the bottom, recorded on every scroll (and on content
+        // growth while reading history). The keyboard resize handler RESTORES this
+        // instead of adding the viewport delta to scrollTop: with overflow-anchor auto
+        // the browser may have already compensated part of the shrink, and a blind
+        // delta double-counts, landing the reader up to a keyboard height lower —
+        // inside the 80px at-bottom band, which also hid the jump pill.
+        val distFromBottom = useRef(0.0)
         val markDebounce = useRef<Int>(null)
         val prevScrollHeight = useRef(0.0)
         val openedAt = useRef(0.0)
@@ -129,6 +136,7 @@ val ChatMessageList =
                 userScrolledUp.current = false
                 jumpingToBottom.current = false
                 lastScrollTop.current = node.scrollTop.toDouble()
+                distFromBottom.current = 0.0
                 if (atBottom.current != true) {
                     atBottom.current = true
                     props.onAtBottomChange(true)
@@ -221,6 +229,11 @@ val ChatMessageList =
                         (atBottom.current == true || settling() || nearBottom)
                     ) {
                         node.scrollTop = node.scrollHeight.toDouble()
+                    } else {
+                        // Reading history: content growth (a live message at the tail)
+                        // changes the real distance without a scroll event; record it so
+                        // a keyboard toggle right after restores to the same rows.
+                        distFromBottom.current = distanceFromBottom.toDouble()
                     }
                 }
             }
@@ -261,9 +274,13 @@ val ChatMessageList =
                         ) {
                             node.scrollTop = node.scrollHeight.toDouble()
                         } else {
-                            // delta > 0 when the keyboard opened (viewport shrank): scroll down
-                            // so the bottom-most visible row stays put; < 0 on close reverses it.
-                            node.scrollTop = node.scrollTop + delta
+                            // Keep the bottom-most visible row put by RESTORING the recorded
+                            // distance from the bottom (invariant under the resize), not by
+                            // adding the delta: the browser's scroll anchoring may already
+                            // have moved scrollTop, and delta-on-top double-compensates.
+                            node.scrollTop = node.scrollHeight.toDouble() -
+                                node.clientHeight.toDouble() -
+                                (distFromBottom.current ?: 0.0)
                         }
                     }
                 }
@@ -341,6 +358,7 @@ val ChatMessageList =
                     jumpingToBottom.current = false
                 }
                 lastScrollTop.current = st
+                distFromBottom.current = sh - st - ch
                 // 80px threshold matches the prototype: the jump pill appears once the
                 // user is more than ~80px up from the bottom.
                 val isAtBottom = (sh - st - ch) < 80.0
