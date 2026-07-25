@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -39,6 +40,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -49,6 +51,7 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,6 +112,9 @@ fun MessageInput(
     groupMentions: Map<String, GroupInfo> = emptyMap(), // name -> GroupInfo
     onGroupMentionsChange: (Map<String, GroupInfo>) -> Unit = {},
     replyingToMessage: NostrGroupClient.NostrMessage? = null,
+    // Bumped on every reply tap; keys the focus effect so re-replying to the
+    // same message still refocuses and re-summons the keyboard.
+    replyNonce: Int = 0,
     replyingToMetadata: UserMetadata? = null,
     userMetadata: Map<String, UserMetadata> = emptyMap(),
     onCancelReply: () -> Unit = {},
@@ -160,9 +166,13 @@ fun MessageInput(
     // Refocus input when reply is activated. Unlike the screen-open auto-focus above,
     // this fires only on an explicit reply action (tap or swipe), so opening the
     // keyboard on Android here is desired — reply mode should land in the input.
-    LaunchedEffect(replyingToMessage) {
+    val softwareKeyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(replyingToMessage, replyNonce) {
         if (replyingToMessage != null) {
             focusRequester.requestFocus()
+            // requestFocus is a no-op when the field is already focused with the IME
+            // dismissed (Android back); show() re-summons it (web focusComposerForTyping).
+            softwareKeyboard?.show()
         }
     }
 
@@ -593,15 +603,6 @@ fun MessageInput(
         Column(
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (replyingToMessage != null) {
-                ReplyingToBar(
-                    message = replyingToMessage,
-                    metadata = replyingToMetadata,
-                    userMetadata = userMetadata,
-                    onCancelReply = onCancelReply,
-                )
-            }
-
             // On Android the suggestion list is rendered INLINE (same window) rather
             // than in a Popup. A Popup is a separate Android window: adding/removing it
             // (or the soft keyboard gaining/losing focus to it) restarts the IME
@@ -697,6 +698,16 @@ fun MessageInput(
                         .clip(NostrordShapes.inputShape)
                         .background(NostrordColors.SurfaceVariant),
                 ) {
+                    // Reply chip pinned to the top of the composer frame (web
+                    // .composer-reply): part of the pill, not a full-width bar.
+                    if (replyingToMessage != null) {
+                        ReplyingToBar(
+                            message = replyingToMessage,
+                            metadata = replyingToMetadata,
+                            userMetadata = userMetadata,
+                            onCancelReply = onCancelReply,
+                        )
+                    }
                     if (toolbarOpen) {
                         ComposerToolbar(
                             onWrap = { pre, post -> wrapSelection(pre, post) },
@@ -957,8 +968,19 @@ fun MessageInput(
                                     modifier = Modifier.padding(vertical = 4.dp),
                                 ) {
                                     if (textFieldValue.text.isEmpty()) {
+                                        // Replying flips the placeholder to the target
+                                        // author (web parity).
+                                        val replyAuthor = replyingToMessage?.let { msg ->
+                                            replyingToMetadata?.displayName
+                                                ?: replyingToMetadata?.name
+                                                ?: (msg.pubkey.take(8) + "...")
+                                        }
                                         Text(
-                                            "Message ${groupName ?: selectedChannel}",
+                                            if (replyAuthor != null) {
+                                                "Reply to $replyAuthor"
+                                            } else {
+                                                "Message ${groupName ?: selectedChannel}"
+                                            },
                                             style = NostrordTypography.InputPlaceholder,
                                             color = NostrordColors.TextMuted,
                                         )
@@ -1316,50 +1338,68 @@ private fun ReplyingToBar(
             .replace('\n', ' ')
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(NostrordColors.Surface)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
+    // Web .composer-reply: one-line chip - reply icon, "Replying to", author,
+    // inline ellipsized preview, close - over a slight darkening of the pill,
+    // separated from the rows below by a hairline.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
-                .width(3.dp)
-                .height(24.dp)
-                .background(
-                    color = NostrordColors.Primary,
-                    shape = RoundedCornerShape(1.5.dp),
-                ),
-        )
-
-        Spacer(modifier = Modifier.width(Spacing.sm))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "Replying to $authorName",
-                color = NostrordColors.Primary,
-                style = NostrordTypography.Caption,
-            )
-            Text(
-                text = processedContent.take(50) + if (processedContent.length > 50) "..." else "",
-                color = NostrordColors.TextSecondary,
-                style = NostrordTypography.Caption,
-                maxLines = 1,
-            )
-        }
-
-        IconButton(
-            onClick = onCancelReply,
-            modifier = Modifier.size(32.dp),
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.1f))
+                .padding(horizontal = Spacing.md, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                Icons.Default.Close,
-                contentDescription = "Cancel reply",
+                Icons.AutoMirrored.Filled.Reply,
+                contentDescription = null,
                 tint = NostrordColors.TextMuted,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(14.dp),
             )
+            Text(
+                text = "Replying to",
+                color = NostrordColors.TextMuted,
+                style = NostrordTypography.Caption,
+            )
+            Text(
+                text = authorName,
+                color = NostrordColors.TextSecondary,
+                style = NostrordTypography.Caption,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            if (processedContent.isNotBlank()) {
+                Text(
+                    text = processedContent,
+                    color = NostrordColors.TextMuted,
+                    style = NostrordTypography.Caption,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+            IconButton(
+                onClick = onCancelReply,
+                modifier = Modifier
+                    .size(24.dp)
+                    .pointerHoverIcon(PointerIcon.Hand),
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Cancel reply",
+                    tint = NostrordColors.TextMuted,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(NostrordColors.BackgroundFloating),
+        )
     }
 }
 
