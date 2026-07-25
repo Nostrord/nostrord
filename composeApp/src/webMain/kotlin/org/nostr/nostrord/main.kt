@@ -9,6 +9,7 @@ import org.nostr.nostrord.ui.navigation.toHash
 import org.nostr.nostrord.utils.parseGroupJoinInput
 import org.nostr.nostrord.utils.toRelayUrl
 import org.nostr.nostrord.web.WebApp
+import org.nostr.nostrord.web.bridge.VirtualKeyboard
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.runCacheStoreSelfTest
 import org.nostr.nostrord.web.theme.applyDimenTokens
@@ -135,6 +136,8 @@ fun main() {
     // theme preference so a light-theme user doesn't get a dark first paint.
     applyTheme(AppModule.appearanceSettings.theme.value)
     applyDimenTokens()
+    // Seed the keyboard-closed viewport baseline while no field can be focused yet.
+    VirtualKeyboard.start()
     redirectNaddrPath()
     parseDeepLinkFromUrl()
     val container =

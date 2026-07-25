@@ -187,6 +187,16 @@ Rules for web work:
 - **Styling is in `styles.css`** with CSS variables — no inline style objects for theming. CSS is served network-first and version-stamped (`?v=__BUILD_VERSION__`, replaced at build time) so deploys bust the cache.
 - Web platform `actual`s (crypto, NIP-07, storage, notifications) live in `jsMain`, not `webMain`.
 - No em-dash in any user-visible web string (same rule as native).
+- **Composer focus vs mobile keyboard:** Chrome re-shows the on-screen keyboard whenever a tap
+  ends with an editable element still focused. Never `preventDefault()` a control's mousedown
+  unconditionally to keep composer focus; gate it with
+  `VirtualKeyboardPolicy.keepComposerFocusOnTap(VirtualKeyboard.isOpen, touch)` (rules in
+  commonMain `ui/keyboard/VirtualKeyboardPolicy.kt` + test, tracker in
+  `web/bridge/VirtualKeyboard.kt`). index.html sets `interactive-widget=resizes-content`, so
+  keyboard state can NOT be derived from `innerHeight - visualViewport.height`; don't hand-roll
+  detection. Device matrix for any focus/keyboard-adjacent change: keyboard open + tap control
+  → stays open; keyboard closed (back button, field still focused) + tap control → stays
+  closed; tap the field itself → opens; desktop click → composer keeps focus.
 
 ## Never Do This
 
