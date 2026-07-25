@@ -908,3 +908,16 @@ class GroupViewModel(
         viewModelScope.launch { repo.fetchGroupPreview(previewGroupId, relayUrl) }
     }
 }
+
+/** How a failed reaction should be presented: the relay wants a join first, the signer could not sign the kind:7, or the relay rejected it. */
+enum class ReactionErrorKind { JoinRequired, SignerFailure, RelayRejected }
+
+/** Shared by the Compose and web reaction-error dialogs so both classify identically. */
+fun classifyReactionError(message: String): ReactionErrorKind = when {
+    message.contains("unknown member", ignoreCase = true) -> ReactionErrorKind.JoinRequired
+    // "Bunker signing failed: ..." / "Your signer refused to sign ..." - the reaction never
+    // reached the group relay, so a relay-rejection message would be false.
+    message.contains("signing failed", ignoreCase = true) ||
+        message.contains("signer", ignoreCase = true) -> ReactionErrorKind.SignerFailure
+    else -> ReactionErrorKind.RelayRejected
+}

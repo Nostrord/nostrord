@@ -679,14 +679,15 @@ fun GroupScreen(
 
     // Reaction error dialog (relay rejected kind 7)
     reactionError?.let { error ->
-        val isUnknownMember = error.contains("unknown member", ignoreCase = true)
+        val errorKind = classifyReactionError(error)
+        val isUnknownMember = errorKind == ReactionErrorKind.JoinRequired
         ConfirmDialog(
             title = if (isUnknownMember) "Join Required" else "Cannot React",
             message =
-            if (isUnknownMember) {
-                "You need to join this group before you can react to messages."
-            } else {
-                "This relay does not support reactions.\n\n$error"
+            when (errorKind) {
+                ReactionErrorKind.JoinRequired -> "You need to join this group before you can react to messages."
+                ReactionErrorKind.SignerFailure -> "Your signer could not sign the reaction. Please try again.\n\n$error"
+                ReactionErrorKind.RelayRejected -> "This relay does not support reactions.\n\n$error"
             },
             confirmLabel = if (isUnknownMember) "Join Group" else "OK",
             cancelLabel = if (isUnknownMember) "Cancel" else null,

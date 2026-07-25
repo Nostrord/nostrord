@@ -27,6 +27,8 @@ import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.screens.group.GroupMembership
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.ui.screens.group.MentionableGroup
+import org.nostr.nostrord.ui.screens.group.ReactionErrorKind
+import org.nostr.nostrord.ui.screens.group.classifyReactionError
 import org.nostr.nostrord.ui.screens.group.pluralizeSystemAction
 import org.nostr.nostrord.ui.scroll.ChatScrollPolicy
 import org.nostr.nostrord.ui.scroll.JumpPillTarget
@@ -2721,11 +2723,13 @@ private fun ChildrenBuilder.uploadErrorDialog(message: String, onDismiss: () -> 
     }
 }
 
-/** Dialog shown when the relay rejects a kind:7 reaction. Mirrors the native
- *  AlertDialog at GroupScreen.kt:620-665: a "Join Required" variant (offers Join)
- *  when the relay says we're an unknown member, otherwise "Cannot React" + OK. */
+/** Dialog shown when a kind:7 reaction fails. Mirrors the native ConfirmDialog in
+ *  GroupScreen: a "Join Required" variant (offers Join) when the relay says we're an
+ *  unknown member, a signer-failure variant when the signer could not sign, otherwise
+ *  "Cannot React" + OK. Classification is shared via classifyReactionError. */
 private fun ChildrenBuilder.reactionErrorDialog(message: String, onDismiss: () -> Unit, onJoin: () -> Unit) {
-    val isUnknownMember = message.contains("unknown member", ignoreCase = true)
+    val errorKind = classifyReactionError(message)
+    val isUnknownMember = errorKind == ReactionErrorKind.JoinRequired
     div {
         className = ClassName("modal-overlay")
         onClick = { onDismiss() }
@@ -2741,7 +2745,15 @@ private fun ChildrenBuilder.reactionErrorDialog(message: String, onDismiss: () -
                 if (isUnknownMember) {
                     +"You need to join this group before you can react to messages."
                 } else {
-                    div { +"This relay does not support reactions." }
+                    div {
+                        +(
+                            if (errorKind == ReactionErrorKind.SignerFailure) {
+                                "Your signer could not sign the reaction. Please try again."
+                            } else {
+                                "This relay does not support reactions."
+                            }
+                            )
+                    }
                     div {
                         className = ClassName("modal-reason")
                         +message
