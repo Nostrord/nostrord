@@ -22,6 +22,7 @@ import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.nostr.Nip68
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
+import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.screens.group.GroupMembership
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
@@ -38,6 +39,7 @@ import org.nostr.nostrord.utils.formatTimestamp
 import org.nostr.nostrord.utils.normalizeForSearch
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.shortNpub
+import org.nostr.nostrord.web.bridge.VirtualKeyboard
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
@@ -287,6 +289,10 @@ private external interface ChatComposerProps : Props {
     /** Id of the message being replied to (null = no reply), plus the parent's display name and a
      *  content preview for the banner (native ReplyingToBar shows both). */
     var replyingToId: String?
+
+    /** Bumped on EVERY reply tap so re-replying to the same message still refocuses
+     *  the composer (the id alone doesn't change then). */
+    var replyNonce: Int
     var replyParentName: String?
     var replyParentContent: String?
     var onCancelReply: () -> Unit
@@ -487,8 +493,21 @@ private val ChatComposer =
             )
         }
 
-        useEffect(props.replyingToId) {
-            if (props.replyingToId != null) composerInputRef.current?.focus()
+        // Focus the composer AND make sure the keyboard comes up: focus() is a
+        // no-op when the textarea is already focused with the keyboard dismissed
+        // (Android back button), so blur first and let the refocus re-summon the
+        // IME. Never blur while the keyboard is up: a refocus outside a user
+        // gesture is not guaranteed to bring it back.
+        fun focusComposerForTyping() {
+            val ta = composerInputRef.current ?: return
+            if (!VirtualKeyboard.isOpen && document.asDynamic().activeElement === ta.asDynamic()) {
+                ta.blur()
+            }
+            ta.focus()
+        }
+
+        useEffect(props.replyingToId, props.replyNonce) {
+            if (props.replyingToId != null) focusComposerForTyping()
         }
         // Insert an @mention requested from the profile modal (prototype behavior).
         val lastMentionNonce = useRef(0)
@@ -498,7 +517,7 @@ private val ChatComposer =
                 lastMentionNonce.current = req.nonce
                 setDraft { t -> (if (t.isBlank()) "" else t.trimEnd() + " ") + "@${req.name} " }
                 setMentions { it + (req.name to req.pubkey) }
-                composerInputRef.current?.focus()
+                focusComposerForTyping()
             }
         }
         useEffect(draft) {
@@ -976,9 +995,15 @@ private val ChatComposer =
                                 if (draft.isNotBlank() || sending) "composer-send active" else "composer-send",
                             )
                             disabled = (draft.isBlank() && !uploading) || sending || uploading
-                            // preventDefault on mousedown keeps focus on the textarea so tapping Send
-                            // does not blur it and dismiss the mobile keyboard (same trick as mention rows).
-                            onMouseDown = { e -> e.preventDefault() }
+                            // Keyboard-neutral tap: keep textarea focus (so the keyboard stays up)
+                            // only when it is already up; rules in VirtualKeyboardPolicy.
+                            onMouseDown = { e ->
+                                val keep = VirtualKeyboardPolicy.keepComposerFocusOnTap(
+                                    keyboardOpen = VirtualKeyboard.isOpen,
+                                    touchDevice = window.navigator.maxTouchPoints > 0,
+                                )
+                                if (keep) e.preventDefault()
+                            }
                             onClick = { send() }
                             if (sending) {
                                 span { className = ClassName("btn-spinner") }
@@ -1188,6 +1213,7 @@ val ChatScreen =
         val (infoOpen, setInfoOpen) = useState { false }
         val (profilePubkey, setProfilePubkey) = useState<String?> { null }
         val (replyingToId, setReplyingToId) = useState<String?> { null }
+        val (replyNonce, setReplyNonce) = useState { 0 }
         // Mention requested from the profile modal, consumed by the composer.
         val (mentionRequest, setMentionRequest) = useState<MentionRequest?> { null }
         // Members sidebar search query.
@@ -2223,7 +2249,10 @@ val ChatScreen =
                                                 onRetrySend = { vm.retrySend(message.id) }
                                                 onDismissFailed = { vm.dismissFailed(message.id) }
                                                 onUser = { setProfilePubkey(it) }
-                                                onReply = { setReplyingToId(message.id) }
+                                                onReply = {
+                                                    setReplyingToId(message.id)
+                                                    setReplyNonce { it + 1 }
+                                                }
                                                 onReact = { emoji ->
                                                     // Relay rejections (e.g. "kind 7 not allowed") surface via
                                                     // vm.reactionError instead of the reaction blinking away.
@@ -2258,9 +2287,15 @@ val ChatScreen =
                             key = "chat-jump-bottom"
                             className = ClassName("chat-jump-bottom")
                             title = if (jumpsToDivider) "Jump to new messages" else "Jump to latest message"
-                            // Keep composer focus: the tap's synthesized mousedown would blur
-                            // the input and close the mobile keyboard (native keeps it open).
-                            onMouseDown = { it.preventDefault() }
+                            // Keyboard-neutral tap (#199 both ways): rules and rationale in
+                            // VirtualKeyboardPolicy (commonMain, unit-tested).
+                            onMouseDown = {
+                                val keep = VirtualKeyboardPolicy.keepComposerFocusOnTap(
+                                    keyboardOpen = VirtualKeyboard.isOpen,
+                                    touchDevice = window.navigator.maxTouchPoints > 0,
+                                )
+                                if (keep) it.preventDefault()
+                            }
                             onClick = {
                                 if (jumpsToDivider) {
                                     // First tap: land on the "New messages" divider.
@@ -2310,6 +2345,7 @@ val ChatScreen =
                     this.relayUrl = relayUrl
                     this.relayPubkeyOf = { r -> relayMetadata[r]?.groupNaddrAuthor ?: relayMetadata[r.normalizeRelayUrl()]?.groupNaddrAuthor }
                     this.replyingToId = replyingToId
+                    this.replyNonce = replyNonce
                     this.replyParentName =
                         replyingToId?.let { id -> messagesById[id]?.let { p -> displayName(p.pubkey, userMetadata[p.pubkey]) } }
                     this.replyParentContent =
