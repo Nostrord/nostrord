@@ -2258,6 +2258,9 @@ val ChatScreen =
                             key = "chat-jump-bottom"
                             className = ClassName("chat-jump-bottom")
                             title = if (jumpsToDivider) "Jump to new messages" else "Jump to latest message"
+                            // Keep composer focus: the tap's synthesized mousedown would blur
+                            // the input and close the mobile keyboard (native keeps it open).
+                            onMouseDown = { it.preventDefault() }
                             onClick = {
                                 if (jumpsToDivider) {
                                     // First tap: land on the "New messages" divider.
