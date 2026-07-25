@@ -54,6 +54,9 @@ actual class Nip46Client actual constructor(
     private var relayClients: MutableList<NostrGroupClient> = mutableListOf()
     private var relayUrls: List<String> = emptyList()
     private val pendingRequests = ConcurrentMap<String, CompletableDeferred<String>>()
+
+    // Shared pacing + rate-limit backoff for every request publish (see Nip46PublishPacer).
+    private val publishPacer = Nip46PublishPacer()
     private var responseSubscriptionId: String? = null
     private var nostrConnectSecret: String? = null
 
@@ -371,12 +374,27 @@ actual class Nip46Client actual constructor(
         try {
             // Publish in parallel via sendAndAwaitOk so a relay-side rejection
             // surfaces immediately. The response sub opened on connect routes
-            // the signer's reply back into responseDeferred.
-            val publishResults = relayClients.map { client ->
-                async { client.sendAndAwaitOkOrError(eventMessage, eventId) }
-            }.awaitAll()
-            if (publishResults.none { it is PublishResult.Success }) {
-                throw Exception("Failed to publish NIP-46 request: ${publishResults.summarizeFailures()}")
+            // the signer's reply back into responseDeferred. publishPacer spaces
+            // the publishes and, when the relay rate-limits, holds a shared
+            // cooldown and retries; it is never held across the response await.
+            var attempt = 1
+            while (true) {
+                publishPacer.awaitTurn()
+                val publishResults = relayClients.map { client ->
+                    async { client.sendAndAwaitOkOrError(eventMessage, eventId) }
+                }.awaitAll()
+                if (publishResults.any { it is PublishResult.Success }) {
+                    publishPacer.noteAccepted()
+                    break
+                }
+                val rateLimited = publishResults.any {
+                    it is PublishResult.Rejected && Nip46PublishPacer.isRateLimitReason(it.reason)
+                }
+                if (rateLimited) publishPacer.noteRateLimited()
+                if (!rateLimited || attempt >= Nip46PublishPacer.MAX_PUBLISH_ATTEMPTS) {
+                    throw Exception("Failed to publish NIP-46 request: ${publishResults.summarizeFailures()}")
+                }
+                attempt++
             }
             responseDeferred.await()
         } finally {

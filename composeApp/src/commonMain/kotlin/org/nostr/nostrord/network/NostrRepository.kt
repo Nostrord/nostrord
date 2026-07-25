@@ -196,16 +196,18 @@ class NostrRepository(
     // decrypt in-process and don't care about it.
     private val dmDecryptSemaphore = Semaphore(6)
 
-    // A bunker decrypt PUBLISHES a kind:24133 request to the bunker relay. A full DM backlog (two
-    // publishes per gift wrap) bursts hundreds of events at once and trips the relay's publish rate
-    // limit ("you are noting too much"), which REJECTS them before the signer ever sees them. So the
-    // request publishes are spaced out by this gate. Crucially the gate is released BEFORE the await,
-    // not held across it: the signer answers nip44_decrypt in bursts, so we keep many requests
-    // in-flight for one burst to satisfy at once (serializing the await instead collapses throughput
-    // and every wrap hits the 90s timeout). Local / NIP-07 decrypt in-process (no publish), skip the
-    // gate, and keep the full semaphore concurrency above.
+    // A bunker decrypt PUBLISHES two kind:24133 requests to the bunker relay (wrap then seal), and
+    // every publish is paced + rate-limit-backed-off inside Nip46Client (Nip46PublishPacer). This
+    // gate only ADMITS backlog wraps slowly enough (two publishes' worth of client pacing per wrap)
+    // that the client-side publish queue stays shallow: the admission wait happens BEFORE the 90s
+    // decrypt timeout starts counting, and interactive signs (reactions, uploads, NIP-42 AUTH) find
+    // a near-empty queue. Crucially the gate is released BEFORE the await, not held across it: the
+    // signer answers nip44_decrypt in bursts, so we keep many requests in-flight for one burst to
+    // satisfy at once (serializing the await instead collapses throughput and every wrap hits the
+    // 90s timeout). Local / NIP-07 decrypt in-process (no publish), skip the gate, and keep the
+    // full semaphore concurrency above.
     private val bunkerPublishGate = Mutex()
-    private val BUNKER_PUBLISH_INTERVAL_MS = 400L
+    private val BUNKER_WRAP_ADMIT_INTERVAL_MS = 2 * org.nostr.nostrord.nostr.Nip46PublishPacer.MIN_INTERVAL_MS
 
     // Cap one wrap's decryption. The signer RPC's own timeout is 120s; an intermittently
     // unresponsive bunker would otherwise pin a decrypt permit for that long per stuck wrap. But too
@@ -4579,9 +4581,9 @@ class NostrRepository(
                         }
                         val handled =
                             if (signer is NostrSigner.Bunker) {
-                                // Space out the publish, then release the gate before awaiting so many
-                                // requests stay in-flight for the signer's next response burst.
-                                bunkerPublishGate.withLock { delay(BUNKER_PUBLISH_INTERVAL_MS) }
+                                // Admit one wrap per two client-pacer slots, releasing the gate before
+                                // the decrypt so many requests stay in-flight for the signer's burst.
+                                bunkerPublishGate.withLock { delay(BUNKER_WRAP_ADMIT_INTERVAL_MS) }
                                 decrypt()
                             } else {
                                 dmDecryptSemaphore.withPermit { decrypt() }
