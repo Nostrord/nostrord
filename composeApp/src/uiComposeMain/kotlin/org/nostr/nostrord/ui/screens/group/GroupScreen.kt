@@ -206,6 +206,9 @@ fun GroupScreen(
         mutableStateOf(decodeGroupMentions(AppModule.messageDraftStore.get(groupId).groupMentions))
     }
     var replyingToMessage by remember(groupId) { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
+    // Bumped on EVERY reply tap so re-replying to the same message still refocuses the
+    // composer and re-summons the keyboard (the message alone doesn't change then).
+    var replyNonce by remember(groupId) { mutableStateOf(0) }
     var pendingUploads by remember { mutableStateOf<List<UploadResult>>(emptyList()) }
     var showLeaveDialog by remember { mutableStateOf(false) }
     var showGroupInfoModal by remember { mutableStateOf(false) }
@@ -985,7 +988,11 @@ fun GroupScreen(
                     groupMentions = groupMentions,
                     onGroupMentionsChange = { groupMentions = it },
                     replyingToMessage = replyingToMessage,
-                    onReplyClick = { message -> replyingToMessage = message },
+                    replyNonce = replyNonce,
+                    onReplyClick = { message ->
+                        replyingToMessage = message
+                        replyNonce++
+                    },
                     onDeleteMessage = { message -> messageToDelete = message },
                     onReactionBadgeClick = { messageId, emoji ->
                         val targetMessage = messages.find { it.id == messageId }
@@ -1125,7 +1132,11 @@ fun GroupScreen(
                     groupMentions = groupMentions,
                     onGroupMentionsChange = { groupMentions = it },
                     replyingToMessage = replyingToMessage,
-                    onReplyClick = { message -> replyingToMessage = message },
+                    replyNonce = replyNonce,
+                    onReplyClick = { message ->
+                        replyingToMessage = message
+                        replyNonce++
+                    },
                     onDeleteMessage = { message -> messageToDelete = message },
                     onReactionBadgeClick = { messageId, emoji ->
                         val targetMessage = messages.find { it.id == messageId }
