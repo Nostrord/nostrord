@@ -476,7 +476,7 @@ tasks.register("fixDebPackage") {
             |Type=Application
             |Categories=Network;InstantMessaging;Chat;
             |StartupWMClass=org-nostr-nostrord-MainKt
-            |MimeType=x-scheme-handler/nostrord;
+            |MimeType=x-scheme-handler/nostrord;x-scheme-handler/nostr;
             """.trimMargin() + "\n"
         desktopFile.writeText(patchedDesktop)
 

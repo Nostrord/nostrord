@@ -25,6 +25,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- nostr:naddr1... group links (NIP-19 kind 39000 with a relay hint) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="nostr" />
+            </intent-filter>
+
             <!-- Custom scheme: nostrord://open?relay=...&group=...&code=... -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

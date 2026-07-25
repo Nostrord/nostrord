@@ -42,6 +42,7 @@ import org.nostr.nostrord.ui.window.LocalAwtWindow
 import org.nostr.nostrord.ui.window.LocalDesktopWindowControls
 import org.nostr.nostrord.utils.SingleInstance
 import org.nostr.nostrord.utils.WindowsProtocolRegistrar
+import org.nostr.nostrord.utils.parseGroupJoinInput
 import org.nostr.nostrord.utils.toRelayUrl
 import java.io.File
 import java.net.URI
@@ -51,8 +52,19 @@ import javax.imageio.ImageIO
  * Parse a nostrord:// or https:// URL into an ExternalLaunchContext.
  * Supports: nostrord://open?relay=X&group=Y&code=Z
  *           https://nostrord.com/open/?relay=X&group=Y&code=Z
+ *           nostr:naddr1... / naddr1... (NIP-19 kind 39000 with a relay hint)
  */
 private fun parseDeepLinkUrl(url: String): ExternalLaunchContext? {
+    if (url.startsWith("nostr:") || url.startsWith("naddr1")) {
+        val target = parseGroupJoinInput(url) ?: return null
+        return ExternalLaunchContext.OpenGroup(
+            groupId = target.groupId,
+            groupName = null,
+            relayUrl = target.relayUrl,
+            inviteCode = target.inviteCode,
+            messageId = null,
+        )
+    }
     val uri =
         try {
             URI(url)

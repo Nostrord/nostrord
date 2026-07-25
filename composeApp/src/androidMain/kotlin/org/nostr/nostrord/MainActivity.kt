@@ -29,6 +29,7 @@ import org.nostr.nostrord.ui.components.media.FullscreenVideoController
 import org.nostr.nostrord.ui.components.media.FullscreenVideoOverlay
 import org.nostr.nostrord.ui.components.media.LocalFullscreenVideoController
 import org.nostr.nostrord.ui.theme.NostrordColors
+import org.nostr.nostrord.utils.parseGroupJoinInput
 import org.nostr.nostrord.utils.toRelayUrl
 import androidx.compose.ui.graphics.Color as ComposeColor
 
@@ -101,6 +102,21 @@ class MainActivity : ComponentActivity() {
 
     private fun handleDeepLink(intent: Intent?) {
         val uri = intent?.data ?: return
+        // nostr:naddr1... group link (NIP-19 kind 39000 with a relay hint). Other nostr:
+        // entities (npub, nevent, ...) decode to null and are ignored.
+        if (uri.scheme == "nostr") {
+            val target = parseGroupJoinInput(uri.toString()) ?: return
+            StartupResolver.postRuntimeLaunch(
+                ExternalLaunchContext.OpenGroup(
+                    groupId = target.groupId,
+                    groupName = null,
+                    relayUrl = target.relayUrl,
+                    inviteCode = target.inviteCode,
+                    messageId = null,
+                ),
+            )
+            return
+        }
         val relay = uri.getQueryParameter("relay")?.takeIf { it.isNotBlank() } ?: return
         val relayUrl = relay.toRelayUrl().takeIf { it.isNotBlank() } ?: return
         val groupId = uri.getQueryParameter("group")?.takeIf { it.isNotBlank() }
