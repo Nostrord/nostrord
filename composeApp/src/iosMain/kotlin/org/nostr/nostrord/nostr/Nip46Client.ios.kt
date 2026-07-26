@@ -350,10 +350,15 @@ actual class Nip46Client actual constructor(
                 pubKeyHex = signerPubkey,
             )
 
-        // In-flight window: pauses new requests when the signer stops answering (its own
-        // response publishes got rate-limited, which our OK-based backoff cannot see).
-        // created_at is stamped after the slot wait so a long pause cannot expire the event.
-        publishPacer.withRequestSlot {
+        // Background lane = the DM gift-wrap decrypt backlog, the one flood source. It is
+        // paced, windowed and cooled down; interactive requests (login handshake, AUTH,
+        // user-action signs/encrypts) publish immediately so they never queue behind it.
+        val background = method == "nip44_decrypt"
+        // In-flight window: pauses new background requests when the signer stops answering
+        // (its own response publishes got rate-limited, which our OK-based backoff cannot
+        // see). created_at is stamped after the slot wait so a long pause cannot expire the
+        // event.
+        publishPacer.withRequestSlot(background) {
             val event =
                 Event(
                     pubkey = clientKeyPair.publicKeyHex,
@@ -383,7 +388,7 @@ actual class Nip46Client actual constructor(
                 // cooldown and retries; it is never held across the response await.
                 var attempt = 1
                 while (true) {
-                    publishPacer.awaitTurn()
+                    publishPacer.awaitTurn(background)
                     val publishResults = relayClients.map { client ->
                         async { client.sendAndAwaitOkOrError(eventMessage, eventId) }
                     }.awaitAll()

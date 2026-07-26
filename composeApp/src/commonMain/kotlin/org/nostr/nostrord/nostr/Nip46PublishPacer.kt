@@ -34,8 +34,22 @@ class Nip46PublishPacer(
     @kotlin.concurrent.Volatile
     private var cooldownMs = 0L
 
-    /** Wait for this publish's slot: the pacing interval plus any active rate-limit cooldown. */
-    suspend fun awaitTurn() {
+    @kotlin.concurrent.Volatile
+    private var cooldownUntilMs = 0L
+
+    /**
+     * Wait for this publish's slot. The background lane (the DM gift-wrap decrypt backlog,
+     * the one source that floods the relay) pays the pacing interval plus any active
+     * rate-limit cooldown. The interactive lane (login handshake, NIP-42 AUTH, user-action
+     * signs and encrypts - a handful per session) publishes immediately and honors only an
+     * explicit relay cooldown: queuing it behind the backlog made bunker login visibly slow.
+     */
+    suspend fun awaitTurn(background: Boolean = true) {
+        if (!background) {
+            val wait = cooldownUntilMs - now()
+            if (wait > 0) delay(wait)
+            return
+        }
         gate.withLock {
             val wait = nextSlotAtMs - now()
             if (wait > 0) delay(wait)
@@ -44,25 +58,29 @@ class Nip46PublishPacer(
     }
 
     /**
-     * Caps unanswered requests in flight (the whole publish + response await runs inside
-     * [block]). The relay rate-limits the SIGNER's response publishes too, and that side is
-     * invisible to the OK-based backoff here: it shows up only as responses not coming back.
-     * A full window pauses new publishes until answers return, draining the signer's queue
-     * instead of growing it (a grown queue also makes the signer retry stale responses that
-     * the relay then rejects as "ephemeral event expired"). Window > 1 because the signer
-     * answers in bursts with quiet gaps; serializing the awaits collapses throughput.
+     * Caps unanswered background requests in flight (the whole publish + response await runs
+     * inside [block]). The relay rate-limits the SIGNER's response publishes too, and that
+     * side is invisible to the OK-based backoff here: it shows up only as responses not
+     * coming back. A full window pauses new publishes until answers return, draining the
+     * signer's queue instead of growing it (a grown queue also makes the signer retry stale
+     * responses that the relay then rejects as "ephemeral event expired"). Window > 1 because
+     * the signer answers in bursts with quiet gaps; serializing the awaits collapses
+     * throughput. Interactive requests bypass the window for the same reason they skip
+     * pacing: they must not wait behind a backlog slot held across a signer round trip.
      */
-    suspend fun <T> withRequestSlot(block: suspend () -> T): T = requestWindow.withPermit { block() }
+    suspend fun <T> withRequestSlot(background: Boolean = true, block: suspend () -> T): T = if (background) requestWindow.withPermit { block() } else block()
 
     /** A relay accepted a publish: the rate limit (if any) has lifted. */
     fun noteAccepted() {
         cooldownMs = 0L
+        cooldownUntilMs = 0L
     }
 
     /** Every relay rejected the publish as rate-limited: push all upcoming slots out, escalating. */
     fun noteRateLimited() {
         cooldownMs = if (cooldownMs == 0L) INITIAL_COOLDOWN_MS else minOf(cooldownMs * 4, MAX_COOLDOWN_MS)
-        nextSlotAtMs = maxOf(nextSlotAtMs, now() + cooldownMs)
+        cooldownUntilMs = maxOf(cooldownUntilMs, now() + cooldownMs)
+        nextSlotAtMs = maxOf(nextSlotAtMs, cooldownUntilMs)
     }
 
     companion object {
