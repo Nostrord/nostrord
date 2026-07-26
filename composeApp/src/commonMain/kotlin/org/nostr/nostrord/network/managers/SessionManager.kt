@@ -76,6 +76,13 @@ class SessionManager(
         authManager.loginWithNip07(pubkey)
     }
 
+    fun loginWithAmber(
+        pubkey: String,
+        signerPackage: String?,
+    ) {
+        authManager.loginWithAmber(pubkey, signerPackage)
+    }
+
     /**
      * Set logged in state
      */

@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import org.nostr.nostrord.network.upload.ShareMediaQueue
+import org.nostr.nostrord.nostr.Nip55AndroidBridge
 import org.nostr.nostrord.startup.ExternalLaunchContext
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.ui.components.media.FullscreenVideoController
@@ -39,6 +40,8 @@ class MainActivity : ComponentActivity() {
         val barStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
         super.onCreate(savedInstanceState)
+        // NIP-55 (Amber) requests round-trip through this activity's result launcher.
+        Nip55AndroidBridge.register(this)
         handleDeepLink(intent)
         handleShareIntent(intent)
         setContent {

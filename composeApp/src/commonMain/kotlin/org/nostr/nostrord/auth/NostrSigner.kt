@@ -11,6 +11,7 @@ import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip07
 import org.nostr.nostrord.nostr.Nip44
 import org.nostr.nostrord.nostr.Nip46Client
+import org.nostr.nostrord.nostr.Nip55
 import kotlin.concurrent.Volatile
 
 /**
@@ -187,6 +188,55 @@ interface NostrSigner {
                 Nip07.nip44Decrypt(peerPubkeyHex, ciphertext)
             } catch (e: Exception) {
                 throw SigningException("NIP-07 NIP-44 decryption failed: ${e.message}", e)
+            }
+        }
+
+        override fun dispose() {
+            disposed = true
+        }
+    }
+
+    /**
+     * Signs via a NIP-55 external Android signer app (Amber). The key never enters this
+     * process; pre-authorized requests go through the signer's ContentResolver silently,
+     * others open its approval UI. [signerPackage] addresses the signer chosen at login.
+     */
+    class Amber(
+        override val pubkey: String,
+        private val signerPackage: String?,
+    ) : NostrSigner {
+        override val isRemote: Boolean = true
+
+        @Volatile private var disposed = false
+
+        override suspend fun signEvent(event: Event): Event {
+            if (disposed) throw SigningException("Amber signer has been disposed")
+            return try {
+                parseSignedEventJson(Nip55.signEvent(event.toJsonString(), pubkey, signerPackage))
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                if (e is SigningException) throw e
+                throw SigningException("Amber signing failed: ${e.message}", e)
+            }
+        }
+
+        override suspend fun nip44Encrypt(peerPubkeyHex: String, plaintext: String): String {
+            if (disposed) throw SigningException("Amber signer has been disposed")
+            return try {
+                Nip55.nip44Encrypt(peerPubkeyHex, plaintext, pubkey, signerPackage)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                throw SigningException("Amber NIP-44 encryption failed: ${e.message}", e)
+            }
+        }
+
+        override suspend fun nip44Decrypt(peerPubkeyHex: String, ciphertext: String): String {
+            if (disposed) throw SigningException("Amber signer has been disposed")
+            return try {
+                Nip55.nip44Decrypt(peerPubkeyHex, ciphertext, pubkey, signerPackage)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                throw SigningException("Amber NIP-44 decryption failed: ${e.message}", e)
             }
         }
 

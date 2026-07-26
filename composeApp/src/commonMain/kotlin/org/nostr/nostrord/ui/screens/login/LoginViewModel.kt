@@ -18,10 +18,12 @@ import org.nostr.nostrord.auth.pomegranate.PomegranateStatus
 import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.nostr.Crypto
 import org.nostr.nostrord.nostr.KeyPair
+import org.nostr.nostrord.nostr.NIP55_PERMISSIONS
 import org.nostr.nostrord.nostr.Nip07
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip46Client
 import org.nostr.nostrord.nostr.Nip49
+import org.nostr.nostrord.nostr.Nip55
 import org.nostr.nostrord.nostr.hexToByteArray
 import org.nostr.nostrord.nostr.ncryptsecStorageApplicable
 import org.nostr.nostrord.nostr.toHexString
@@ -244,6 +246,26 @@ class LoginViewModel(
             try {
                 val pubkey = Nip07.getPublicKey() // platform call — can throw if extension unavailable
                 onResult(repo.loginWithNip07(pubkey).toKotlinResult())
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                onResult(Result.failure(e))
+            }
+        }
+    }
+
+    /** True where "Login with Amber" (NIP-55 external signer) can run: Android with a signer installed. */
+    val isAmberLoginAvailable: Boolean get() = Nip55.isAvailable()
+
+    /**
+     * Login via the NIP-55 Android signer (Amber): opens its account picker, requests
+     * the app's permission set (so later signs run silently), and registers the account.
+     */
+    fun loginWithAmber(onResult: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val login = Nip55.getPublicKey(NIP55_PERMISSIONS)
+                onResult(repo.loginWithAmber(login.pubkeyHex, login.signerPackage).toKotlinResult())
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {

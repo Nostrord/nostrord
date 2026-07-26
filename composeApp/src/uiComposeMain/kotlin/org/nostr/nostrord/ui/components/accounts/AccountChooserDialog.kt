@@ -260,4 +260,5 @@ private fun authMethodChooserLabel(account: Account): String = when (account.aut
     org.nostr.nostrord.auth.AuthMethod.LOCAL -> "Private key"
     org.nostr.nostrord.auth.AuthMethod.BUNKER -> "Bunker (NIP-46)"
     org.nostr.nostrord.auth.AuthMethod.NIP07 -> "Browser extension (NIP-07)"
+    org.nostr.nostrord.auth.AuthMethod.AMBER -> "Signer app (NIP-55)"
 }

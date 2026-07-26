@@ -26,6 +26,7 @@ import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip07
 import org.nostr.nostrord.nostr.Nip46Client
+import org.nostr.nostrord.nostr.Nip55
 import org.nostr.nostrord.platformDisplayName
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.clearAllCredentialsForAccount
@@ -34,10 +35,12 @@ import org.nostr.nostrord.storage.clearPrivateKeyFor
 import org.nostr.nostrord.storage.getBunkerClientPrivateKeyFor
 import org.nostr.nostrord.storage.getBunkerUrlFor
 import org.nostr.nostrord.storage.getEncryptedPrivateKeyFor
+import org.nostr.nostrord.storage.getNip55SignerPackageFor
 import org.nostr.nostrord.storage.getPrivateKeyFor
 import org.nostr.nostrord.storage.saveBunkerClientPrivateKeyFor
 import org.nostr.nostrord.storage.saveBunkerUrlFor
 import org.nostr.nostrord.storage.saveEncryptedPrivateKeyFor
+import org.nostr.nostrord.storage.saveNip55SignerPackageFor
 import org.nostr.nostrord.storage.savePrivateKeyFor
 import org.nostr.nostrord.utils.epochMillis
 
@@ -83,6 +86,8 @@ class AuthManager(
     private var bunkerUserPubkey: String? = null
     private var isNip07Login = false
     private var nip07UserPubkey: String? = null
+    private var isAmberLogin = false
+    private var amberUserPubkey: String? = null
 
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
@@ -160,6 +165,7 @@ class AuthManager(
     fun getPublicKey(): String? = ActiveAccountManager.currentPubkey ?: when {
         isBunkerLogin -> bunkerUserPubkey
         isNip07Login -> nip07UserPubkey
+        isAmberLogin -> amberUserPubkey
         keyPair != null -> keyPair?.publicKeyHex
         else -> null
     }
@@ -167,7 +173,7 @@ class AuthManager(
     /**
      * Get the current user's private key (hex) - only for local login
      */
-    fun getPrivateKey(): String? = if (isBunkerLogin || isNip07Login) null else keyPair?.privateKeyHex
+    fun getPrivateKey(): String? = if (isBunkerLogin || isNip07Login || isAmberLogin) null else keyPair?.privateKeyHex
 
     fun isUsingBunker(): Boolean = isBunkerLogin
 
@@ -336,6 +342,8 @@ class AuthManager(
         nip07UserPubkey = pubkey
         isNip07Login = true
         isBunkerLogin = false
+        isAmberLogin = false
+        amberUserPubkey = null
         zeroAndClearKeyPair()
         nip46Client = null
 
@@ -345,6 +353,31 @@ class AuthManager(
         SecureStorage.clearBunkerUserPubkey()
         SecureStorage.clearBunkerClientPrivateKey()
         registerAccountAfterLogin(pubkey, AuthMethod.NIP07)
+    }
+
+    /**
+     * Login via a NIP-55 Android signer app (Amber). The public key and signer
+     * package have already been obtained through the signer's get_public_key UI.
+     */
+    fun loginWithAmber(
+        pubkey: String,
+        signerPackage: String?,
+    ) {
+        amberUserPubkey = pubkey
+        isAmberLogin = true
+        isNip07Login = false
+        nip07UserPubkey = null
+        isBunkerLogin = false
+        zeroAndClearKeyPair()
+        nip46Client = null
+
+        if (signerPackage != null) SecureStorage.saveNip55SignerPackageFor(pubkey, signerPackage)
+        SecureStorage.clearPrivateKey()
+        SecureStorage.clearBunkerUrl()
+        SecureStorage.clearBunkerUserPubkey()
+        SecureStorage.clearBunkerClientPrivateKey()
+        SecureStorage.clearNip07UserPubkey()
+        registerAccountAfterLogin(pubkey, AuthMethod.AMBER)
     }
 
     /**
@@ -364,6 +397,8 @@ class AuthManager(
         bunkerUserPubkey = null
         isNip07Login = false
         nip07UserPubkey = null
+        isAmberLogin = false
+        amberUserPubkey = null
         nip46Client = null
 
         if (ncryptsec == null) {
@@ -488,6 +523,10 @@ class AuthManager(
                     if (!Nip07.isAvailable()) return false
                     PreparedAccount.Nip07
                 }
+                AuthMethod.AMBER -> {
+                    if (!Nip55.isAvailable()) return false
+                    PreparedAccount.Amber
+                }
             }
 
         nip46Client?.disconnect()
@@ -496,6 +535,8 @@ class AuthManager(
         bunkerUserPubkey = null
         isNip07Login = false
         nip07UserPubkey = null
+        isAmberLogin = false
+        amberUserPubkey = null
         zeroAndClearKeyPair()
         stopAutoReconnect()
         _bunkerState.value = BunkerState.Inactive
@@ -511,6 +552,11 @@ class AuthManager(
             PreparedAccount.Nip07 -> {
                 isNip07Login = true
                 nip07UserPubkey = account.pubkey
+                _isLoggedIn.value = true
+            }
+            PreparedAccount.Amber -> {
+                isAmberLogin = true
+                amberUserPubkey = account.pubkey
                 _isLoggedIn.value = true
             }
         }
@@ -658,6 +704,8 @@ class AuthManager(
         ) : PreparedAccount()
 
         object Nip07 : PreparedAccount()
+
+        object Amber : PreparedAccount()
     }
 
     private suspend fun restoreBunkerSession(
@@ -946,6 +994,7 @@ class AuthManager(
         // Fallback: session not yet activated (e.g. initial login in progress).
         return when {
             isNip07Login -> signWithNip07(event)
+            isAmberLogin -> signWithAmber(event)
             isBunkerLogin -> signWithBunker(event, interactive)
             else -> signWithKeyPair(event)
         }
@@ -954,6 +1003,12 @@ class AuthManager(
     private suspend fun signWithNip07(event: Event): Event {
         val eventJson = event.toJsonString()
         val signedJson = Nip07.signEvent(eventJson)
+        return parseSignedEvent(signedJson)
+    }
+
+    private suspend fun signWithAmber(event: Event): Event {
+        val pubkey = amberUserPubkey ?: throw Exception("Amber signer not connected")
+        val signedJson = Nip55.signEvent(event.toJsonString(), pubkey, SecureStorage.getNip55SignerPackageFor(pubkey))
         return parseSignedEvent(signedJson)
     }
 
@@ -1137,6 +1192,8 @@ class AuthManager(
         bunkerUserPubkey = null
         isNip07Login = false
         nip07UserPubkey = null
+        isAmberLogin = false
+        amberUserPubkey = null
         zeroAndClearKeyPair()
 
         _isLoggedIn.value = false

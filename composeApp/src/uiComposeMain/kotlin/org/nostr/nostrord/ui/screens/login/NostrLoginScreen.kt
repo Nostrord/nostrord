@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +38,8 @@ sealed class LoginTab(
     object Extension : LoginTab("Extension", Icons.Default.Extension)
 
     object Google : LoginTab("Google", Icons.Default.AccountCircle)
+
+    object Amber : LoginTab("Amber", Icons.Default.PhoneAndroid)
 }
 
 @Composable

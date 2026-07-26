@@ -1358,6 +1358,7 @@ fun SecureStorage.clearAllCredentialsForAccount(pubkey: String) {
     clearBunkerClientPrivateKeyFor(pubkey)
     clearPomegranateCentralFor(pubkey)
     clearPomegranateDisconnectedFor(pubkey)
+    clearNip55SignerPackageFor(pubkey)
 }
 
 private fun droppedGroupsForAccountKey(pubkey: String) = "dropped_groups_${pubkeyDigest(pubkey)}"
@@ -1388,4 +1389,27 @@ fun SecureStorage.loadDroppedGroupIds(pubkey: String): Set<String> {
     } catch (_: Exception) {
         emptySet()
     }
+}
+
+// ── NIP-55 (Amber) signer package per account ───────────────────────────────
+// Package name of the Android signer app chosen at login; addresses every later
+// Intent / ContentResolver request for this account. Android-only at runtime.
+private fun nip55SignerPackageForAccountKey(pubkey: String) = "nip55_signer_package_${pubkeyDigest(pubkey)}"
+
+fun SecureStorage.saveNip55SignerPackageFor(
+    pubkey: String,
+    packageName: String,
+) {
+    if (pubkey.isBlank() || packageName.isBlank()) return
+    saveStringPref(nip55SignerPackageForAccountKey(pubkey), packageName)
+}
+
+fun SecureStorage.getNip55SignerPackageFor(pubkey: String): String? {
+    if (pubkey.isBlank()) return null
+    return getStringPref(nip55SignerPackageForAccountKey(pubkey), "").ifBlank { null }
+}
+
+fun SecureStorage.clearNip55SignerPackageFor(pubkey: String) {
+    if (pubkey.isBlank()) return
+    saveStringPref(nip55SignerPackageForAccountKey(pubkey), "")
 }

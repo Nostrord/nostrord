@@ -26,6 +26,9 @@ enum class AuthMethod {
     LOCAL,
     BUNKER,
     NIP07,
+
+    /** NIP-55 external Android signer app (Amber). */
+    AMBER,
 }
 
 /**
@@ -48,12 +51,14 @@ fun signerLabel(account: Account): String = when (account.authMethod) {
         else -> "bunker"
     }
     AuthMethod.NIP07 -> "extension"
+    AuthMethod.AMBER -> "amber"
 }
 
 fun logoutConfirmBody(method: AuthMethod): String = when (method) {
     AuthMethod.LOCAL -> "You will need your private key to log back in."
     AuthMethod.BUNKER -> "You will need your bunker URL to log back in."
     AuthMethod.NIP07 -> "You will need to reconnect your browser extension to log back in."
+    AuthMethod.AMBER -> "You will need to reconnect your signer app to log back in."
 }
 
 /**
@@ -76,6 +81,7 @@ private fun erasedSubject(method: AuthMethod, accountLabel: String): String = wh
     AuthMethod.LOCAL -> "Credentials and local data for \"$accountLabel\""
     AuthMethod.BUNKER -> "Bunker connection and local data for \"$accountLabel\""
     AuthMethod.NIP07 -> "Local data for \"$accountLabel\""
+    AuthMethod.AMBER -> "Signer connection and local data for \"$accountLabel\""
 }
 
 /** Tail sentence for the active-without-fallback case — "how do I get back in". */
@@ -83,6 +89,7 @@ private fun signInAgainHint(method: AuthMethod): String = when (method) {
     AuthMethod.LOCAL -> "You'll need to sign in again to continue."
     AuthMethod.BUNKER -> "You'll need your bunker URL to sign in again."
     AuthMethod.NIP07 -> "Your browser extension keeps your key. Reconnect it to sign in again."
+    AuthMethod.AMBER -> "Your signer app keeps your key. Reconnect it to sign in again."
 }
 
 fun removeAccountDialogBody(
