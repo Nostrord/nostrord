@@ -93,10 +93,19 @@ class Nip46PublishPacer(
         }
     }
 
-    /** A background request's response arrived: the signer keeps up, widen the window. */
-    suspend fun noteResponseArrived() {
+    /**
+     * A background request's response arrived. Fast answer: the signer keeps up, widen the
+     * window. Slow answer (over [SLOW_RESPONSE_MS]): it arrived but the signer is drowning -
+     * its relay keeps rejecting response publishes, so each response burns seconds of the
+     * signer's own retry backoff (Amber: 5 re-signed attempts, 200ms-3.2s). Shrink gently so
+     * the combined multi-device queue at the signer stays short and an interactive sign
+     * (another device's login ack) is answered promptly.
+     */
+    suspend fun noteResponseArrived(latencyMs: Long = 0L) {
         windowLock.withLock {
-            if (windowSize < MAX_WINDOW) {
+            if (latencyMs > SLOW_RESPONSE_MS) {
+                windowSize = maxOf(MIN_WINDOW, windowSize - maxOf(1, windowSize / 4))
+            } else if (windowSize < MAX_WINDOW) {
                 windowSize++
                 wakeSlotWaitersLocked()
             }
@@ -182,6 +191,9 @@ class Nip46PublishPacer(
         const val MIN_WINDOW = 2
         const val INITIAL_WINDOW = 6
         const val MAX_WINDOW = 24
+
+        /** Response latency above this means the signer's queue is backed up (see noteResponseArrived). */
+        const val SLOW_RESPONSE_MS = 10_000L
 
         /** OK-false reasons that mean "slow down" (NIP-01 rate-limited: prefix + common free text). */
         fun isRateLimitReason(reason: String): Boolean {
