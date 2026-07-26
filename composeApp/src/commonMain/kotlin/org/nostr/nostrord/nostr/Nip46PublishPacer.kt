@@ -2,7 +2,9 @@ package org.nostr.nostrord.nostr
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import org.nostr.nostrord.utils.epochMillis
 
 /**
@@ -22,6 +24,7 @@ class Nip46PublishPacer(
     private val now: () -> Long = { epochMillis() },
 ) {
     private val gate = Mutex()
+    private val requestWindow = Semaphore(MAX_IN_FLIGHT_REQUESTS)
 
     // Written under [gate] in awaitTurn and raced by the note* callbacks; both
     // races are benign (worst case one extra paced slot or cooldown step).
@@ -39,6 +42,17 @@ class Nip46PublishPacer(
             nextSlotAtMs = maxOf(now(), nextSlotAtMs) + minIntervalMs
         }
     }
+
+    /**
+     * Caps unanswered requests in flight (the whole publish + response await runs inside
+     * [block]). The relay rate-limits the SIGNER's response publishes too, and that side is
+     * invisible to the OK-based backoff here: it shows up only as responses not coming back.
+     * A full window pauses new publishes until answers return, draining the signer's queue
+     * instead of growing it (a grown queue also makes the signer retry stale responses that
+     * the relay then rejects as "ephemeral event expired"). Window > 1 because the signer
+     * answers in bursts with quiet gaps; serializing the awaits collapses throughput.
+     */
+    suspend fun <T> withRequestSlot(block: suspend () -> T): T = requestWindow.withPermit { block() }
 
     /** A relay accepted a publish: the rate limit (if any) has lifted. */
     fun noteAccepted() {
@@ -59,11 +73,16 @@ class Nip46PublishPacer(
         /** Publish attempts per request before the failure propagates to the caller. */
         const val MAX_PUBLISH_ATTEMPTS = 3
 
+        /** Unanswered requests allowed in flight per client (see [withRequestSlot]). */
+        const val MAX_IN_FLIGHT_REQUESTS = 8
+
         /** OK-false reasons that mean "slow down" (NIP-01 rate-limited: prefix + common free text). */
         fun isRateLimitReason(reason: String): Boolean {
             val r = reason.lowercase()
-            return r.contains("rate-limit") || r.contains("rate limit") ||
-                r.contains("slow down") || r.contains("noting too much")
+            return r.contains("rate-limit") ||
+                r.contains("rate limit") ||
+                r.contains("slow down") ||
+                r.contains("noting too much")
         }
     }
 }
