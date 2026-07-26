@@ -9,9 +9,10 @@ import org.nostr.nostrord.ui.Screen
  * The UI layer consumes this state - it does not compute or modify it.
  *
  * Precedence (highest to lowest):
- * 1. External launch context (deep link, notification) - overrides everything
- * 2. Persisted group state - restored if valid
- * 3. Default home screen - fallback
+ * 1. Persisted group state - restored if valid
+ * 2. Default home screen - fallback
+ * Deep links are not part of this state: they navigate via
+ * StartupResolver.runtimeLaunchEvents once the app UI mounts.
  */
 sealed class AppStartState {
     /**
@@ -36,8 +37,5 @@ sealed class AppStartState {
     data class Authenticated(
         val initialScreen: Screen,
         val restoredFromPersistence: Boolean = false,
-        val deepLinkRelayUrl: String? = null,
-        val deepLinkInviteCode: String? = null,
-        val deepLinkMessageId: String? = null,
     ) : AppStartState()
 }

@@ -42,12 +42,13 @@ object StartupResolver {
     }
 
     /**
-     * Deep link arriving while the process is already running (second desktop
-     * instance forwarding its argv, Android onNewIntent). The mounted app UI
-     * collects [runtimeLaunchEvents] and navigates immediately; the stored
-     * context covers the not-mounted case (login screen, onboarding), where
-     * [resolveInitialScreen] picks it up on the next resolve. replay = 1 so an
-     * event posted before the collector mounts is not lost.
+     * The single deep-link navigation channel: cold start (argv, intent data) and
+     * running-app arrivals (second desktop instance forwarding its argv, Android
+     * onNewIntent) both go through [postRuntimeLaunch]. The mounted AppFrame
+     * collects [runtimeLaunchEvents] and navigates; replay = 1 keeps an event
+     * posted before the collector mounts (boot, login screen, onboarding) alive
+     * until it does. The stored context only feeds [deepLinkRelayUrl] so
+     * initialize() connects the target relay before the UI asks for the group.
      */
     val runtimeLaunchEvents = MutableSharedFlow<ExternalLaunchContext>(replay = 1)
 
@@ -70,43 +71,15 @@ object StartupResolver {
             }
 
     /**
-     * Resolves the initial screen for an authenticated user.
-     *
-     * Precedence:
-     * 1. External launch context (deep link, notification)
-     * 2. Persisted last viewed group
-     * 3. Default home screen
+     * Resolves the initial screen for an authenticated user from persisted state.
+     * Deep links do NOT resolve here: they ride [runtimeLaunchEvents] and navigate
+     * once AppFrame mounts (consuming the context here would destroy the replayed
+     * event before its only collector exists).
      *
      * @param pubkey The authenticated user's public key
      */
     fun resolveInitialScreen(pubkey: String): ResolvedScreen {
-        // Priority 1: External launch context overrides everything
-        val external = externalLaunchContext
-        if (external != null) {
-            clearExternalLaunchContext() // Consume it
-            return when (external) {
-                is ExternalLaunchContext.OpenGroup ->
-                    ResolvedScreen(
-                        screen = Screen.Group(external.groupId, external.groupName),
-                        relayUrl = external.relayUrl,
-                        inviteCode = external.inviteCode,
-                        messageId = external.messageId,
-                    )
-                is ExternalLaunchContext.OpenRelay ->
-                    ResolvedScreen(
-                        screen = Screen.Home,
-                        relayUrl = external.relayUrl,
-                    )
-                is ExternalLaunchContext.OpenNotifications ->
-                    ResolvedScreen(
-                        screen = Screen.Notifications,
-                        relayUrl = external.relayUrl,
-                    )
-                is ExternalLaunchContext.OpenHome -> ResolvedScreen(screen = Screen.Home)
-            }
-        }
-
-        // Priority 2: Restore persisted group state
+        // Restore persisted group state
         try {
             val lastGroup = SecureStorage.getLastViewedGroup(pubkey)
             if (lastGroup != null) {
@@ -125,7 +98,7 @@ object StartupResolver {
             }
         }
 
-        // Priority 3: Default to home screen
+        // Default to home screen
         return ResolvedScreen(Screen.Home)
     }
 
@@ -164,22 +137,13 @@ object StartupResolver {
         return AppStartState.Authenticated(
             initialScreen = resolved.screen,
             restoredFromPersistence = resolved.restoredFromPersistence,
-            deepLinkRelayUrl = resolved.relayUrl,
-            deepLinkInviteCode = resolved.inviteCode,
-            deepLinkMessageId = resolved.messageId,
         )
     }
 }
 
-/**
- * External launch contexts that override persisted state.
- */
 data class ResolvedScreen(
     val screen: Screen,
     val restoredFromPersistence: Boolean = false,
-    val relayUrl: String? = null,
-    val inviteCode: String? = null,
-    val messageId: String? = null,
 )
 
 sealed class ExternalLaunchContext {

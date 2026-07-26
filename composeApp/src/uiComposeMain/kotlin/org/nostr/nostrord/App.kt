@@ -317,13 +317,3 @@ private fun LoadingScreen(modifier: Modifier = Modifier) {
         )
     }
 }
-
-/**
- * Main authenticated app with navigation.
- *
- * CRITICAL: The initialScreen parameter is the RESOLVED startup screen.
- * It is used as the initial value for currentScreen state.
- * This ensures no navigation corrections are needed after render.
- *
- * @param initialScreen The screen to start with - computed during bootstrap
- */
