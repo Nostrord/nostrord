@@ -226,9 +226,19 @@ class NostrRepository(
     private val DM_SEND_RETRY_BASE_MS = 4_000L
     private val DM_SEND_RETRY_MAX_MS = 30_000L
 
-    // Give up on a wrap after this many failed decrypt attempts (this session). Stops the retry
-    // loop from hammering wraps the signer never answers, or genuinely malformed ones.
-    private val DM_MAX_DECRYPT_ATTEMPTS = 4
+    // Give up on a wrap after this many failed decrypt attempts (this session). High enough that
+    // congestion cycles (the relay dropping the signer's responses -> 90s timeouts) don't park the
+    // inbox for the whole session; still stops the retry loop from hammering wraps the signer
+    // never answers, or genuinely malformed ones.
+    private val DM_MAX_DECRYPT_ATTEMPTS = 10
+
+    // Keeps the decrypt backlog off the signer for the first seconds of a session so
+    // login-critical signs (NIP-42 AUTH, handshake acks - including another device's login
+    // against the same signer) find its queue empty. Set in startDmInbox.
+    private val DM_BACKLOG_BOOT_HOLD_MS = 10_000L
+
+    @kotlin.concurrent.Volatile
+    private var dmBacklogHoldUntilMs = 0L
 
     // Durable per-wrap dedup so a re-streamed backlog skips wraps already decrypted (no repeat
     // bunker round-trip). Loaded per account in startDmInbox; grows as wraps are handled.
@@ -1767,6 +1777,8 @@ class NostrRepository(
         wireDmPersistence(myPub)
         // Resume any wraps that never reached a relay before the app last closed.
         resumeDmSendQueue(myPub)
+
+        dmBacklogHoldUntilMs = org.nostr.nostrord.utils.epochMillis() + DM_BACKLOG_BOOT_HOLD_MS
 
         // Resume per-wrap decrypt progress, and reset the this-session sync bookkeeping.
         dmProcessedWrapIds = SecureStorage.loadDmProcessedWrapIds(myPub)
@@ -4581,8 +4593,11 @@ class NostrRepository(
                         }
                         val handled =
                             if (signer is NostrSigner.Bunker) {
-                                // Admit one wrap per two client-pacer slots, releasing the gate before
-                                // the decrypt so many requests stay in-flight for the signer's burst.
+                                // Boot hold, then admit one wrap per two client-pacer slots, releasing
+                                // the gate before the decrypt so many requests stay in-flight for the
+                                // signer's burst.
+                                val bootHold = dmBacklogHoldUntilMs - org.nostr.nostrord.utils.epochMillis()
+                                if (bootHold > 0) delay(bootHold)
                                 bunkerPublishGate.withLock { delay(BUNKER_WRAP_ADMIT_INTERVAL_MS) }
                                 decrypt()
                             } else {
