@@ -1,10 +1,14 @@
 package org.nostr.nostrord.nostr
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Nip46PublishPacerTest {
     @Test
     fun spacesConsecutivePublishesByTheMinInterval() = runTest {
@@ -56,6 +60,33 @@ class Nip46PublishPacerTest {
         val before = testScheduler.currentTime
         pacer.awaitTurn()
         assertEquals(Nip46PublishPacer.MIN_INTERVAL_MS, testScheduler.currentTime - before)
+    }
+
+    @Test
+    fun requestWindowCapsUnansweredRequestsInFlight() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        val release = CompletableDeferred<Unit>()
+        var active = 0
+        var maxActive = 0
+        var completed = 0
+        repeat(20) {
+            launch {
+                pacer.withRequestSlot {
+                    active++
+                    maxActive = maxOf(maxActive, active)
+                    release.await()
+                    active--
+                    completed++
+                }
+            }
+        }
+        runCurrent()
+        // All 20 requests are unanswered: only a window's worth may be in flight.
+        assertEquals(Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS, maxActive)
+        release.complete(Unit)
+        runCurrent()
+        // Answers release the slots and the remaining requests flow through.
+        assertEquals(20, completed)
     }
 
     @Test

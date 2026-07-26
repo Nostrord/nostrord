@@ -350,55 +350,60 @@ actual class Nip46Client actual constructor(
                 pubKeyHex = signerPubkey,
             )
 
-        val event =
-            Event(
-                pubkey = clientKeyPair.publicKeyHex,
-                createdAt = epochMillis() / 1000,
-                kind = 24133,
-                tags = listOf(listOf("p", signerPubkey)),
-                content = encryptedContent,
-            )
+        // In-flight window: pauses new requests when the signer stops answering (its own
+        // response publishes got rate-limited, which our OK-based backoff cannot see).
+        // created_at is stamped after the slot wait so a long pause cannot expire the event.
+        publishPacer.withRequestSlot {
+            val event =
+                Event(
+                    pubkey = clientKeyPair.publicKeyHex,
+                    createdAt = epochMillis() / 1000,
+                    kind = 24133,
+                    tags = listOf(listOf("p", signerPubkey)),
+                    content = encryptedContent,
+                )
 
-        val signedEvent = event.sign(clientKeyPair)
-        val eventId = signedEvent.id
-            ?: throw Exception("Failed to sign NIP-46 request event")
-        val responseDeferred = CompletableDeferred<String>()
-        pendingRequests[requestId] = responseDeferred
+            val signedEvent = event.sign(clientKeyPair)
+            val eventId = signedEvent.id
+                ?: throw Exception("Failed to sign NIP-46 request event")
+            val responseDeferred = CompletableDeferred<String>()
+            pendingRequests[requestId] = responseDeferred
 
-        val eventMessage =
-            buildJsonArray {
-                add("EVENT")
-                add(signedEvent.toJsonObject())
-            }.toString()
+            val eventMessage =
+                buildJsonArray {
+                    add("EVENT")
+                    add(signedEvent.toJsonObject())
+                }.toString()
 
-        try {
-            // Publish in parallel via sendAndAwaitOk so a relay-side rejection
-            // surfaces immediately. The response sub opened on connect routes
-            // the signer's reply back into responseDeferred. publishPacer spaces
-            // the publishes and, when the relay rate-limits, holds a shared
-            // cooldown and retries; it is never held across the response await.
-            var attempt = 1
-            while (true) {
-                publishPacer.awaitTurn()
-                val publishResults = relayClients.map { client ->
-                    async { client.sendAndAwaitOkOrError(eventMessage, eventId) }
-                }.awaitAll()
-                if (publishResults.any { it is PublishResult.Success }) {
-                    publishPacer.noteAccepted()
-                    break
+            try {
+                // Publish in parallel via sendAndAwaitOk so a relay-side rejection
+                // surfaces immediately. The response sub opened on connect routes
+                // the signer's reply back into responseDeferred. publishPacer spaces
+                // the publishes and, when the relay rate-limits, holds a shared
+                // cooldown and retries; it is never held across the response await.
+                var attempt = 1
+                while (true) {
+                    publishPacer.awaitTurn()
+                    val publishResults = relayClients.map { client ->
+                        async { client.sendAndAwaitOkOrError(eventMessage, eventId) }
+                    }.awaitAll()
+                    if (publishResults.any { it is PublishResult.Success }) {
+                        publishPacer.noteAccepted()
+                        break
+                    }
+                    val rateLimited = publishResults.any {
+                        it is PublishResult.Rejected && Nip46PublishPacer.isRateLimitReason(it.reason)
+                    }
+                    if (rateLimited) publishPacer.noteRateLimited()
+                    if (!rateLimited || attempt >= Nip46PublishPacer.MAX_PUBLISH_ATTEMPTS) {
+                        throw Exception("Failed to publish NIP-46 request: ${publishResults.summarizeFailures()}")
+                    }
+                    attempt++
                 }
-                val rateLimited = publishResults.any {
-                    it is PublishResult.Rejected && Nip46PublishPacer.isRateLimitReason(it.reason)
-                }
-                if (rateLimited) publishPacer.noteRateLimited()
-                if (!rateLimited || attempt >= Nip46PublishPacer.MAX_PUBLISH_ATTEMPTS) {
-                    throw Exception("Failed to publish NIP-46 request: ${publishResults.summarizeFailures()}")
-                }
-                attempt++
+                responseDeferred.await()
+            } finally {
+                pendingRequests.remove(requestId)
             }
-            responseDeferred.await()
-        } finally {
-            pendingRequests.remove(requestId)
         }
     }
 
