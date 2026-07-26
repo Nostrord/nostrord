@@ -66,7 +66,7 @@ class Nip46PublishPacerTest {
     fun requestWindowCapsUnansweredRequestsInFlight() = runTest {
         val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
         val release = CompletableDeferred<Unit>()
-        val total = Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS + 12
+        val total = Nip46PublishPacer.INITIAL_WINDOW + 10
         var active = 0
         var maxActive = 0
         var completed = 0
@@ -82,8 +82,8 @@ class Nip46PublishPacerTest {
             }
         }
         runCurrent()
-        // All requests are unanswered: only a window's worth may be in flight.
-        assertEquals(Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS, maxActive)
+        // All requests are unanswered: only the initial window's worth may be in flight.
+        assertEquals(Nip46PublishPacer.INITIAL_WINDOW, maxActive)
         release.complete(Unit)
         runCurrent()
         // Answers release the slots and the remaining requests flow through.
@@ -91,11 +91,60 @@ class Nip46PublishPacerTest {
     }
 
     @Test
+    fun windowGrowsOnAnswersAndShrinksOnLosses() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        assertEquals(Nip46PublishPacer.INITIAL_WINDOW, pacer.windowSizeNow)
+
+        repeat(4) { pacer.noteResponseArrived() }
+        assertEquals(Nip46PublishPacer.INITIAL_WINDOW + 4, pacer.windowSizeNow)
+
+        pacer.noteResponseLost()
+        assertEquals((Nip46PublishPacer.INITIAL_WINDOW + 4) / 2, pacer.windowSizeNow)
+
+        // Repeated losses floor at MIN_WINDOW so probing continues.
+        repeat(6) { pacer.noteResponseLost() }
+        assertEquals(Nip46PublishPacer.MIN_WINDOW, pacer.windowSizeNow)
+
+        // Growth is capped at MAX_WINDOW.
+        repeat(100) { pacer.noteResponseArrived() }
+        assertEquals(Nip46PublishPacer.MAX_WINDOW, pacer.windowSizeNow)
+
+        // An explicit rate-limit rejection also halves the window.
+        pacer.noteRateLimited()
+        assertEquals(Nip46PublishPacer.MAX_WINDOW / 2, pacer.windowSizeNow)
+    }
+
+    @Test
+    fun windowGrowthWakesQueuedRequests() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        val release = CompletableDeferred<Unit>()
+        var active = 0
+        repeat(Nip46PublishPacer.INITIAL_WINDOW + 2) {
+            launch {
+                pacer.withRequestSlot {
+                    active++
+                    release.await()
+                }
+            }
+        }
+        runCurrent()
+        assertEquals(Nip46PublishPacer.INITIAL_WINDOW, active)
+
+        // Widening the window admits the queued requests without any release.
+        pacer.noteResponseArrived()
+        pacer.noteResponseArrived()
+        runCurrent()
+        assertEquals(Nip46PublishPacer.INITIAL_WINDOW + 2, active)
+        release.complete(Unit)
+        runCurrent()
+    }
+
+    @Test
     fun interactiveLaneSkipsPacingAndTheWindow() = runTest {
         val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
         // Fill the background window with requests the signer never answers.
         val stuck = CompletableDeferred<Unit>()
-        repeat(Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS) {
+        repeat(Nip46PublishPacer.INITIAL_WINDOW) {
             launch { pacer.withRequestSlot { stuck.await() } }
         }
         runCurrent()

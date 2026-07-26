@@ -388,7 +388,15 @@ actual class Nip46Client actual constructor(
                     }
                     attempt++
                 }
-                responseDeferred.await()
+                try {
+                    val response = responseDeferred.await()
+                    if (background) publishPacer.noteResponseArrived()
+                    response
+                } catch (e: CancellationException) {
+                    // Died unanswered (timeout/cancel): the signer or its relay path is behind.
+                    if (background) publishPacer.noteResponseLost()
+                    throw e
+                }
             } finally {
                 pendingRequests.remove(requestId)
             }

@@ -11,6 +11,13 @@ import org.nostr.nostrord.network.summarizeFailures
 import org.nostr.nostrord.utils.epochMillis
 import kotlin.random.Random
 
+// Per-relay WebSocket connect timeout for the NIP-46 signer relays. Longer than
+// NostrGroupClient's 7s default: the QR/bunker flow runs while the account's own
+// relay sockets are (re)connecting, and a cold handshake can exceed 7s under that
+// load. A dropped signer relay here silently loses the signer's connect response
+// ("Waiting for signer..." forever) - mirrors the web's 20s timeout.
+private const val SIGNER_RELAY_CONNECT_TIMEOUT_MS = 20_000L
+
 actual class Nip46Client actual constructor(
     existingPrivateKey: String?,
 ) {
@@ -72,7 +79,7 @@ actual class Nip46Client actual constructor(
                         val cleanUrl = relayUrl.trimEnd('/')
                         val client = NostrGroupClient(cleanUrl)
                         client.connect { msg -> handleMessage(msg, client) }
-                        if (!client.waitForConnection()) {
+                        if (!client.waitForConnection(SIGNER_RELAY_CONNECT_TIMEOUT_MS)) {
                             // WS never opened (timeout) — drop it so callers don't
                             // treat a dead socket as a live relay connection.
                             client.disconnect()
@@ -110,7 +117,7 @@ actual class Nip46Client actual constructor(
                     val cleanUrl = relayUrl.trimEnd('/')
                     val client = NostrGroupClient(cleanUrl)
                     client.connect { msg -> handleMessage(msg, client) }
-                    if (!client.waitForConnection()) {
+                    if (!client.waitForConnection(SIGNER_RELAY_CONNECT_TIMEOUT_MS)) {
                         // WS never opened — drop it (mirrors connectRelaysParallel)
                         // instead of adding a dead socket and completing firstReady.
                         // Otherwise the QR displays while no listening sub is live,
@@ -382,7 +389,15 @@ actual class Nip46Client actual constructor(
                     }
                     attempt++
                 }
-                responseDeferred.await()
+                try {
+                    val response = responseDeferred.await()
+                    if (background) publishPacer.noteResponseArrived()
+                    response
+                } catch (e: CancellationException) {
+                    // Died unanswered (timeout/cancel): the signer or its relay path is behind.
+                    if (background) publishPacer.noteResponseLost()
+                    throw e
+                }
             } finally {
                 pendingRequests.remove(requestId)
             }
