@@ -24,6 +24,7 @@ import org.nostr.nostrord.web.components.followToggleButton
 import org.nostr.nostrord.web.components.groupTypeBadges
 import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.renderAboutText
+import org.nostr.nostrord.web.modals.ReportUserModal
 import org.nostr.nostrord.web.navigation.pushRoute
 import react.FC
 import react.Props
@@ -34,6 +35,7 @@ import react.dom.html.ReactHTML.img
 import react.dom.html.ReactHTML.p
 import react.dom.html.ReactHTML.span
 import react.useEffect
+import react.useState
 import web.cssom.Background
 import web.cssom.ClassName
 
@@ -65,6 +67,7 @@ val ProfilePage =
         // Collected unconditionally (hooks must not run inside the isSelf branch below, or the hook
         // count changes when navigating between your own and another user's profile).
         val activeSession = useStateFlow(ActiveAccountManager.session)
+        val (showReport, setShowReport) = useState { false }
         // Resolve @names for any npub/nprofile mentioned in the bio so mentions
         // render as display names, not raw npubs.
         useEffect(metadata?.about) {
@@ -188,7 +191,6 @@ val ProfilePage =
                                         icon(Ic.Bolt)
                                         +"Zap"
                                     }
-                                    // NIP-56 reports aren't wired yet.
                                     button {
                                         className = ClassName("btn-ghost profile-btn sm")
                                         onClick = { vm.toggleMute() }
@@ -197,8 +199,7 @@ val ProfilePage =
                                     }
                                     button {
                                         className = ClassName("btn-ghost profile-btn sm")
-                                        disabled = true
-                                        title = "Coming soon"
+                                        onClick = { setShowReport(true) }
                                         icon(Ic.Shield)
                                         +"Report"
                                     }
@@ -298,6 +299,14 @@ val ProfilePage =
                         }
                     }
                 }
+            }
+        }
+
+        if (showReport) {
+            ReportUserModal {
+                pubkey = props.pubkey
+                eventId = null
+                onClose = { setShowReport(false) }
             }
         }
     }

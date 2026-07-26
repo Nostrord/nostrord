@@ -683,6 +683,19 @@ interface NostrRepositoryApi {
     /** Remove [pubkey] from the active account's kind:10000 mute list and publish it. */
     suspend fun unmuteUser(pubkey: String): Result<Unit>
 
+    /**
+     * Publish a NIP-56 kind:1984 report flagging [pubkey], optionally pinned to their
+     * event [eventId], as [type] with an optional free-text [note]. Routed like the
+     * other non-group publishes (outbox write + bootstrap relays, never NIP-29 relays):
+     * NIP-56 reports live on the reporter's relays for clients and tools to consume.
+     */
+    suspend fun reportUser(
+        pubkey: String,
+        type: org.nostr.nostrord.nostr.Nip56.ReportType,
+        note: String = "",
+        eventId: String? = null,
+    ): Result<Unit>
+
     suspend fun updateProfileMetadata(
         displayName: String? = null,
         name: String? = null,

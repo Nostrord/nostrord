@@ -100,6 +100,9 @@ sealed class MessageContextAction {
 
     data object PinMessage : MessageContextAction()
 
+    /** NIP-56 report on this message's author, pinned to the message. */
+    data object ReportMessage : MessageContextAction()
+
     data object DeleteMessage : MessageContextAction()
 }
 
@@ -302,7 +305,7 @@ private fun ContextMenuContent(
             )
         }
 
-        // Saved-for-later and NIP-56 reports are not implemented yet.
+        // Saved-for-later is not implemented yet.
         ContextMenuItem(
             icon = Icons.Outlined.Bookmark,
             label = "Save for later",
@@ -313,8 +316,10 @@ private fun ContextMenuContent(
             ContextMenuItem(
                 icon = Icons.Outlined.Shield,
                 label = "Report",
-                enabled = false,
-                onClick = {},
+                onClick = {
+                    onAction(MessageContextAction.ReportMessage)
+                    onDismiss()
+                },
             )
         }
 

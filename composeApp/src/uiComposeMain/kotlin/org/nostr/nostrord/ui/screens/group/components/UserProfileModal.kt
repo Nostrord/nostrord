@@ -39,6 +39,7 @@ import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.ui.components.IdentifierField
 import org.nostr.nostrord.ui.components.ModalTitleBar
+import org.nostr.nostrord.ui.components.ReportUserModal
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonVariant
@@ -142,6 +143,7 @@ fun UserProfileModal(
     val dmEnabled by AppModule.dmSettings.dmEnabled.collectAsState()
     val isFollowing = pubkey in following
     var followBusy by remember(pubkey) { mutableStateOf(false) }
+    var showReport by remember(pubkey) { mutableStateOf(false) }
     LaunchedEffect(Unit) { AppModule.nostrRepository.requestContactList() }
 
     // Zaps require signing a kind:9734 request, so only offer them when an account
@@ -371,7 +373,9 @@ fun UserProfileModal(
                                         }
                                     }
                                 }
-                                ProfileActionRow(label = "Report user", icon = Icons.Default.Shield, enabled = false) {}
+                                ProfileActionRow(label = "Report user", icon = Icons.Default.Shield) {
+                                    showReport = true
+                                }
 
                                 if (iAmAdmin && (onToggleAdminRole != null || onRemoveFromGroup != null)) {
                                     HorizontalDivider(
@@ -412,5 +416,13 @@ fun UserProfileModal(
                 }
             }
         }
+    }
+
+    if (showReport) {
+        ReportUserModal(
+            pubkey = pubkey,
+            metadata = metadata,
+            onDismiss = { showReport = false },
+        )
     }
 }

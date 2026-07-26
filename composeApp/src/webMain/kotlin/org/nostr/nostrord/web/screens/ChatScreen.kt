@@ -72,6 +72,7 @@ import org.nostr.nostrord.web.modals.GroupInviteModal
 import org.nostr.nostrord.web.modals.InviteCodesModal
 import org.nostr.nostrord.web.modals.JoinWithCodeModal
 import org.nostr.nostrord.web.modals.ManageGroupModal
+import org.nostr.nostrord.web.modals.ReportUserModal
 import org.nostr.nostrord.web.modals.ShareGroupModal
 import org.nostr.nostrord.web.modals.UserProfileModal
 import org.nostr.nostrord.web.navigation.pushRoute
@@ -1212,6 +1213,7 @@ val ChatScreen =
         val (membersOpen, setMembersOpen) = useState { window.innerWidth > 1000 }
         val (infoOpen, setInfoOpen) = useState { false }
         val (profilePubkey, setProfilePubkey) = useState<String?> { null }
+        val (reportTarget, setReportTarget) = useState<ReportTargetRef?> { null }
         val (replyingToId, setReplyingToId) = useState<String?> { null }
         val (replyNonce, setReplyNonce) = useState { 0 }
         // Mention requested from the profile modal, consumed by the composer.
@@ -2259,6 +2261,7 @@ val ChatScreen =
                                                     vm.sendReaction(message.id, message.pubkey, emoji)
                                                 }
                                                 onDelete = { setMessageToDelete(message.id) }
+                                                onReport = { setReportTarget(ReportTargetRef(message.pubkey, message.id)) }
                                             }
                                         }
                                     }
@@ -2506,6 +2509,14 @@ val ChatScreen =
                         setProfilePubkey(null)
                     }
                     onClose = { setProfilePubkey(null) }
+                }
+            }
+
+            reportTarget?.let { target ->
+                ReportUserModal {
+                    pubkey = target.pubkey
+                    eventId = target.messageId
+                    onClose = { setReportTarget(null) }
                 }
             }
 
@@ -2762,6 +2773,9 @@ private fun ChildrenBuilder.reactionErrorDialog(message: String, onDismiss: () -
     }
 }
 
+/** Message the report modal is pinned to (author + event id). */
+private data class ReportTargetRef(val pubkey: String, val messageId: String)
+
 external interface MessageRowProps : Props {
     var domId: String
     var highlighted: Boolean
@@ -2787,6 +2801,9 @@ external interface MessageRowProps : Props {
 
     /** The viewer authored this message (hides Report). */
     var isMine: Boolean
+
+    /** Opens the NIP-56 report modal pinned to this message. */
+    var onReport: () -> Unit
 
     /** The viewer is a group admin (shows the moderation section). */
     var isAdmin: Boolean
@@ -3244,8 +3261,8 @@ private val MessageRow =
                         props.onReply()
                         setMenuOpen(false)
                     }
-                    // Threads / saved / reports are not implemented yet; shown disabled
-                    // so the menu shape matches the prototype.
+                    // Threads / saved are not implemented yet; shown disabled so the
+                    // menu shape matches the prototype.
                     ctxItem(Ic.Forum, "Start thread here", disabled = true) {}
                     if (props.canZap) {
                         ctxItem(Ic.Bolt, "Zap", zap = true) {
@@ -3255,7 +3272,10 @@ private val MessageRow =
                     }
                     ctxItem(Ic.Bookmark, "Save for later", disabled = true) {}
                     if (!props.isMine) {
-                        ctxItem(Ic.Shield, "Report", disabled = true) {}
+                        ctxItem(Ic.Shield, "Report") {
+                            props.onReport()
+                            setMenuOpen(false)
+                        }
                     }
                     div { className = ClassName("ctx-divider") }
                     ctxItem(Ic.ContentCopy, "Copy text") {

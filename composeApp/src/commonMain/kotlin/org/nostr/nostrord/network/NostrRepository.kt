@@ -4000,6 +4000,80 @@ class NostrRepository(
         }
     }
 
+    /**
+     * NIP-56 report (kind:1984). Settles on the FIRST relay OK (a 1984 is append-only,
+     * so one acceptance is enough — unlike the replaceable lists there is no stale-copy
+     * hazard); remaining sends finish in the background. Connects run per-relay inside
+     * the same race, so one dead outbox relay can't hold the modal's spinner.
+     */
+    override suspend fun reportUser(
+        pubkey: String,
+        type: org.nostr.nostrord.nostr.Nip56.ReportType,
+        note: String,
+        eventId: String?,
+    ): Result<Unit> {
+        val myPubkey = sessionManager.getPublicKey()
+            ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        return try {
+            val event = org.nostr.nostrord.nostr.Event(
+                pubkey = myPubkey,
+                createdAt = org.nostr.nostrord.utils.epochSeconds(),
+                kind = org.nostr.nostrord.nostr.Nip56.KIND_REPORT,
+                tags = org.nostr.nostrord.nostr.Nip56.reportTags(pubkey, eventId, type),
+                content = note.trim(),
+            )
+            val signedEvent = sessionManager.signEvent(event)
+            val signedId = signedEvent.id
+                ?: return Result.Error(AppError.Unknown("Event has no id after signing", null))
+            val message = buildJsonArray {
+                add("EVENT")
+                add(signedEvent.toJsonObject())
+            }.toString()
+
+            // Same routing as kind:3 / kind:10000: general-purpose relays only. Normalized
+            // BEFORE distinct: the kind:10002 write list and the hardcoded bootstrap list spell
+            // the same relay differently (trailing slash, case), and raw-string dedup let both
+            // through to one pooled client = the same EVENT frame twice on one socket.
+            val nip29Relays = (
+                outboxManager.kind10009Relays.value +
+                    connectionManager.currentRelayUrl.value
+                ).map { it.normalizeRelayUrl() }.toSet()
+            val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays)
+                .map { it.normalizeRelayUrl() }
+                .distinct()
+                .filter { it !in nip29Relays }
+            if (targets.isEmpty()) {
+                return Result.Error(AppError.Network.Disconnected(connectionManager.currentRelayUrl.value))
+            }
+            // Buffered to relay count so background stragglers never block on send
+            // after this function has already returned on the first OK.
+            val verdicts = kotlinx.coroutines.channels.Channel<PublishResult?>(capacity = targets.size)
+            targets.forEach { relayUrl ->
+                scope.launch {
+                    val client = connectionManager.getClientForRelay(relayUrl)?.takeIf { it.isConnected() }
+                        ?: connectionManager.getOrConnectRelay(relayUrl, metadataMessageHandler)?.takeIf { it.isConnected() }
+                    verdicts.send(client?.sendAndAwaitOkOrError(message, signedId))
+                }
+            }
+            val failures = mutableListOf<PublishResult>()
+            repeat(targets.size) {
+                when (val verdict = verdicts.receive()) {
+                    null -> {} // relay unreachable
+                    is PublishResult.Success -> return Result.Success(Unit)
+                    else -> failures += verdict
+                }
+            }
+            if (failures.isEmpty()) {
+                return Result.Error(AppError.Network.Disconnected(connectionManager.currentRelayUrl.value))
+            }
+            Result.Error(AppError.Network.PublishRejected(failures.summarizeFailures()))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.Error(AppError.Unknown(e.message ?: "Failed to send report", e))
+        }
+    }
+
     private suspend fun refreshVisibleUserMetadata() {
         // Wait for resubscribeAllGroups REQs to deliver events before collecting pubkeys.
         // Without this delay, messages/members may still be empty from the previous session.

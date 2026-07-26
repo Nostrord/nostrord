@@ -75,6 +75,7 @@ val UserProfileModal =
         val isMuted = pubkey in mutedPubkeys
         val dmEnabled = useStateFlow(AppModule.dmSettings.dmEnabled)
         val (followBusy, setFollowBusy) = useState { false }
+        val (showReport, setShowReport) = useState { false }
 
         useEffect(pubkey) {
             launchApp { AppModule.nostrRepository.requestUserMetadata(setOf(pubkey)) }
@@ -220,7 +221,9 @@ val UserProfileModal =
                                     }
                                 }
                             }
-                            actionRow(Ic.Shield, "Report user", disabled = true) {}
+                            actionRow(Ic.Shield, "Report user") {
+                                setShowReport(true)
+                            }
 
                             val groupId = props.groupId
                             if (props.iAmAdmin && groupId != null) {
@@ -242,6 +245,14 @@ val UserProfileModal =
                         }
                     }
                 }
+            }
+        }
+
+        if (showReport) {
+            ReportUserModal {
+                this.pubkey = pubkey
+                eventId = null
+                onClose = { setShowReport(false) }
             }
         }
     }
