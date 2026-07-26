@@ -342,6 +342,7 @@ actual class Nip46Client actual constructor(
         // see). created_at is stamped after the slot wait so a long pause cannot expire the
         // event.
         publishPacer.withRequestSlot(background) {
+            val requestStartMs = epochMillis()
             val event =
                 Event(
                     pubkey = clientKeyPair.publicKeyHex,
@@ -390,7 +391,7 @@ actual class Nip46Client actual constructor(
                 }
                 try {
                     val response = responseDeferred.await()
-                    if (background) publishPacer.noteResponseArrived()
+                    if (background) publishPacer.noteResponseArrived(latencyMs = epochMillis() - requestStartMs)
                     response
                 } catch (e: CancellationException) {
                     // Died unanswered (timeout/cancel): the signer or its relay path is behind.

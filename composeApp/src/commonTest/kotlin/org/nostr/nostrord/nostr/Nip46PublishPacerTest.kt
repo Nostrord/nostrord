@@ -115,6 +115,22 @@ class Nip46PublishPacerTest {
     }
 
     @Test
+    fun slowResponsesShrinkTheWindow() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        // Arrived but slow: the signer's queue is backed up, shrink gently.
+        pacer.noteResponseArrived(latencyMs = Nip46PublishPacer.SLOW_RESPONSE_MS + 1)
+        assertTrue(pacer.windowSizeNow < Nip46PublishPacer.INITIAL_WINDOW)
+
+        // Repeated slow answers floor at MIN_WINDOW.
+        repeat(10) { pacer.noteResponseArrived(latencyMs = Nip46PublishPacer.SLOW_RESPONSE_MS + 1) }
+        assertEquals(Nip46PublishPacer.MIN_WINDOW, pacer.windowSizeNow)
+
+        // Fast answers grow it back.
+        pacer.noteResponseArrived()
+        assertEquals(Nip46PublishPacer.MIN_WINDOW + 1, pacer.windowSizeNow)
+    }
+
+    @Test
     fun windowGrowthWakesQueuedRequests() = runTest {
         val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
         val release = CompletableDeferred<Unit>()
