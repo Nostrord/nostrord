@@ -201,13 +201,14 @@ fun AppFrame() {
     // Home -> group flash; it is a single per-account pref read. seedDeepLink keeps Home under
     // a group so back returns Home instead of leaving the app, and no-ops for plain Home.
     fun restoredStartRoute(): HashRoute? = restoredRoute(AppModule.nostrRepository.getPublicKey()?.let { SecureStorage.getLastRoute(it) })
-    val history = remember { NavigationHistory().apply { seedDeepLink(restoredStartRoute()) } }
+    val restoredSeed = remember { restoredStartRoute() }
+    val history = remember { NavigationHistory().apply { seedDeepLink(restoredSeed) } }
 
-    // Deep link arriving while the app is already open (second desktop instance
-    // forwarding nostrord://, Android onNewIntent). Cold-start deep links go through
-    // StartupResolver.resolveInitialScreen instead; this covers the running app.
-    // GroupRoute carries invite/message, so the existing groupRoute effect below does
-    // the relay switch and the group page does the auto-join, same as any navigation.
+    // Deep links, cold start and running app alike (argv / Android intent post to
+    // runtimeLaunchEvents; replay = 1 holds an event posted before this collector
+    // mounts). GroupRoute carries invite/message, so the existing groupRoute effect
+    // below does the relay switch and the group page does the auto-join, same as any
+    // navigation.
     LaunchedEffect(Unit) {
         StartupResolver.runtimeLaunchEvents.collect { ctx ->
             StartupResolver.clearExternalLaunchContext()
@@ -292,12 +293,14 @@ fun AppFrame() {
 
     // If the restored group was left on another device/session it is no longer in the rail;
     // once the group list loads, drop a now-missing restored route back to Home. Scoped to
-    // the first non-empty groups emission so it never fights normal in-session navigation.
+    // the first non-empty groups emission so it never fights normal in-session navigation,
+    // and only to the persisted seed: a deep-linked route may point at a not-yet-joined
+    // group (auto-join flow) and must survive this check.
     var validatedRestore by remember { mutableStateOf(false) }
     LaunchedEffect(groups) {
         if (!validatedRestore && groups.isNotEmpty()) {
             val r = history.current as? GroupRoute
-            if (r != null && groups.none { it.relayUrl == r.relayUrl && it.meta.id == r.groupId }) {
+            if (r != null && r == restoredSeed && groups.none { it.relayUrl == r.relayUrl && it.meta.id == r.groupId }) {
                 history.reset()
             }
             validatedRestore = true

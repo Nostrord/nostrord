@@ -135,8 +135,8 @@ class MainActivity : ComponentActivity() {
             } else {
                 ExternalLaunchContext.OpenRelay(relayUrl)
             }
-        // Also emits the runtime event so an already-running app (onNewIntent)
-        // navigates immediately; at cold start the boot resolve consumes it first.
+        // Runtime event with replay: an already-running app (onNewIntent) navigates
+        // immediately; at cold start AppFrame's collector picks it up on mount.
         StartupResolver.postRuntimeLaunch(context)
     }
 }

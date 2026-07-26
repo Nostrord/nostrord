@@ -141,9 +141,11 @@ fun main(args: Array<String> = emptyArray()) {
         }
     if (!isPrimary) return
 
-    // Parse deep link from CLI args (e.g., OS protocol handler passes URL as first arg)
+    // Parse deep link from CLI args (e.g., OS protocol handler passes URL as first arg).
+    // postRuntimeLaunch: the replayed event navigates once AppFrame mounts, and the stored
+    // context lets initialize() connect the target relay first.
     args.firstOrNull()?.let { url ->
-        parseDeepLinkUrl(url)?.let { StartupResolver.setExternalLaunchContext(it) }
+        parseDeepLinkUrl(url)?.let { StartupResolver.postRuntimeLaunch(it) }
     }
     // Configure Coil before the window opens so the first frame is already using the
     // persistent cache. Without this, Coil defaults to a temp-dir disk cache (wiped on
