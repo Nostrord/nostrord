@@ -513,4 +513,5 @@ private fun authMethodLabel(method: AuthMethod): String = when (method) {
     AuthMethod.LOCAL -> "Private key"
     AuthMethod.BUNKER -> "Bunker (NIP-46)"
     AuthMethod.NIP07 -> "Browser extension (NIP-07)"
+    AuthMethod.AMBER -> "Signer app (NIP-55)"
 }

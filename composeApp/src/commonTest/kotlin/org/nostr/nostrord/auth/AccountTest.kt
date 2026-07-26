@@ -41,6 +41,7 @@ class AccountTest {
                 Account("a".repeat(64), "Local 1", AuthMethod.LOCAL, 1L),
                 Account("b".repeat(64), "Bunker 1", AuthMethod.BUNKER, 2L),
                 Account("c".repeat(64), "Extension", AuthMethod.NIP07, 3L),
+                Account("d".repeat(64), "Amber", AuthMethod.AMBER, 4L),
             )
         val encoded = json.encodeToString(list)
         val decoded = json.decodeFromString<List<Account>>(encoded)
@@ -50,7 +51,17 @@ class AccountTest {
     @Test
     fun `auth method values cover all login paths`() {
         // Guards against accidentally dropping a variant.
-        // LOCAL, BUNKER, NIP07
-        assertEquals(3, AuthMethod.entries.size)
+        // LOCAL, BUNKER, NIP07, AMBER
+        assertEquals(4, AuthMethod.entries.size)
+    }
+
+    @Test
+    fun `amber accounts get per-method copy`() {
+        val account = Account("e".repeat(64), "Amber 1", AuthMethod.AMBER, 5L)
+        assertEquals("amber", signerLabel(account))
+        assertEquals(
+            "You will need to reconnect your signer app to log back in.",
+            logoutConfirmBody(AuthMethod.AMBER),
+        )
     }
 }

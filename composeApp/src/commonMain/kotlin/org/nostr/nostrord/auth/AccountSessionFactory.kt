@@ -6,6 +6,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import org.nostr.nostrord.network.AuthManager
 import org.nostr.nostrord.nostr.Nip07
+import org.nostr.nostrord.nostr.Nip55
+import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.storage.getNip55SignerPackageFor
 
 /**
  * Builds [AccountSession] instances from the credentials that
@@ -64,5 +67,11 @@ class AccountSessionFactory(
                 NostrSigner.Bunker(nip46Client = it, pubkey = account.pubkey)
             }
         AuthMethod.NIP07 -> if (Nip07.isAvailable()) NostrSigner.Nip07Extension(account.pubkey) else null
+        AuthMethod.AMBER ->
+            if (Nip55.isAvailable()) {
+                NostrSigner.Amber(account.pubkey, SecureStorage.getNip55SignerPackageFor(account.pubkey))
+            } else {
+                null
+            }
     }
 }

@@ -12,8 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.nostr.nostrord.auth.pomegranate.PomegranateService
 import org.nostr.nostrord.nostr.Nip07
+import org.nostr.nostrord.nostr.Nip55
 import org.nostr.nostrord.ui.components.forms.AppSegmentedTabs
 import org.nostr.nostrord.ui.components.forms.SegmentedTab
+import org.nostr.nostrord.ui.screens.login.components.AmberLoginTab
 import org.nostr.nostrord.ui.screens.login.components.BunkerLoginTab
 import org.nostr.nostrord.ui.screens.login.components.ExtensionLoginTab
 import org.nostr.nostrord.ui.screens.login.components.GoogleLoginTab
@@ -38,6 +40,7 @@ fun LoginMethods(
                 add(LoginTab.PrivateKey)
                 add(LoginTab.Bunker)
                 if (Nip07.isAvailable()) add(LoginTab.Extension)
+                if (Nip55.isAvailable()) add(LoginTab.Amber)
                 if (googleAvailable) add(LoginTab.Google)
             }
         }
@@ -56,6 +59,7 @@ fun LoginMethods(
             LoginTab.Bunker -> BunkerLoginTab(onLoginSuccess)
             LoginTab.Extension -> ExtensionLoginTab(onLoginSuccess)
             LoginTab.Google -> GoogleLoginTab(onLoginSuccess)
+            LoginTab.Amber -> AmberLoginTab(onLoginSuccess)
         }
     }
 }

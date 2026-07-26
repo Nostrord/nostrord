@@ -1356,6 +1356,21 @@ class NostrRepository(
         Result.Error(AppError.Unknown(e.message ?: "Login failed", e))
     }
 
+    override suspend fun loginWithAmber(
+        pubkey: String,
+        signerPackage: String?,
+    ): Result<Unit> = try {
+        val previousPubkey = sessionManager.getPublicKey()
+        if (connectionManager.currentRelayUrl.value.isBlank()) {
+            _isDiscoveringRelays.value = true
+        }
+        sessionManager.loginWithAmber(pubkey, signerPackage)
+        finishLoginInit(previousPubkey, pubkey)
+        Result.Success(Unit)
+    } catch (e: Exception) {
+        Result.Error(AppError.Unknown(e.message ?: "Login failed", e))
+    }
+
     /**
      * Shared post-login setup. Handles two cases:
      *

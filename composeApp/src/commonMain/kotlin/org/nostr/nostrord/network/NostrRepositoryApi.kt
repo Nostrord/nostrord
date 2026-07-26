@@ -274,6 +274,12 @@ interface NostrRepositoryApi {
 
     suspend fun loginWithNip07(pubkey: String): Result<Unit>
 
+    /** Login via a NIP-55 Android signer app (Amber); pubkey + package come from its get_public_key UI. */
+    suspend fun loginWithAmber(
+        pubkey: String,
+        signerPackage: String?,
+    ): Result<Unit>
+
     suspend fun loginWithBunker(bunkerUrl: String): Result<String>
 
     /** Default relays seeding the nostrconnect:// QR login (user-overridable). */

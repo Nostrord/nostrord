@@ -246,6 +246,7 @@ SecureStorage.saveRelayList(...)      // use saveRelayListFor(pubkey, ...) inste
 | secp256k1 / Schnorr signing | yes | yes | yes | yes |
 | NIP-46 bunker client | yes | yes | yes | yes |
 | NIP-07 browser extension (`Nip07.isAvailable()` true) | no | no | yes | no |
+| NIP-55 signer app (`Nip55.isAvailable()` true) | yes | no | no | no |
 | EncryptedSharedPreferences | yes | no | no | no |
 | `java.security.*` | yes | yes | no | no |
 | Keychain (iOS secure storage) | no | no | no | yes |
@@ -262,6 +263,7 @@ All NIP `expect`s have `actual` declarations on every platform (some are stubs t
 | NIP-04 / NIP-44 encryption | `nostr/Nip04.kt`, `nostr/Nip44.kt` |
 | NIP-46 bunker client | `nostr/Nip46Client.kt` |
 | NIP-07 browser extension | `nostr/Nip07.kt` (stub on Android/JVM/iOS, real on JS) |
+| NIP-55 Android signer | `nostr/Nip55.kt` (real on Android, stub on JVM/JS/iOS) |
 | Secure storage | `storage/SecureStorage.kt` |
 
 ## NIP support
@@ -278,6 +280,7 @@ All NIP `expect`s have `actual` declarations on every platform (some are stubs t
 | 42 | connection layer | AUTH for restricted groups |
 | 44 | `nostr/Nip44.kt` | Modern encryption |
 | 46 | `nostr/Nip46Client.kt` | Remote signer / bunker |
+| 55 | `nostr/Nip55.kt` | Android external signer app (Amber); real actual on Android only |
 | 65 | `network/outbox/Nip65Relay.kt` | Outbox relay metadata |
 
 Detailed NIP-29 expertise lives in `.claude/skills/nip29-expert/SKILL.md`.

@@ -61,6 +61,10 @@ class FakeNostrRepository : NostrRepositoryApi {
         _isLoggedIn.value = true
         Result.Success(Unit)
     }
+    var loginWithAmberAction: suspend (String, String?) -> Result<Unit> = { _, _ ->
+        _isLoggedIn.value = true
+        Result.Success(Unit)
+    }
     var loginWithBunkerAction: suspend (String) -> Result<String> = { Result.Success("pubkey") }
     var leaveGroupAction: suspend (String, String?) -> Result<Unit> = { _, _ -> Result.Success(Unit) }
     var sendMessageAction: suspend (String, String, String?, Map<String, String>, String?) -> Result<Unit> =
@@ -187,6 +191,14 @@ class FakeNostrRepository : NostrRepositoryApi {
     override suspend fun loginWithNip07(pubkey: String): Result<Unit> {
         calls += "loginWithNip07"
         return loginWithNip07Action(pubkey)
+    }
+
+    override suspend fun loginWithAmber(
+        pubkey: String,
+        signerPackage: String?,
+    ): Result<Unit> {
+        calls += "loginWithAmber"
+        return loginWithAmberAction(pubkey, signerPackage)
     }
 
     override suspend fun loginWithBunker(bunkerUrl: String): Result<String> {

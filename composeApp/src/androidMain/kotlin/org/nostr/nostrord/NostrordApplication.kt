@@ -12,6 +12,7 @@ import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
 import okio.Path.Companion.toOkioPath
 import org.nostr.nostrord.network.managers.AndroidNetworkMonitorInit
+import org.nostr.nostrord.nostr.Nip55AndroidBridge
 import org.nostr.nostrord.notifications.AndroidNotificationSoundInit
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.cache.CacheStoreAndroid
@@ -40,6 +41,7 @@ class NostrordApplication :
     override fun onCreate() {
         super.onCreate()
         SecureStorage.initialize(applicationContext)
+        Nip55AndroidBridge.initialize(applicationContext)
         CacheStoreAndroid.initialize(applicationContext)
         AndroidNetworkMonitorInit.initialize(applicationContext)
         AndroidNotificationSoundInit.initialize(applicationContext)
