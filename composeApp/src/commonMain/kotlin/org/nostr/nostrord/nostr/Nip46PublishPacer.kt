@@ -91,8 +91,15 @@ class Nip46PublishPacer(
         /** Publish attempts per request before the failure propagates to the caller. */
         const val MAX_PUBLISH_ATTEMPTS = 3
 
-        /** Unanswered requests allowed in flight per client (see [withRequestSlot]). */
-        const val MAX_IN_FLIGHT_REQUESTS = 8
+        /**
+         * Unanswered background requests allowed in flight per client (see [withRequestSlot]).
+         * Sized for the signer's burst cycle: it answers batches with quiet gaps, and each
+         * cycle can satisfy at most this many requests, so a small window collapses backlog
+         * throughput (decrypts pile into the 90s timeout and burn their retry attempts).
+         * The publish RATE is already bounded by [MIN_INTERVAL_MS]; this bound only has to
+         * stop the feed when responses stop coming back entirely.
+         */
+        const val MAX_IN_FLIGHT_REQUESTS = 24
 
         /** OK-false reasons that mean "slow down" (NIP-01 rate-limited: prefix + common free text). */
         fun isRateLimitReason(reason: String): Boolean {

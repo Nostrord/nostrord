@@ -66,10 +66,11 @@ class Nip46PublishPacerTest {
     fun requestWindowCapsUnansweredRequestsInFlight() = runTest {
         val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
         val release = CompletableDeferred<Unit>()
+        val total = Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS + 12
         var active = 0
         var maxActive = 0
         var completed = 0
-        repeat(20) {
+        repeat(total) {
             launch {
                 pacer.withRequestSlot {
                     active++
@@ -81,12 +82,12 @@ class Nip46PublishPacerTest {
             }
         }
         runCurrent()
-        // All 20 requests are unanswered: only a window's worth may be in flight.
+        // All requests are unanswered: only a window's worth may be in flight.
         assertEquals(Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS, maxActive)
         release.complete(Unit)
         runCurrent()
         // Answers release the slots and the remaining requests flow through.
-        assertEquals(20, completed)
+        assertEquals(total, completed)
     }
 
     @Test
