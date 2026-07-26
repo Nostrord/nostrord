@@ -12,33 +12,32 @@ import org.nostr.nostrord.utils.epochMillis
 /**
  * Flow control for kind:24133 publishes to the bunker relay.
  *
- * The one traffic source that floods the relay is the DM gift-wrap decrypt
- * backlog (two nip44_decrypt per wrap, per device). That background lane is
- * paced ([awaitTurn]), bounded by an adaptive in-flight window
- * ([withRequestSlot]) and backed off on explicit rate-limit rejections.
- * Interactive requests (login handshake, NIP-42 AUTH, user-action
- * signs/encrypts - a handful per session) publish immediately and honor only
- * an explicit relay cooldown: queuing them behind the backlog made bunker
- * login visibly slow.
+ * Every request costs the relay twice: our publish and the signer's response
+ * publish, and the relay rate-limits both sides. The signer's side is
+ * invisible to OK-based backoff here - it shows up only as responses arriving
+ * slow (current Amber retries each response up to 5x re-signed) or not at all.
  *
- * The relay also rate-limits the SIGNER's response publishes, which is
- * invisible to OK-based backoff here - it shows up only as responses not
- * coming back. The adaptive window (TCP-style AIMD: grow by one per answered
- * request, halve on a lost one) converges each device onto the response rate
- * the relay actually delivers, so N devices sharing one signer shrink
- * automatically instead of stacking requests into its queue - which is also
- * what keeps the signer's own queue short enough that another device's login
- * gets answered promptly, and stops the signer retrying stale responses that
- * the relay then rejects as "ephemeral event expired".
+ * Background lane (the DM gift-wrap decrypt backlog, the one bulk source):
+ * paced by an adaptive interval, bounded by an adaptive in-flight window
+ * (TCP-style AIMD), cooled down on explicit rate-limit rejections. Interactive
+ * lane (login handshake, NIP-42 AUTH, user-action signs/encrypts): never
+ * queues behind the backlog, but pays a token bucket - a fresh session AUTHs
+ * every relay in the pool at once, and that burst alone (x2 with a second
+ * device logging in) can blow the relay's budget with no DM involved. The
+ * bucket lets a login's handful through instantly and spaces the rest.
  */
 class Nip46PublishPacer(
-    private val minIntervalMs: Long = MIN_INTERVAL_MS,
+    private val baseIntervalMs: Long = MIN_INTERVAL_MS,
     private val now: () -> Long = { epochMillis() },
 ) {
     private val gate = Mutex()
+    private val interactiveGate = Mutex()
 
     // Raced by the note* callbacks; the races are benign (worst case one extra
     // paced slot or cooldown step).
+    @kotlin.concurrent.Volatile
+    private var currentIntervalMs = baseIntervalMs
+
     @kotlin.concurrent.Volatile
     private var nextSlotAtMs = 0L
 
@@ -47,6 +46,10 @@ class Nip46PublishPacer(
 
     @kotlin.concurrent.Volatile
     private var cooldownUntilMs = 0L
+
+    // Interactive token bucket, strictly under [interactiveGate].
+    private var interactiveTokens = INTERACTIVE_BURST.toDouble()
+    private var interactiveRefillAtMs = 0L
 
     // Adaptive window state. [inFlight] and the waiter queue are strictly under
     // [windowLock]; [windowSize] is volatile so shrink paths can write it from
@@ -59,29 +62,54 @@ class Nip46PublishPacer(
     private var windowSize = INITIAL_WINDOW
 
     internal val windowSizeNow: Int get() = windowSize
+    internal val intervalNowMs: Long get() = currentIntervalMs
 
     /**
-     * Wait for this publish's slot. Background requests pay the pacing interval
-     * plus any active rate-limit cooldown; interactive ones only the cooldown.
+     * Wait for this publish's slot. Background requests pay the adaptive pacing
+     * interval plus any active rate-limit cooldown; interactive ones pay the
+     * cooldown and the token bucket (burst of [INTERACTIVE_BURST], then one
+     * token per interval).
      */
     suspend fun awaitTurn(background: Boolean = true) {
+        val cooldownWait = cooldownUntilMs - now()
+        if (cooldownWait > 0) delay(cooldownWait)
         if (!background) {
-            val wait = cooldownUntilMs - now()
-            if (wait > 0) delay(wait)
+            interactiveGate.withLock {
+                refillInteractiveLocked()
+                if (interactiveTokens < 1.0) {
+                    delay(((1.0 - interactiveTokens) * currentIntervalMs).toLong())
+                    refillInteractiveLocked()
+                }
+                interactiveTokens = maxOf(0.0, interactiveTokens - 1.0)
+            }
             return
         }
         gate.withLock {
             val wait = nextSlotAtMs - now()
             if (wait > 0) delay(wait)
-            nextSlotAtMs = maxOf(now(), nextSlotAtMs) + minIntervalMs
+            nextSlotAtMs = maxOf(now(), nextSlotAtMs) + currentIntervalMs
         }
+    }
+
+    private fun refillInteractiveLocked() {
+        val t = now()
+        if (interactiveRefillAtMs != 0L) {
+            val elapsed = t - interactiveRefillAtMs
+            if (elapsed > 0) {
+                interactiveTokens = minOf(
+                    INTERACTIVE_BURST.toDouble(),
+                    interactiveTokens + elapsed.toDouble() / currentIntervalMs,
+                )
+            }
+        }
+        interactiveRefillAtMs = t
     }
 
     /**
      * Runs [block] (the whole publish + response await) inside the adaptive
      * in-flight window when [background]; interactive requests bypass it for
-     * the same reason they skip pacing - they must not wait behind a backlog
-     * slot held across a full signer round trip.
+     * the same reason they skip the backlog queue - they must not wait behind
+     * a slot held across a full signer round trip.
      */
     suspend fun <T> withRequestSlot(background: Boolean = true, block: suspend () -> T): T {
         if (!background) return block()
@@ -94,28 +122,36 @@ class Nip46PublishPacer(
     }
 
     /**
-     * A background request's response arrived. Fast answer: the signer keeps up, widen the
-     * window. Slow answer (over [SLOW_RESPONSE_MS]): it arrived but the signer is drowning -
-     * its relay keeps rejecting response publishes, so each response burns seconds of the
-     * signer's own retry backoff (Amber: 5 re-signed attempts, 200ms-3.2s). Shrink gently so
-     * the combined multi-device queue at the signer stays short and an interactive sign
-     * (another device's login ack) is answered promptly.
+     * A background request's response arrived. Fast answer: the signer keeps up,
+     * widen the window and relax the interval. Slow answer (over
+     * [SLOW_RESPONSE_MS]): it arrived but the signer is drowning - its relay
+     * keeps rejecting response publishes, so each response burns seconds of the
+     * signer's own retry backoff. Shrink the window and stretch the interval so
+     * the combined multi-device rate drops under what the relay delivers and an
+     * interactive sign (another device's login ack) is answered promptly.
      */
     suspend fun noteResponseArrived(latencyMs: Long = 0L) {
         windowLock.withLock {
             if (latencyMs > SLOW_RESPONSE_MS) {
                 windowSize = maxOf(MIN_WINDOW, windowSize - maxOf(1, windowSize / 4))
-            } else if (windowSize < MAX_WINDOW) {
-                windowSize++
-                wakeSlotWaitersLocked()
+                stretchInterval()
+            } else {
+                relaxInterval()
+                if (windowSize < MAX_WINDOW) {
+                    windowSize++
+                    wakeSlotWaitersLocked()
+                }
             }
         }
     }
 
-    /** A background request died unanswered (timeout/cancel): halve the window. */
+    /** A background request died unanswered (timeout/cancel): halve the window, stretch the interval. */
     suspend fun noteResponseLost() {
         withContext(NonCancellable) {
-            windowLock.withLock { windowSize = maxOf(MIN_WINDOW, windowSize / 2) }
+            windowLock.withLock {
+                windowSize = maxOf(MIN_WINDOW, windowSize / 2)
+                stretchInterval()
+            }
         }
     }
 
@@ -131,6 +167,15 @@ class Nip46PublishPacer(
         cooldownUntilMs = maxOf(cooldownUntilMs, now() + cooldownMs)
         nextSlotAtMs = maxOf(nextSlotAtMs, cooldownUntilMs)
         windowSize = maxOf(MIN_WINDOW, windowSize / 2)
+        stretchInterval()
+    }
+
+    private fun stretchInterval() {
+        currentIntervalMs = minOf(currentIntervalMs * 2, MAX_INTERVAL_MS)
+    }
+
+    private fun relaxInterval() {
+        currentIntervalMs = maxOf(baseIntervalMs, currentIntervalMs * 3 / 4)
     }
 
     private suspend fun acquireSlot() {
@@ -175,11 +220,22 @@ class Nip46PublishPacer(
 
     companion object {
         const val MIN_INTERVAL_MS = 400L
+
+        /** Congestion cap for the adaptive pacing interval (stretch doubles up to here). */
+        const val MAX_INTERVAL_MS = 3_200L
+
         const val INITIAL_COOLDOWN_MS = 2_000L
         const val MAX_COOLDOWN_MS = 30_000L
 
         /** Publish attempts per request before the failure propagates to the caller. */
         const val MAX_PUBLISH_ATTEMPTS = 3
+
+        /**
+         * Interactive burst allowance. A login handshake needs 2-3 requests
+         * instantly; a fresh session's NIP-42 AUTH storm (one sign per pool
+         * relay) gets the rest spaced at the current interval.
+         */
+        const val INTERACTIVE_BURST = 6
 
         /**
          * Adaptive window bounds. Start modest so a fresh boot leaves the signer's

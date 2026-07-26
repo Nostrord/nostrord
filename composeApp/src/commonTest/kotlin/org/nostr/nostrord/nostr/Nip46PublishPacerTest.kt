@@ -57,9 +57,10 @@ class Nip46PublishPacerTest {
         pacer.noteAccepted()
 
         // Back to plain pacing: the next slot is one interval away, not a cooldown.
+        // The rate limit stretched the interval (400 -> 800); only fast responses relax it.
         val before = testScheduler.currentTime
         pacer.awaitTurn()
-        assertEquals(Nip46PublishPacer.MIN_INTERVAL_MS, testScheduler.currentTime - before)
+        assertEquals(2 * Nip46PublishPacer.MIN_INTERVAL_MS, testScheduler.currentTime - before)
     }
 
     @Test
@@ -112,6 +113,42 @@ class Nip46PublishPacerTest {
         // An explicit rate-limit rejection also halves the window.
         pacer.noteRateLimited()
         assertEquals(Nip46PublishPacer.MAX_WINDOW / 2, pacer.windowSizeNow)
+    }
+
+    @Test
+    fun interactiveBurstIsCappedThenPaced() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        repeat(Nip46PublishPacer.INTERACTIVE_BURST) { pacer.awaitTurn(background = false) }
+        // The whole burst allowance goes through instantly (a login needs 2-3).
+        assertEquals(0L, testScheduler.currentTime)
+
+        // Beyond the burst (an AUTH storm), each request pays one interval.
+        pacer.awaitTurn(background = false)
+        assertEquals(Nip46PublishPacer.MIN_INTERVAL_MS, testScheduler.currentTime)
+        pacer.awaitTurn(background = false)
+        assertEquals(2 * Nip46PublishPacer.MIN_INTERVAL_MS, testScheduler.currentTime)
+    }
+
+    @Test
+    fun congestionStretchesTheIntervalAndRecoveryRelaxesIt() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        assertEquals(Nip46PublishPacer.MIN_INTERVAL_MS, pacer.intervalNowMs)
+
+        // Losses and slow answers double the interval, capped.
+        pacer.noteResponseLost()
+        assertEquals(2 * Nip46PublishPacer.MIN_INTERVAL_MS, pacer.intervalNowMs)
+        repeat(5) { pacer.noteResponseLost() }
+        assertEquals(Nip46PublishPacer.MAX_INTERVAL_MS, pacer.intervalNowMs)
+
+        // Background pacing pays the stretched interval.
+        pacer.awaitTurn()
+        val before = testScheduler.currentTime
+        pacer.awaitTurn()
+        assertEquals(Nip46PublishPacer.MAX_INTERVAL_MS, testScheduler.currentTime - before)
+
+        // Fast answers relax it back to the floor.
+        repeat(12) { pacer.noteResponseArrived() }
+        assertEquals(Nip46PublishPacer.MIN_INTERVAL_MS, pacer.intervalNowMs)
     }
 
     @Test
