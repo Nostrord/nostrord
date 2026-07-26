@@ -357,8 +357,11 @@ compose.desktop {
 
             // jpackage's jlink image ships only Compose's default modules; java-keyring's
             // DBus backend touches java.sql.DriverManager at startup and kills the app
-            // with NoClassDefFoundError when the module is absent (#165).
-            modules("java.sql")
+            // with NoClassDefFoundError when the module is absent (#165). jdk.unsupported
+            // provides sun.misc.Unsafe for jnr-ffi (dbus-java transport); without it
+            // Keyring.create() throws BackendNotSupportedException and the packaged app
+            // falls back to the passphrase gate even with a Secret Service running.
+            modules("java.sql", "jdk.unsupported")
 
             linux {
                 iconFile.set(project.file("src/jvmMain/resources/icon-512.png"))
