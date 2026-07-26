@@ -102,7 +102,11 @@ actual object SecureStorage {
             return
         }
 
-        if (KeychainStore.isAvailable()) {
+        // Keychain available but empty: adopt it ONLY when no passphrase protects the
+        // existing data. Minting a fresh key over a passphrase verifier would orphan
+        // every slot encrypted with the passphrase-derived key; prompt one last time
+        // instead and let unlockWithPassphrase promote that key into the keychain.
+        if (KeychainStore.isAvailable() && prefs.get(PASSPHRASE_VERIFIER_PREF, null) == null) {
             val freshKey = randomKeyBytes()
             if (KeychainStore.setMasterKey(freshKey)) {
                 masterKey = SecretKeySpec(freshKey, "AES")
@@ -147,6 +151,16 @@ actual object SecureStorage {
         if (plain != PASSPHRASE_VERIFIER_PLAINTEXT) return false
         masterKey = key
         keySource = KeySource.Passphrase
+        // Keychain became available on a passphrase install: promote the derived key
+        // into the keychain so future boots unlock silently, same data, same key.
+        // Verifier and salt are removed only after the keychain write succeeds; on
+        // failure the install stays in passphrase mode untouched.
+        if (KeychainStore.isAvailable() && KeychainStore.setMasterKey(key.encoded)) {
+            keySource = KeySource.Keychain
+            prefs.remove(PASSPHRASE_VERIFIER_PREF)
+            prefs.remove(PASSPHRASE_SALT_PREF)
+            prefs.flush()
+        }
         _unlockState.value = UnlockState.Unlocked
         migrateLegacyIfNeeded()
         return true
