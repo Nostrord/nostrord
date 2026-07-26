@@ -90,6 +90,46 @@ class Nip46PublishPacerTest {
     }
 
     @Test
+    fun interactiveLaneSkipsPacingAndTheWindow() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        // Fill the background window with requests the signer never answers.
+        val stuck = CompletableDeferred<Unit>()
+        repeat(Nip46PublishPacer.MAX_IN_FLIGHT_REQUESTS) {
+            launch { pacer.withRequestSlot { stuck.await() } }
+        }
+        runCurrent()
+
+        // Interactive requests neither pace nor wait for a window slot.
+        var done = 0
+        launch {
+            repeat(3) {
+                pacer.awaitTurn(background = false)
+                pacer.withRequestSlot(background = false) { done++ }
+            }
+        }
+        runCurrent()
+        assertEquals(3, done)
+        assertEquals(0L, testScheduler.currentTime)
+        stuck.complete(Unit)
+    }
+
+    @Test
+    fun interactiveLaneHonorsTheRateLimitCooldown() = runTest {
+        val pacer = Nip46PublishPacer(now = { testScheduler.currentTime })
+        pacer.noteRateLimited()
+        val before = testScheduler.currentTime
+        pacer.awaitTurn(background = false)
+        assertTrue(testScheduler.currentTime - before >= Nip46PublishPacer.INITIAL_COOLDOWN_MS)
+
+        // An accepted publish lifts the cooldown for the interactive lane too.
+        pacer.noteRateLimited()
+        pacer.noteAccepted()
+        val after = testScheduler.currentTime
+        pacer.awaitTurn(background = false)
+        assertEquals(after, testScheduler.currentTime)
+    }
+
+    @Test
     fun recognizesRateLimitReasons() {
         assertTrue(Nip46PublishPacer.isRateLimitReason("rate-limited: you are noting too much"))
         assertTrue(Nip46PublishPacer.isRateLimitReason("Rate limit exceeded"))
