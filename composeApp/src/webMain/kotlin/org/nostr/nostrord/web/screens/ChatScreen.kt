@@ -2909,9 +2909,13 @@ private val MessageRow =
             // Two-stage right-click (Telegram-style): the first right-click on a
             // message opens our app menu at the cursor and suppresses the browser's
             // native menu. A second right-click escapes to the native menu. Right-click
-            // off any message keeps the browser default untouched.
+            // off any message keeps the browser default untouched. Right-click directly
+            // on a hyperlink always keeps the native menu (so "Copy link address" copies
+            // the actual URL, not our event link).
             onContextMenu = { event ->
-                if (!menuOpen) {
+                if (event.target.asDynamic().closest("a") != null) {
+                    setMenuOpen(false)
+                } else if (!menuOpen) {
                     // First right-click: open ours at the cursor and suppress native.
                     event.preventDefault()
                     setReactOpen(false)
@@ -3258,7 +3262,7 @@ private val MessageRow =
                         copyToClipboard(props.content)
                         setMenuOpen(false)
                     }
-                    ctxItem(Ic.Link, "Copy link") {
+                    ctxItem(Ic.Link, "Copy event link") {
                         copyToClipboard(props.messageLink)
                         setMenuOpen(false)
                     }
