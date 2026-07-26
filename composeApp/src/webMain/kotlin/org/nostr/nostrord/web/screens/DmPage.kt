@@ -361,8 +361,11 @@ val DmPage =
                                 // First right-click opens our menu at the cursor; with it open the
                                 // second lands on the overlay, which closes ours without
                                 // preventDefault so the native menu shows (Telegram-style).
+                                // Right-click directly on a hyperlink always keeps the native menu.
                                 onContextMenu = { event ->
-                                    if (menuFor == null) {
+                                    if (event.target.asDynamic().closest("a") != null) {
+                                        setMenuFor(null)
+                                    } else if (menuFor == null) {
                                         event.preventDefault()
                                         menuOpenedAt.current = 0.0
                                         setMenuAt(event.clientX.toInt() to event.clientY.toInt())
