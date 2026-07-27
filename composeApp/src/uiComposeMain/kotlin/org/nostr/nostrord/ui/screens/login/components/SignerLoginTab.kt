@@ -16,9 +16,12 @@ import org.nostr.nostrord.ui.components.buttons.AppButtonSize
 import org.nostr.nostrord.ui.screens.login.LoginViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
 
-/** NIP-55 external signer login (Amber). Only reachable on Android with a signer installed. */
+/**
+ * NIP-55 external signer login. Works with any app registering the nostrsigner: scheme
+ * (Amber being the common one); only reachable on Android with a signer installed.
+ */
 @Composable
-fun AmberLoginTab(onLoginSuccess: () -> Unit) {
+fun SignerLoginTab(onLoginSuccess: () -> Unit) {
     val vm = viewModel { LoginViewModel(AppModule.nostrRepository) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
