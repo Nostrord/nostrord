@@ -367,10 +367,11 @@ actual class Nip46Client actual constructor(
             try {
                 // Publish in parallel via sendAndAwaitOk so a relay-side rejection
                 // surfaces immediately. The response sub opened on connect routes
-                // the signer's reply back into responseDeferred. publishPacer spaces
-                // the publishes and, when the relay rate-limits, holds a shared
-                // cooldown and retries; it is never held across the response await.
-                var attempt = 1
+                // the signer's reply back into responseDeferred. A rate-limited
+                // publish retries under the pacer's escalating cooldown until this
+                // request's own deadline: failing hard reads as "signer unreachable"
+                // upstream and tears the session down, when the relay only asked us
+                // to slow down. Any other rejection throws immediately.
                 while (true) {
                     publishPacer.awaitTurn(background)
                     val publishResults = relayClients.map { client ->
@@ -383,11 +384,10 @@ actual class Nip46Client actual constructor(
                     val rateLimited = publishResults.any {
                         it is PublishResult.Rejected && Nip46PublishPacer.isRateLimitReason(it.reason)
                     }
-                    if (rateLimited) publishPacer.noteRateLimited()
-                    if (!rateLimited || attempt >= Nip46PublishPacer.MAX_PUBLISH_ATTEMPTS) {
+                    if (!rateLimited) {
                         throw Exception("Failed to publish NIP-46 request: ${publishResults.summarizeFailures()}")
                     }
-                    attempt++
+                    publishPacer.noteRateLimited()
                 }
                 try {
                     val response = responseDeferred.await()

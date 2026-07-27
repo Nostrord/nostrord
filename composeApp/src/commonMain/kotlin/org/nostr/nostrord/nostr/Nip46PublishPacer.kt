@@ -227,9 +227,6 @@ class Nip46PublishPacer(
         const val INITIAL_COOLDOWN_MS = 2_000L
         const val MAX_COOLDOWN_MS = 30_000L
 
-        /** Publish attempts per request before the failure propagates to the caller. */
-        const val MAX_PUBLISH_ATTEMPTS = 3
-
         /**
          * Interactive burst allowance. A login handshake needs 2-3 requests
          * instantly; a fresh session's NIP-42 AUTH storm (one sign per pool

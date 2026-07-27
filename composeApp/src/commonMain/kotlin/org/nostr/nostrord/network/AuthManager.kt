@@ -987,7 +987,7 @@ class AuthManager(
                     handlePermissionDenied()
                     throw Exception("Signing permission denied. Please login again.")
                 }
-                if (sessionSigner is NostrSigner.Bunker) noteBunkerSignFailure(interactive)
+                if (sessionSigner is NostrSigner.Bunker) noteBunkerSignFailure(interactive && !isRateLimitThrottle(e))
                 throw e
             }
         }
@@ -1045,10 +1045,17 @@ class AuthManager(
                 markSignerUnreachable(BunkerUnreachableReason.PermissionDenied)
                 throw Exception("Your signer refused to sign. Check its permissions.")
             }
-            noteBunkerSignFailure(interactive)
+            noteBunkerSignFailure(interactive && !isRateLimitThrottle(e))
             throw e
         }
     }
+
+    // A rate-limited bunker publish is the relay asking us to slow down, not evidence the
+    // signer is gone. An interactive teardown here starts a reconnect loop whose fresh
+    // client re-bursts and gets rate-limited again (devices stuck cycling "can't reach
+    // signer" while the first one works), so a throttle only counts toward the
+    // background failure streak.
+    private fun isRateLimitThrottle(e: Exception): Boolean = org.nostr.nostrord.nostr.Nip46PublishPacer.isRateLimitReason(e.message ?: "")
 
     private fun signWithKeyPair(event: Event): Event {
         val kp = keyPair ?: throw Exception("Not logged in")
