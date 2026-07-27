@@ -1,20 +1,24 @@
 package org.nostr.nostrord.ui.screens.login.components
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +26,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -34,6 +41,7 @@ import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonSize
 import org.nostr.nostrord.ui.screens.login.LoginViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
+import org.nostr.nostrord.ui.theme.NostrordShapes
 
 /**
  * "Login with Google" (pomegranate threshold signer). Runs the whole flow in the shared
@@ -54,11 +62,10 @@ fun GoogleLoginTab(onLoginSuccess: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Icon(
-            imageVector = Icons.Default.AccountCircle,
+        Image(
+            imageVector = GoogleLogoIcon,
             contentDescription = null,
             modifier = Modifier.size(48.dp),
-            tint = NostrordColors.Primary,
         )
 
         Text(
@@ -117,49 +124,61 @@ fun GoogleLoginTab(onLoginSuccess: () -> Unit) {
             loading = busy,
         )
 
-        // How it works
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        BenefitsCard(
+            title = "How it works",
+            icon = Icons.Default.Lock,
+            items =
             listOf(
                 "Your key is split into shards held by independent operators",
                 "No single server ever holds the whole key",
                 "Google only proves who you are, it never touches your key",
                 "You can export the full key (nsec) whenever you want",
-            ).forEach { line ->
-                Text(
-                    text = "- $line",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = NostrordColors.TextMuted,
-                )
-            }
-        }
+            ),
+        )
 
         // Advanced: self-hosted central server override.
-        TextButton(onClick = { advancedOpen = !advancedOpen }) {
-            Icon(
-                imageVector = if (advancedOpen) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Text("Advanced options")
-        }
-        if (advancedOpen) {
-            OutlinedTextField(
-                value = central,
-                onValueChange = { central = it },
-                label = { Text("Central server") },
-                placeholder = { Text(PomegranateConfig.CENTRAL_URL) },
-                singleLine = true,
-                enabled = !busy,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier =
+                Modifier
+                    .clip(NostrordShapes.shapeSmall)
+                    .clickable { advancedOpen = !advancedOpen }
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector =
+                    if (advancedOpen) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = NostrordColors.TextMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Advanced options",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NostrordColors.TextSecondary,
+                )
+            }
+            if (advancedOpen) {
                 Text(
                     text =
-                    "Checks your Google sign-in and forwards each signing request to the key " +
-                        "operators. Change it to use a self-hosted one.",
+                    "Central server: checks your Google sign-in and forwards each signing request " +
+                        "to the key operators. Change it to use a self-hosted one.",
                     style = MaterialTheme.typography.bodySmall,
                     color = NostrordColors.TextMuted,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                OutlinedTextField(
+                    value = central,
+                    onValueChange = { central = it },
+                    label = { Text("Central server") },
+                    placeholder = { Text(PomegranateConfig.CENTRAL_URL) },
+                    singleLine = true,
+                    enabled = !busy,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }

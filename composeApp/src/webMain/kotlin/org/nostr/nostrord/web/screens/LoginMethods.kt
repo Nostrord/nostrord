@@ -4,11 +4,13 @@ import org.nostr.nostrord.auth.pomegranate.PomegranateConfig
 import org.nostr.nostrord.auth.pomegranate.PomegranatePopupClosedException
 import org.nostr.nostrord.auth.pomegranate.PomegranateStatus
 import org.nostr.nostrord.di.AppModule
-import org.nostr.nostrord.nostr.Nip07
+import org.nostr.nostrord.ui.screens.login.LoginMethod
 import org.nostr.nostrord.ui.screens.login.LoginViewModel
+import org.nostr.nostrord.ui.screens.login.availableLoginMethods
 import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.GoogleLogo
 import org.nostr.nostrord.web.components.Ic
+import org.nostr.nostrord.web.components.formDivider
 import org.nostr.nostrord.web.components.formError
 import org.nostr.nostrord.web.components.formHint
 import org.nostr.nostrord.web.components.icon
@@ -26,9 +28,48 @@ import web.cssom.ClassName
 import web.html.InputType
 import web.html.text
 
-private enum class Tab { Key, Bunker, Extension, Google }
-
 private enum class BunkerMode { Qr, Url }
+
+/** Sprite icon for a shared [LoginMethod] (Amber never reaches the web build). */
+private val LoginMethod.ic: Ic
+    get() =
+        when (this) {
+            LoginMethod.PrivateKey -> Ic.Key
+            LoginMethod.Bunker -> Ic.Shield
+            LoginMethod.Extension -> Ic.Extension
+            LoginMethod.Amber -> Ic.Shield
+            LoginMethod.Google -> Ic.Google
+        }
+
+/** One full-width row of the method list: icon, name, one-line explainer, chevron. */
+private fun ChildrenBuilder.methodRow(
+    method: LoginMethod,
+    onClick: () -> Unit,
+) {
+    button {
+        className = ClassName("login-method")
+        this.onClick = { onClick() }
+        span {
+            className = ClassName("login-method-icon")
+            icon(method.ic)
+        }
+        span {
+            className = ClassName("login-method-text")
+            span {
+                className = ClassName("login-method-title")
+                +method.title
+            }
+            span {
+                className = ClassName("login-method-sub")
+                +method.subtitle
+            }
+        }
+        span {
+            className = ClassName("login-method-chevron")
+            icon(Ic.ChevronRight)
+        }
+    }
+}
 
 private fun ChildrenBuilder.benefit(text: String) {
     div {
@@ -57,17 +98,22 @@ external interface LoginMethodsProps : Props {
 }
 
 /**
- * The tabbed credential picker shared by the login page and the add-account modal:
- * Private Key (hex / nsec / generate), Bunker (NIP-46 QR or URL) and the NIP-07 browser
- * extension. Owns the tab + busy + error state and reuses [KeyLoginForm] / [BunkerQr] so
- * the two entry points stay identical. Login and add-account call the same LoginViewModel
- * methods; the difference is only [onSuccess].
+ * The credential picker shared by the login page and the add-account modal: a list of the
+ * available [LoginMethod]s, then the chosen method's form behind a back header. "Generate
+ * New Key" sits at the list level because creating an identity is a separate path from
+ * presenting one. Owns the method + busy + error state and reuses [KeyLoginForm] /
+ * [BunkerQr] so the two entry points stay identical. Login and add-account call the same
+ * LoginViewModel methods; the difference is only [onSuccess]. Mirrors the Compose
+ * LoginMethods.
  */
 val LoginMethods =
     FC<LoginMethodsProps> { props ->
         val vm = useViewModel { LoginViewModel(AppModule.nostrRepository) }
-        val extensionAvailable = Nip07.isAvailable()
-        val (tab, setTab) = useState { Tab.Key }
+        val methods = availableLoginMethods()
+        // null shows the method list; a value shows that method's form
+        val (method, setMethod) = useState<LoginMethod?> { null }
+        // Entered through "Generate New Key": the private key form opens on the wizard
+        val (generating, setGenerating) = useState { false }
         val (bunkerMode, setBunkerMode) = useState { BunkerMode.Qr }
         val (bunkerUrl, setBunkerUrl) = useState { "" }
         val (busy, setBusy) = useState { false }
@@ -88,26 +134,50 @@ val LoginMethods =
             }
         }
 
-        div {
-            className = ClassName("tab-strip")
-            tabItem(tab == Tab.Key, Ic.Key, "Private Key") { setTab(Tab.Key) }
-            tabItem(tab == Tab.Bunker, Ic.Shield, "Bunker") { setTab(Tab.Bunker) }
-            if (extensionAvailable) {
-                tabItem(tab == Tab.Extension, Ic.Extension, "Extension") { setTab(Tab.Extension) }
+        if (method == null) {
+            div {
+                className = ClassName("login-method-list")
+                methods.forEach { m ->
+                    methodRow(m) {
+                        setGenerating(false)
+                        setMethod(m)
+                    }
+                }
             }
-            if (vm.isGoogleLoginAvailable) {
-                tabItem(tab == Tab.Google, Ic.Google, "Google") { setTab(Tab.Google) }
+            formDivider()
+            button {
+                className = ClassName("btn-secondary btn-lg btn-full")
+                onClick = {
+                    setGenerating(true)
+                    setMethod(LoginMethod.PrivateKey)
+                }
+                icon(Ic.AutoAwesome)
+                +"Generate New Key"
             }
+            return@FC
+        }
+
+        button {
+            className = ClassName("login-back")
+            onClick = {
+                setError(null)
+                setMethod(null)
+            }
+            icon(Ic.ArrowBack)
+            icon(method.ic)
+            span { +method.title }
         }
 
         div {
             className = ClassName("login-tab-content")
             formError(error)
-            when (tab) {
-                Tab.Key -> {
+            when (method) {
+                LoginMethod.PrivateKey -> {
                     KeyLoginForm {
                         this.vm = vm
                         this.busy = busy
+                        this.startInWizard = generating
+                        onBack = { setMethod(null) }
                         submitLabel = props.submitLabel
                         busyLabel = props.busyLabel
                         onSubmit = { input, password, isNewIdentity ->
@@ -133,7 +203,7 @@ val LoginMethods =
                     }
                 }
 
-                Tab.Bunker -> {
+                LoginMethod.Bunker -> {
                     div {
                         className = ClassName("bunker-desc")
                         icon(Ic.Shield)
@@ -189,7 +259,7 @@ val LoginMethods =
                     }
                 }
 
-                Tab.Extension -> {
+                LoginMethod.Extension -> {
                     div {
                         className = ClassName("ext-content")
                         span {
@@ -218,7 +288,7 @@ val LoginMethods =
 
                 // "Login with Google" (pomegranate threshold signer), web-only.
                 // The whole flow runs in the VM; this tab only reflects its status.
-                Tab.Google -> {
+                LoginMethod.Google -> {
                     div {
                         className = ClassName("ext-content")
                         span {
@@ -317,6 +387,9 @@ val LoginMethods =
                         }
                     }
                 }
+
+                // Android-only; availableLoginMethods() never offers it on the web.
+                LoginMethod.Amber -> {}
             }
         }
     }
