@@ -33,12 +33,13 @@ import androidx.compose.ui.unit.sp
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonSize
 import org.nostr.nostrord.ui.components.buttons.AppButtonVariant
-import org.nostr.nostrord.ui.screens.login.components.AmberLoginTab
+import org.nostr.nostrord.ui.navigation.PlatformBackHandler
 import org.nostr.nostrord.ui.screens.login.components.BunkerLoginTab
 import org.nostr.nostrord.ui.screens.login.components.ExtensionLoginTab
 import org.nostr.nostrord.ui.screens.login.components.GoogleLoginTab
 import org.nostr.nostrord.ui.screens.login.components.LoginMethodList
 import org.nostr.nostrord.ui.screens.login.components.PrivateKeyLoginTab
+import org.nostr.nostrord.ui.screens.login.components.SignerLoginTab
 import org.nostr.nostrord.ui.screens.login.components.icon
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
@@ -60,6 +61,10 @@ fun LoginMethods(
     // Entered through "Generate New Key": the private key form opens on the wizard
     var generating by remember { mutableStateOf(false) }
     val methods = remember { availableLoginMethods() }
+
+    // Inside a method, system back returns to the list. Disabled on the list itself so
+    // back keeps falling through to the host (closing the add-account sheet, exiting).
+    PlatformBackHandler(enabled = selected != null) { selected = null }
 
     Column(modifier = modifier) {
         when (val method = selected) {
@@ -98,7 +103,7 @@ fun LoginMethods(
                         )
                     LoginMethod.Bunker -> BunkerLoginTab(onLoginSuccess)
                     LoginMethod.Extension -> ExtensionLoginTab(onLoginSuccess)
-                    LoginMethod.Amber -> AmberLoginTab(onLoginSuccess)
+                    LoginMethod.Signer -> SignerLoginTab(onLoginSuccess)
                     LoginMethod.Google -> GoogleLoginTab(onLoginSuccess)
                 }
             }

@@ -16,18 +16,21 @@ enum class LoginMethod(
     PrivateKey("Private key", "nsec, hex or ncryptsec"),
     Bunker("Bunker", "Remote signer over NIP-46"),
     Extension("Browser extension", "Sign with a NIP-07 extension"),
-    Amber("Amber", "Signer app on this device"),
+
+    // Any app registering the nostrsigner: scheme qualifies, so the label names the
+    // protocol rather than Amber, which is only the most common implementation.
+    Signer("Signer app", "Sign with a NIP-55 signer app"),
     Google("Google", "Managed key, nothing to back up"),
 }
 
 /**
  * Methods usable at runtime, in the order they are offered. Extension is browser-only,
- * Amber Android-only, Google gated on the pomegranate build config.
+ * the signer app Android-only, Google gated on the pomegranate build config.
  */
 fun availableLoginMethods(): List<LoginMethod> = buildList {
     add(LoginMethod.PrivateKey)
     add(LoginMethod.Bunker)
     if (Nip07.isAvailable()) add(LoginMethod.Extension)
-    if (Nip55.isAvailable()) add(LoginMethod.Amber)
+    if (Nip55.isAvailable()) add(LoginMethod.Signer)
     if (PomegranateService().isAvailable) add(LoginMethod.Google)
 }

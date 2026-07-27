@@ -30,14 +30,14 @@ import web.html.text
 
 private enum class BunkerMode { Qr, Url }
 
-/** Sprite icon for a shared [LoginMethod] (Amber never reaches the web build). */
+/** Sprite icon for a shared [LoginMethod] (the signer app never reaches the web build). */
 private val LoginMethod.ic: Ic
     get() =
         when (this) {
             LoginMethod.PrivateKey -> Ic.Key
             LoginMethod.Bunker -> Ic.Shield
             LoginMethod.Extension -> Ic.Extension
-            LoginMethod.Amber -> Ic.Shield
+            LoginMethod.Signer -> Ic.Shield
             LoginMethod.Google -> Ic.Google
         }
 
@@ -389,7 +389,7 @@ val LoginMethods =
                 }
 
                 // Android-only; availableLoginMethods() never offers it on the web.
-                LoginMethod.Amber -> {}
+                LoginMethod.Signer -> {}
             }
         }
     }

@@ -46,7 +46,7 @@ internal val LoginMethod.icon: ImageVector
             LoginMethod.PrivateKey -> Icons.Default.Key
             LoginMethod.Bunker -> Icons.Default.Shield
             LoginMethod.Extension -> Icons.Default.Extension
-            LoginMethod.Amber -> Icons.Default.PhoneAndroid
+            LoginMethod.Signer -> Icons.Default.PhoneAndroid
             LoginMethod.Google -> GoogleGlyph
         }
 
