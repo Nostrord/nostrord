@@ -76,5 +76,13 @@ expect class Nip46Client(
     /** NIP-46 nip44_decrypt RPC: decrypt [ciphertext] from [peerPubkey] with the remote signer's key. */
     suspend fun nip44Decrypt(peerPubkey: String, ciphertext: String): String
 
+    /**
+     * Batch variant of [nip44Decrypt] (custom method `nip44_decrypt_batch`: one
+     * request/response event pair for many ciphertexts - see Nip46DecryptBatcher).
+     * Result aligns with [items]; null = that item could not be decrypted. Throws
+     * when the signer does not support the method; callers fall back to per-item.
+     */
+    suspend fun nip44DecryptBatch(items: List<Pair<String, String>>): List<String?>
+
     fun disconnect()
 }
