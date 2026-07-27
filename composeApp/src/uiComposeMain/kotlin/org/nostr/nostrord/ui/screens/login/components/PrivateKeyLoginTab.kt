@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Login
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
@@ -51,12 +50,17 @@ import org.nostr.nostrord.utils.rememberClipboardWriter
  *  - a plain hex/nsec offers "Protect with password", which stores the key
  *    encrypted (ncryptsec) on this device — the unlock dialog asks the password
  *    at the next startup;
- *  - "Generate New Key" runs the two-step wizard: backup the npub/nsec, then an
- *    optional password with the same protected-storage semantics.
+ *  - [startInWizard] opens straight on the generate wizard (backup the npub/nsec, then
+ *    an optional password with the same protected-storage semantics), entered from the
+ *    "Generate New Key" action on the method list.
  * Key parsing, generation and encryption live in [LoginViewModel].
  */
 @Composable
-fun PrivateKeyLoginTab(onLoginSuccess: () -> Unit) {
+fun PrivateKeyLoginTab(
+    onLoginSuccess: () -> Unit,
+    startInWizard: Boolean = false,
+    onBack: () -> Unit = {},
+) {
     val vm = viewModel { LoginViewModel(AppModule.nostrRepository) }
 
     // Form state
@@ -72,8 +76,8 @@ fun PrivateKeyLoginTab(onLoginSuccess: () -> Unit) {
     var protectConfirm by remember { mutableStateOf("") }
 
     // Generate wizard: 0 = form, 1 = backup step, 2 = password step
-    var wizardStep by remember { mutableStateOf(0) }
-    var wizardKey by remember { mutableStateOf("") }
+    var wizardStep by remember { mutableStateOf(if (startInWizard) 1 else 0) }
+    var wizardKey by remember { mutableStateOf(if (startInWizard) vm.generateNewKeyHex() else "") }
     var wizardPwd by remember { mutableStateOf("") }
     var wizardConfirm by remember { mutableStateOf("") }
 
@@ -190,7 +194,9 @@ fun PrivateKeyLoginTab(onLoginSuccess: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AppButton(
                             text = "Back",
-                            onClick = { wizardStep = 0 },
+                            // Entered from the method list: there is no key form behind
+                            // this step, so back leaves the private-key flow entirely.
+                            onClick = { if (startInWizard) onBack() else wizardStep = 0 },
                             variant = AppButtonVariant.Ghost,
                         )
                         AppButton(
@@ -466,40 +472,6 @@ fun PrivateKeyLoginTab(onLoginSuccess: () -> Unit) {
                     fullWidth = true,
                     loading = isLoading,
                     icon = Icons.AutoMirrored.Filled.Login,
-                )
-
-                // Divider
-                Row(
-                    modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    HorizontalDivider(modifier = Modifier.weight(1f), color = NostrordColors.Divider)
-                    Text(
-                        text = "or",
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = NostrordColors.TextMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    HorizontalDivider(modifier = Modifier.weight(1f), color = NostrordColors.Divider)
-                }
-
-                AppButton(
-                    text = "Generate New Key",
-                    onClick = {
-                        errorMessage = null
-                        wizardKey = vm.generateNewKeyHex()
-                        wizardPwd = ""
-                        wizardConfirm = ""
-                        wizardStep = 1
-                    },
-                    enabled = !isLoading,
-                    variant = AppButtonVariant.Secondary,
-                    size = AppButtonSize.Large,
-                    fullWidth = true,
-                    icon = Icons.Default.AutoAwesome,
                 )
             }
         }

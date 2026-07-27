@@ -301,10 +301,6 @@ body {
     box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
 }
 
-.login-card.wide {
-    max-width: 500px;
-}
-
 .tab-strip,
 .bunker-toggle {
     display: flex;
@@ -351,7 +347,110 @@ body {
 }
 
 .login-tab-content {
-    margin-top: 24px;
+    margin-top: 20px;
+}
+
+/* Credential picker: one full-width row per login method, so the label never has to
+   compete for width the way an equal-weight tab strip does. */
+.login-method-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.login-method {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--color-divider);
+    border-radius: 10px;
+    background: var(--color-floating);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.login-method:hover {
+    background: var(--color-hover);
+    border-color: var(--color-primary);
+}
+
+.login-method-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+    color: var(--color-primary);
+}
+
+.login-method-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.login-method-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.login-method-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.login-method-sub {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.login-method-chevron {
+    display: flex;
+    color: var(--color-text-muted);
+}
+
+.login-method-chevron svg {
+    width: 20px;
+    height: 20px;
+}
+
+/* Back to the method list, above the chosen method's form. */
+.login-back {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    cursor: pointer;
+}
+
+.login-back:hover {
+    background: var(--color-hover);
+}
+
+.login-back svg {
+    width: 18px;
+    height: 18px;
+    color: var(--color-text-muted);
+}
+
+.login-back svg:nth-of-type(2) {
+    width: 16px;
+    height: 16px;
+    color: var(--color-primary);
 }
 
 /* Prototype field label: small uppercase bold, above the input. */

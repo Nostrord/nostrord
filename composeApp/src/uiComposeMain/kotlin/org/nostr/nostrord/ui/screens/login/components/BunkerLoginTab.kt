@@ -96,35 +96,17 @@ fun BunkerLoginTab(onLoginSuccess: () -> Unit) {
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Benefits card
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = NostrordShapes.shapeMedium,
-            color = NostrordColors.SurfaceVariant.copy(alpha = 0.5f),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = null,
-                        tint = NostrordColors.Success,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Why use a Bunker?",
-                        color = NostrordColors.TextPrimary,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                BenefitItem("Your private key never leaves the signer")
-                BenefitItem("Approve each signing request")
-                BenefitItem("Works with hardware signers")
-                BenefitItem("Revoke access anytime")
-            }
-        }
+        BenefitsCard(
+            title = "Why use a Bunker?",
+            icon = Icons.Default.Lock,
+            items =
+            listOf(
+                "Your private key never leaves the signer",
+                "Approve each signing request",
+                "Works with hardware signers",
+                "Revoke access anytime",
+            ),
+        )
     }
 }
 
@@ -605,26 +587,5 @@ private fun BunkerUrlLoginContent(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun BenefitItem(text: String) {
-    Row(
-        modifier = Modifier.padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Default.CheckCircle,
-            contentDescription = null,
-            tint = NostrordColors.Success.copy(alpha = 0.7f),
-            modifier = Modifier.size(14.dp),
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = text,
-            color = NostrordColors.TextSecondary,
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }

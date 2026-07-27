@@ -5,7 +5,6 @@ import org.nostr.nostrord.ui.screens.login.LoginViewModel
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.copyToClipboard
-import org.nostr.nostrord.web.components.formDivider
 import org.nostr.nostrord.web.components.formError
 import org.nostr.nostrord.web.components.formHint
 import org.nostr.nostrord.web.components.formLabel
@@ -35,6 +34,12 @@ external interface KeyLoginFormProps : Props {
     var submitLabel: String
     var busyLabel: String
 
+    /** Open straight on the generate wizard (entered from "Generate New Key"). */
+    var startInWizard: Boolean
+
+    /** Leave the private-key flow; the wizard's first step has no form behind it. */
+    var onBack: () -> Unit
+
     /** Run the actual login: (input, ncryptsec password or null, isNewIdentity). */
     var onSubmit: (String, String?, Boolean) -> Unit
 
@@ -52,14 +57,16 @@ external interface KeyLoginFormProps : Props {
  *  - pasting an ncryptsec reveals the key-password field;
  *  - a plain hex/nsec offers "Protect with password", which stores the key encrypted
  *    (ncryptsec) on this device — the unlock dialog asks the password at startup;
- *  - "Generate New Key" runs the two-step wizard (backup npub/nsec, then optional
- *    password with the same protected-storage semantics).
+ *  - `startInWizard` opens straight on the two-step generate wizard (backup npub/nsec,
+ *    then optional password with the same protected-storage semantics), entered from the
+ *    "Generate New Key" action on the method list.
  * Mirrors the Compose PrivateKeyLoginTab; logic lives in the shared LoginViewModel.
  */
 val KeyLoginForm =
     FC<KeyLoginFormProps> { props ->
         val vm = props.vm
         val busy = props.busy
+        val startInWizard = props.startInWizard
 
         val (privateKey, setPrivateKey) = useState { "" }
         val (keyPassword, setKeyPassword) = useState { "" }
@@ -72,8 +79,8 @@ val KeyLoginForm =
         val (protectConfirm, setProtectConfirm) = useState { "" }
 
         // Generate wizard: 0 = form, 1 = backup step, 2 = password step
-        val (wizardStep, setWizardStep) = useState { 0 }
-        val (wizardKey, setWizardKey) = useState { "" }
+        val (wizardStep, setWizardStep) = useState { if (startInWizard) 1 else 0 }
+        val (wizardKey, setWizardKey) = useState { if (startInWizard) vm.generateNewKeyHex() else "" }
         val (wizardPwd, setWizardPwd) = useState { "" }
         val (wizardConfirm, setWizardConfirm) = useState { "" }
 
@@ -147,7 +154,9 @@ val KeyLoginForm =
                         className = ClassName("wizard-actions")
                         button {
                             className = ClassName("btn-ghost")
-                            onClick = { setWizardStep(0) }
+                            // Entered from the method list: there is no key form behind
+                            // this step, so back leaves the private-key flow entirely.
+                            onClick = { if (startInWizard) props.onBack() else setWizardStep(0) }
                             +"Back"
                         }
                         button {
@@ -331,20 +340,6 @@ val KeyLoginForm =
                         icon(Ic.Login)
                     }
                     +(if (busy) props.busyLabel else props.submitLabel)
-                }
-                formDivider()
-                button {
-                    className = ClassName("btn-secondary btn-lg btn-full")
-                    disabled = busy
-                    onClick = {
-                        clearError()
-                        setWizardKey(vm.generateNewKeyHex())
-                        setWizardPwd("")
-                        setWizardConfirm("")
-                        setWizardStep(1)
-                    }
-                    icon(Ic.AutoAwesome)
-                    +"Generate New Key"
                 }
             }
         }
