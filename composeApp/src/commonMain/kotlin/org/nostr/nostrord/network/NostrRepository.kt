@@ -249,6 +249,11 @@ class NostrRepository(
     // bunker relay's rate limit; the cap bounds what a fresh login costs.
     private val DM_EAGER_DECRYPT_CAP = 50
     private val DM_TRICKLE_INTERVAL_MS = 5_000L
+
+    // With nip44_decrypt_batch confirmed (Amber extension), decrypts coalesce into one
+    // request/response event pair per ~16 items, so the per-wrap admission can run hot
+    // and the trickle is unnecessary - the batcher is what shields the relay.
+    private val BUNKER_WRAP_ADMIT_INTERVAL_BATCHED_MS = 100L
     private val dmTrickleMutex = Mutex()
     private var dmEagerDecryptCount = 0
     private var dmTrickleNextSlotMs = 0L
@@ -4622,9 +4627,12 @@ class NostrRepository(
                                 // Live wraps and the newest DM_EAGER_DECRYPT_CAP go straight to the
                                 // gate; deeper history parks on a trickle slot (assigned FIFO, so
                                 // approximately newest-first) outside it.
+                                val batchedDecrypt =
+                                    (signer as? NostrSigner.Bunker)?.batchDecryptMode ==
+                                        NostrSigner.Bunker.BatchDecryptMode.Supported
                                 val trickleSlot = dmTrickleMutex.withLock {
                                     when {
-                                        liveWrap -> null
+                                        liveWrap || batchedDecrypt -> null
                                         dmEagerDecryptCount < DM_EAGER_DECRYPT_CAP -> {
                                             dmEagerDecryptCount++
                                             null
@@ -4640,7 +4648,9 @@ class NostrRepository(
                                     val trickleWait = trickleSlot - org.nostr.nostrord.utils.epochMillis()
                                     if (trickleWait > 0) delay(trickleWait)
                                 }
-                                bunkerPublishGate.withLock { delay(BUNKER_WRAP_ADMIT_INTERVAL_MS) }
+                                bunkerPublishGate.withLock {
+                                    delay(if (batchedDecrypt) BUNKER_WRAP_ADMIT_INTERVAL_BATCHED_MS else BUNKER_WRAP_ADMIT_INTERVAL_MS)
+                                }
                                 decrypt()
                             } else {
                                 dmDecryptSemaphore.withPermit { decrypt() }
