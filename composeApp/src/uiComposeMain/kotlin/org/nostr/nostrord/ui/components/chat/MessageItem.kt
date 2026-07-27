@@ -54,6 +54,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip57
+import org.nostr.nostrord.ui.components.ReportUserModal
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.zap.ZapBadge
 import org.nostr.nostrord.ui.components.zap.ZapController
@@ -123,6 +124,7 @@ fun MessageItem(
 ) {
     // Use rememberUpdatedState to avoid recomposition when callbacks change reference
     val copyToClipboard = rememberClipboardWriter()
+    var showReportModal by remember { mutableStateOf(false) }
     val currentOnUsernameClick by rememberUpdatedState(onUsernameClick)
     val currentOnReplyClick by rememberUpdatedState(onReplyClick)
     val currentOnReactionClick by rememberUpdatedState(onReactionClick)
@@ -518,12 +520,22 @@ fun MessageItem(
                         MessageContextAction.PinMessage -> currentOnPinMessage()
                         MessageContextAction.DeleteMessage -> currentOnDeleteMessage()
                         MessageContextAction.ZapMessage -> ZapController.request(message.pubkey, message.id)
+                        MessageContextAction.ReportMessage -> showReportModal = true
                     }
                 },
                 isAuthor = isAuthor,
                 isAdmin = isAdmin,
                 canZap = canZap,
             )
+
+            if (showReportModal) {
+                ReportUserModal(
+                    pubkey = message.pubkey,
+                    metadata = metadata ?: resolveMetadata(message.pubkey),
+                    eventId = message.id,
+                    onDismiss = { showReportModal = false },
+                )
+            }
         }
     }
 }

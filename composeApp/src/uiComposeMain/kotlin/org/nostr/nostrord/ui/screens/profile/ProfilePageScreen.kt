@@ -30,7 +30,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +57,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.ui.components.GroupTypeBadges
 import org.nostr.nostrord.ui.components.IdentifierField
+import org.nostr.nostrord.ui.components.ReportUserModal
 import org.nostr.nostrord.ui.components.RichAboutText
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
@@ -215,12 +218,12 @@ fun ProfilePageScreen(
                                 IdentifierField(pubkey = pubkey, nip05 = metadata?.nip05)
 
                                 if (!vm.isSelf) {
-                                    // Zaps require a signer + a lightning address;
-                                    // NIP-56 reports aren't wired yet (disabled).
+                                    // Zaps require a signer + a lightning address.
                                     val activeSession by ActiveAccountManager.session.collectAsState()
                                     val canZap = activeSession != null &&
                                         Nip57.resolvePayEndpoint(metadata?.lud16, metadata?.lud06) != null
                                     val isMuted by vm.isMuted.collectAsState()
+                                    var showReport by remember { mutableStateOf(false) }
                                     Spacer(modifier = Modifier.height(Spacing.md))
                                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                                         AppButton(
@@ -240,11 +243,17 @@ fun ProfilePageScreen(
                                         )
                                         AppButton(
                                             text = "Report",
-                                            onClick = {},
-                                            enabled = false,
+                                            onClick = { showReport = true },
                                             variant = AppButtonVariant.Ghost,
                                             size = AppButtonSize.Small,
                                             icon = Icons.Default.Shield,
+                                        )
+                                    }
+                                    if (showReport) {
+                                        ReportUserModal(
+                                            pubkey = pubkey,
+                                            metadata = metadata,
+                                            onDismiss = { showReport = false },
                                         )
                                     }
                                 }

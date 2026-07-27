@@ -486,6 +486,18 @@ class FakeNostrRepository : NostrRepositoryApi {
         return Result.Success(Unit)
     }
 
+    var reportUserResult: Result<Unit> = Result.Success(Unit)
+
+    override suspend fun reportUser(
+        pubkey: String,
+        type: org.nostr.nostrord.nostr.Nip56.ReportType,
+        note: String,
+        eventId: String?,
+    ): Result<Unit> {
+        calls += "reportUser:$pubkey:${type.value}:$note:$eventId"
+        return reportUserResult
+    }
+
     override suspend fun updateProfileMetadata(
         displayName: String?,
         name: String?,

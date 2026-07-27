@@ -77,6 +77,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `ReactionBadges` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ReactionBadges.kt | Displays reaction badges for a message. |
 | `RelayGradientAvatar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/avatars/GradientAvatar.kt | Deterministic gradient fallback for relay avatars (prototype gradientRelayAvatar): a |
 | `ReplyPreview` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ReplyPreview.kt | Compact reply preview shown above a message that is replying to another message. |
+| `ReportUserModal` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/ReportUserModal.kt | NIP-56 report modal (prototype ReportModal): reason radio cards, optional note, |
 | `RichAboutText` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/RichAboutText.kt | Renders an "about" text with clickable links and resolved nostr mentions. |
 | `SendStateIcon` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageStatusIndicator.kt | Inline send-state icon for the author's own message: a muted clock while Sending, a check |
 | `SkeletonCircle` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/loading/SkeletonLoader.kt | Generic skeleton circle for avatar placeholders. |
@@ -127,10 +128,10 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `InviteCodesModal` | webMain/kotlin/org/nostr/nostrord/web/modals/InviteCodesModal.kt | Invite-codes modal — real port of the Compose InviteCodesModal (admin): active codes |
 | `JoinGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinGroupModal.kt | Join-group modal — mirrors the Compose flow (App.kt onJoin): paste an invite link or a NIP-29 |
 | `JoinWithCodeModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinWithCodeModal.kt | Join-with-invite-code modal — web port of the Compose InviteCodeJoinModal |
-| `ManageChildrenModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ManageChildrenModal.kt | Manage-children modal — layout-first React port of the Compose ManageChildrenModal |
 | `ManageGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ManageGroupModal.kt | Unified admin "Manage group" modal (port of the prototype GroupManage): a left tab |
 | `MembersModal` | webMain/kotlin/org/nostr/nostrord/web/modals/MembersModal.kt | Read-only member roster (port of the prototype GroupPanels "Members" panel): avatar + |
 | `Portal` | webMain/kotlin/org/nostr/nostrord/web/components/Portal.kt | Renders its children into `<body>` through a React portal, so they escape any ancestor that |
+| `ReportUserModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ReportUserModal.kt | NIP-56 report modal (prototype ReportModal): reason radio cards, optional note, |
 | `ShareGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ShareGroupModal.kt | Share-group modal — real port of the Compose ShareGroupModal: a single cycling identifier field |
 | `Spoiler` | webMain/kotlin/org/nostr/nostrord/web/components/Spoiler.kt | Discord-style spoiler (//text//): blurred until clicked, click toggles. Mirrors the |
 | `UnlockModal` | webMain/kotlin/org/nostr/nostrord/web/modals/UnlockModal.kt | Startup unlock for a NIP-49 password-protected account (web counterpart of the |
