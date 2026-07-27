@@ -240,6 +240,19 @@ class NostrRepository(
     @kotlin.concurrent.Volatile
     private var dmBacklogHoldUntilMs = 0L
 
+    // Newest-first cap on a fresh device's backlog decrypt. Relays stream the REQ newest-first,
+    // so the first N wraps admitted are (approximately, gift-wrap created_at is randomized) the
+    // most recent conversation: they decrypt at the normal paced rate and fill the visible inbox
+    // fast. Everything older takes a spaced trickle slot and parks OUTSIDE the admission gate,
+    // so live wraps (arriving after every DM relay EOSEd) and the eager batch never queue behind
+    // the deep history. 2 signer round trips per wrap times N devices is the load that trips the
+    // bunker relay's rate limit; the cap bounds what a fresh login costs.
+    private val DM_EAGER_DECRYPT_CAP = 50
+    private val DM_TRICKLE_INTERVAL_MS = 5_000L
+    private val dmTrickleMutex = Mutex()
+    private var dmEagerDecryptCount = 0
+    private var dmTrickleNextSlotMs = 0L
+
     // Durable per-wrap dedup so a re-streamed backlog skips wraps already decrypted (no repeat
     // bunker round-trip). Loaded per account in startDmInbox; grows as wraps are handled.
     // Copy-on-write + @Volatile: the relay pipeline thread reads it while the (serialized) decrypt
@@ -1779,6 +1792,10 @@ class NostrRepository(
         resumeDmSendQueue(myPub)
 
         dmBacklogHoldUntilMs = org.nostr.nostrord.utils.epochMillis() + DM_BACKLOG_BOOT_HOLD_MS
+        dmTrickleMutex.withLock {
+            dmEagerDecryptCount = 0
+            dmTrickleNextSlotMs = 0L
+        }
 
         // Resume per-wrap decrypt progress, and reset the this-session sync bookkeeping.
         dmProcessedWrapIds = SecureStorage.loadDmProcessedWrapIds(myPub)
@@ -4564,6 +4581,10 @@ class NostrRepository(
                     dmInFlightWrapIds = dmInFlightWrapIds + wrapId
                 }
                 scope.launch {
+                    // Captured at arrival: wraps streaming in before every DM relay EOSEd are
+                    // backlog; anything after is a live incoming DM.
+                    val liveWrap = dmInboxSubscribedRelays.isNotEmpty() &&
+                        dmInboxEosedRelays.containsAll(dmInboxSubscribedRelays)
                     try {
                         // A bunker signer pays a remote round-trip per NIP-44 decrypt, and a gift
                         // wrap needs two (wrap then seal). A cold start with a large DM backlog
@@ -4598,6 +4619,27 @@ class NostrRepository(
                                 // signer's burst.
                                 val bootHold = dmBacklogHoldUntilMs - org.nostr.nostrord.utils.epochMillis()
                                 if (bootHold > 0) delay(bootHold)
+                                // Live wraps and the newest DM_EAGER_DECRYPT_CAP go straight to the
+                                // gate; deeper history parks on a trickle slot (assigned FIFO, so
+                                // approximately newest-first) outside it.
+                                val trickleSlot = dmTrickleMutex.withLock {
+                                    when {
+                                        liveWrap -> null
+                                        dmEagerDecryptCount < DM_EAGER_DECRYPT_CAP -> {
+                                            dmEagerDecryptCount++
+                                            null
+                                        }
+                                        else -> {
+                                            dmTrickleNextSlotMs =
+                                                maxOf(org.nostr.nostrord.utils.epochMillis(), dmTrickleNextSlotMs) + DM_TRICKLE_INTERVAL_MS
+                                            dmTrickleNextSlotMs
+                                        }
+                                    }
+                                }
+                                if (trickleSlot != null) {
+                                    val trickleWait = trickleSlot - org.nostr.nostrord.utils.epochMillis()
+                                    if (trickleWait > 0) delay(trickleWait)
+                                }
                                 bunkerPublishGate.withLock { delay(BUNKER_WRAP_ADMIT_INTERVAL_MS) }
                                 decrypt()
                             } else {
