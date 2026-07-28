@@ -3,6 +3,7 @@ package org.nostr.nostrord.network
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 import org.nostr.nostrord.auth.Account
+import org.nostr.nostrord.network.livekit.LiveKitCredentials
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmMessage
@@ -125,6 +126,9 @@ interface NostrRepositoryApi {
     val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>>
     val groupRoles: StateFlow<Map<String, List<RoleDefinition>>>
     val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>>
+
+    /** NIP-29 AV spaces: groupId -> pubkeys currently in the relay's LiveKit room (kind 39004). */
+    val liveKitParticipants: StateFlow<Map<String, List<String>>>
     val loadingMembers: StateFlow<Set<String>>
 
     /** Groups whose subscriptions were CLOSED with "restricted" — private group, non-member. */
@@ -476,6 +480,18 @@ interface NostrRepositoryApi {
     suspend fun requestGroupMembers(groupId: String)
 
     suspend fun requestGroupAdmins(groupId: String)
+
+    /** Request live AV participants (kind 39004) for a group whose metadata carries `livekit`. */
+    suspend fun requestLiveKitParticipants(groupId: String)
+
+    /** Whether the relay hosting [groupId] advertises NIP-29 LiveKit rooms. */
+    suspend fun relaySupportsAv(groupId: String): Boolean
+
+    /**
+     * Mint LiveKit join credentials for [groupId] from its relay, authenticated with NIP-98.
+     * The relay enforces group access control when issuing the token.
+     */
+    suspend fun fetchLiveKitCredentials(groupId: String): Result<LiveKitCredentials>
 
     /**
      * Request pending join requests (kind 9021 + 9022) for a group. Admin-only;

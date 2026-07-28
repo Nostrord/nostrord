@@ -28,6 +28,7 @@ import org.nostr.nostrord.network.GroupAdmins
 import org.nostr.nostrord.network.GroupMembers
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.GroupRoles
+import org.nostr.nostrord.network.LiveKitParticipants
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.RoleDefinition
 import org.nostr.nostrord.network.groupMetadataListSerializer
@@ -546,10 +547,17 @@ class GroupManager(
     private val _groupRoles = MutableStateFlow<Map<String, List<RoleDefinition>>>(emptyMap())
     val groupRoles: StateFlow<Map<String, List<RoleDefinition>>> = _groupRoles.asStateFlow()
 
+    // Live AV participants from kind 39004: groupId -> participant pubkeys. Relay-owned live
+    // state, so it is never persisted: a snapshot restored on cold start would show people in
+    // a room they left hours ago.
+    private val _liveKitParticipants = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val liveKitParticipants: StateFlow<Map<String, List<String>>> = _liveKitParticipants.asStateFlow()
+
     // Timestamp guards: reject stale kind:39001/39002 events from slower relays.
     private val memberEventTimestamps = mutableMapOf<String, Long>()
     private val adminEventTimestamps = mutableMapOf<String, Long>()
     private val roleEventTimestamps = mutableMapOf<String, Long>()
+    private val liveKitEventTimestamps = mutableMapOf<String, Long>()
 
     // Per-relay mirror of the kind:39001/2/3 lists (relay -> groupId -> list). The flat
     // maps above stay the compat view where the last relay to publish wins on an id
@@ -1989,6 +1997,7 @@ class GroupManager(
             _groupsAwaitingAuthRead.update { it - idsToRemove }
             _groupAdmins.update { it - idsToRemove }
             _groupMembers.update { it - idsToRemove }
+            _liveKitParticipants.update { it - idsToRemove }
             idsToRemove.forEach { loadingRegistry.remove(it) }
             deletedGroupIds.addAll(idsToRemove)
             persistDroppedGroups(pubKey)
@@ -4462,6 +4471,31 @@ class GroupManager(
             _groupRoles.value = _groupRoles.value + (roles.groupId to roles.roles)
             persistGroupMembershipSnapshot()
         }
+    }
+
+    /**
+     * Apply a kind 39004 (live AV participants) event.
+     *
+     * An empty participant list is meaningful — it is how the relay says the room emptied out —
+     * so it is stored like any other update rather than skipped.
+     */
+    fun handleLiveKitParticipants(participants: LiveKitParticipants, createdAt: Long = 0L) {
+        if (isRecentlyLeft(participants.groupId)) return
+        val existing = liveKitEventTimestamps[participants.groupId] ?: 0L
+        if (createdAt > 0L && createdAt < existing) return
+        if (createdAt > 0L) liveKitEventTimestamps[participants.groupId] = createdAt
+        if (_liveKitParticipants.value[participants.groupId] != participants.participants) {
+            _liveKitParticipants.value = _liveKitParticipants.value + (participants.groupId to participants.participants)
+        }
+    }
+
+    /**
+     * Request live AV participants (kind 39004) for a group whose metadata carries `livekit`.
+     */
+    suspend fun requestLiveKitParticipants(groupId: String): Boolean {
+        val currentClient = clientForGroup(groupId) ?: return false
+        currentClient.requestLiveKitParticipants(groupId)
+        return true
     }
 
     /**

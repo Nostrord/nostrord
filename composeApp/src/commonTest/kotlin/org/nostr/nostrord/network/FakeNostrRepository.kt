@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import org.nostr.nostrord.auth.Account
 import org.nostr.nostrord.network.RoleDefinition
+import org.nostr.nostrord.network.livekit.LiveKitCredentials
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmMessage
@@ -15,6 +16,7 @@ import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip46Client
+import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 
 /**
@@ -373,6 +375,23 @@ class FakeNostrRepository : NostrRepositoryApi {
     override suspend fun requestGroupMembers(groupId: String) {}
 
     override suspend fun requestGroupAdmins(groupId: String) {}
+
+    val _liveKitParticipants = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    override val liveKitParticipants: StateFlow<Map<String, List<String>>> = _liveKitParticipants
+
+    /** Set by tests to drive the AV space join path without a relay. */
+    var liveKitCredentials: Result<LiveKitCredentials> =
+        Result.Error(AppError.Network.Disconnected("no relay"))
+    var avSupported: Boolean = false
+    val requestedLiveKitParticipants = mutableListOf<String>()
+
+    override suspend fun requestLiveKitParticipants(groupId: String) {
+        requestedLiveKitParticipants += groupId
+    }
+
+    override suspend fun relaySupportsAv(groupId: String): Boolean = avSupported
+
+    override suspend fun fetchLiveKitCredentials(groupId: String): Result<LiveKitCredentials> = liveKitCredentials
 
     override suspend fun requestPendingJoinRequests(groupId: String) {}
 
