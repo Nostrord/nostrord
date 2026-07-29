@@ -199,19 +199,29 @@ class AuthManager(
     }
 
     /**
+     * The client identity to connect [signerPubkey] with: the key an account already
+     * registered with that same signer, so it stays the client the signer approved
+     * (Amber's "always allow"), or null for a fresh one.
+     *
+     * Replaying the retired global key instead is what wedged a re-login: the pomegranate
+     * handler had already dropped that client with the previous session and never answered
+     * its `connect`, leaving the UI on "Connecting..." until the request timed out.
+     */
+    private fun clientKeyForBunker(signerPubkey: String): String? = accountStore.accounts.value
+        .firstOrNull { account ->
+            SecureStorage
+                .getBunkerUrlFor(account.pubkey)
+                ?.let { runCatching { parseBunkerUrl(it).pubkey }.getOrNull() } == signerPubkey
+        }?.let { SecureStorage.getBunkerClientPrivateKeyFor(it.pubkey) }
+
+    /**
      * Login with NIP-46 bunker URL
      * Returns the user's public key on success
      */
     suspend fun loginWithBunker(bunkerUrl: String): String {
         val bunkerInfo = parseBunkerUrl(bunkerUrl)
 
-        val existingClientKey = SecureStorage.getBunkerClientPrivateKey()
-        val newNip46Client =
-            if (existingClientKey != null) {
-                Nip46Client(existingClientKey)
-            } else {
-                Nip46Client(null)
-            }
+        val newNip46Client = Nip46Client(clientKeyForBunker(bunkerInfo.pubkey))
 
         // Set up auth URL callback
         newNip46Client.onAuthUrl = { url ->
