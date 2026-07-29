@@ -4838,6 +4838,29 @@ body {
     color: var(--color-text-secondary);
 }
 
+/* Field label with a trailing control (e.g. the attach button in CreateThreadModal). */
+.field-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.thread-compose-attach {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.thread-compose-attach:hover {
+    background: var(--color-hover);
+    color: var(--color-text-content);
+}
+
 .field-label.danger {
     color: var(--color-error);
 }
