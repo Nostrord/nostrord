@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -48,7 +49,11 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonSize
+import org.nostr.nostrord.ui.components.chat.ImageViewerModal
+import org.nostr.nostrord.ui.components.chat.LocalAnimatedImageHidden
+import org.nostr.nostrord.ui.components.chat.LocalImageViewerUrl
 import org.nostr.nostrord.ui.components.chat.MessageComposer
+import org.nostr.nostrord.ui.components.chat.MessageContent
 import org.nostr.nostrord.ui.components.chat.MessageStatusIndicator
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
 import org.nostr.nostrord.ui.navigation.GroupRoute
@@ -94,6 +99,8 @@ fun ThreadsScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var reply by remember { mutableStateOf(TextFieldValue("")) }
     var sending by remember { mutableStateOf(false) }
+    // Shared with MessageContent via LocalImageViewerUrl: tap an inline image -> fullscreen viewer.
+    val imageViewerUrl = remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().background(NostrordColors.Background)) {
         if (route.threadRootId != null) {
@@ -134,33 +141,40 @@ fun ThreadsScreen(
                     modifier = Modifier.weight(1f).fillMaxWidth()
                         .verticalScroll(rememberScrollState()).padding(Spacing.md),
                 ) {
-                    ThreadMessage(
-                        detail.root,
-                        userMetadata,
-                        isRoot = true,
-                        myPubkey,
-                        messageStatus[detail.root.id],
-                        { vm.retrySend(detail.root.id) },
-                        { vm.dismissFailed(detail.root.id) },
-                    )
-                    Text(
-                        if (detail.replies.size == 1) "1 REPLY" else "${detail.replies.size} REPLIES",
-                        color = NostrordColors.TextMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp,
-                        modifier = Modifier.padding(vertical = Spacing.sm),
-                    )
-                    detail.replies.forEach {
+                    CompositionLocalProvider(
+                        LocalImageViewerUrl provides imageViewerUrl,
+                        LocalAnimatedImageHidden provides (imageViewerUrl.value != null),
+                    ) {
                         ThreadMessage(
-                            it,
+                            detail.root,
                             userMetadata,
-                            isRoot = false,
+                            isRoot = true,
                             myPubkey,
-                            messageStatus[it.id],
-                            { vm.retrySend(it.id) },
-                            { vm.dismissFailed(it.id) },
+                            route,
+                            messageStatus[detail.root.id],
+                            { vm.retrySend(detail.root.id) },
+                            { vm.dismissFailed(detail.root.id) },
                         )
+                        Text(
+                            if (detail.replies.size == 1) "1 REPLY" else "${detail.replies.size} REPLIES",
+                            color = NostrordColors.TextMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(vertical = Spacing.sm),
+                        )
+                        detail.replies.forEach {
+                            ThreadMessage(
+                                it,
+                                userMetadata,
+                                isRoot = false,
+                                myPubkey,
+                                route,
+                                messageStatus[it.id],
+                                { vm.retrySend(it.id) },
+                                { vm.dismissFailed(it.id) },
+                            )
+                        }
                     }
                 }
                 MessageComposer(
@@ -247,6 +261,13 @@ fun ThreadsScreen(
             },
         )
     }
+
+    imageViewerUrl.value?.let { url ->
+        ImageViewerModal(
+            imageUrl = url,
+            onDismiss = { imageViewerUrl.value = null },
+        )
+    }
 }
 
 private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = meta?.displayName?.takeIf { it.isNotBlank() }
@@ -310,6 +331,7 @@ private fun ThreadMessage(
     userMetadata: Map<String, UserMetadata>,
     isRoot: Boolean,
     myPubkey: String?,
+    route: GroupRoute,
     status: GroupManager.MessageStatus?,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
@@ -345,10 +367,12 @@ private fun ThreadMessage(
                 )
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    msg.content,
-                    color = NostrordColors.TextContent,
-                    fontSize = 14.sp,
+                // Same rich renderer as chat: media embeds, links, mentions, custom emoji, markdown.
+                MessageContent(
+                    content = msg.content,
+                    tags = msg.tags,
+                    currentGroupId = route.groupId,
+                    currentRelayUrl = route.relayUrl,
                     modifier = Modifier.weight(1f, fill = false).padding(top = 2.dp),
                 )
                 if (myPubkey != null && myPubkey == msg.pubkey && status != null) {
