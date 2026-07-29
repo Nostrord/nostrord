@@ -6,7 +6,7 @@ import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 
 /** Message shown when a target has no LiveKit SDK behind it. */
-const val AV_UNSUPPORTED_MESSAGE = "Live audio and video are only available on the web for now"
+const val AV_UNSUPPORTED_MESSAGE = "Live audio and video are not available on this device yet"
 
 /**
  * Shared body for the [MediaEngine] actuals on targets without a LiveKit SDK. Every call fails

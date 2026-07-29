@@ -9,7 +9,6 @@ import kotlinx.coroutines.test.setMain
 import org.nostr.nostrord.network.FakeNostrRepository
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.livekit.AvConnectionState
-import org.nostr.nostrord.network.livekit.LiveKitCredentials
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import kotlin.test.AfterTest
@@ -120,20 +119,5 @@ class AvSpaceViewModelTest {
         assertNotNull(vm.error.value)
         vm.dismissError()
         assertEquals(null, vm.error.value)
-    }
-
-    @Test
-    fun `joining without a media engine reports the platform limitation`() = runTest {
-        val repo = FakeNostrRepository()
-        repo.liveKitCredentials = Result.Success(LiveKitCredentials("jwt", "wss://lk.example"))
-        val vm = viewModel(repo)
-
-        // Every target compiled under jvmTest uses the stub engine.
-        assertFalse(vm.canJoin)
-        vm.join()
-        testDispatcher.scheduler.advanceUntilIdle()
-
-        assertNotNull(vm.error.value)
-        assertEquals(AvConnectionState.Disconnected, vm.connectionState.value)
     }
 }

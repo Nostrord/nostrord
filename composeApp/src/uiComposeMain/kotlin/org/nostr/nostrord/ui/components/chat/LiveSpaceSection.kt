@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.livekit.AV_UNSUPPORTED_MESSAGE
+import org.nostr.nostrord.network.livekit.AvConnectionState
 import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
@@ -44,8 +46,8 @@ private const val AVATAR_STACK = 4
  * Live NIP-29 AV space banner for [groupId], with a roster sheet behind it.
  *
  * The relay publishes the room's occupants as kind 39004, so the roster is readable on every
- * platform. Capture and playback need a LiveKit SDK, which only the web build has, so the
- * sheet here explains that instead of offering a Join button. Renders nothing unless the group
+ * platform. Joining needs a media engine, which desktop has and Android and iOS do not yet, so
+ * the sheet offers controls or an explanation accordingly. Renders nothing unless the group
  * carries the `livekit` tag; an empty room still shows, since that is when someone would want
  * to be the first one in.
  */
@@ -57,6 +59,9 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
     }
     val hasSpace by vm.hasSpace.collectAsState()
     val participants by vm.participants.collectAsState()
+    val connection by vm.connectionState.collectAsState()
+    val micOn by vm.micEnabled.collectAsState()
+    val error by vm.error.collectAsState()
     val userMetadata by repo.userMetadata.collectAsState()
     var sheetOpen by remember(groupId) { mutableStateOf(false) }
 
@@ -167,17 +172,53 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
                             )
                         }
                     }
-                    Text(
-                        text = "Live audio and video are only available on the web for now.",
-                        color = NostrordColors.TextMuted,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = Spacing.sm),
-                    )
+                    error?.let { message ->
+                        Text(
+                            text = message,
+                            color = NostrordColors.Error,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = Spacing.sm),
+                        )
+                    }
+                    if (!vm.canJoin) {
+                        Text(
+                            text = AV_UNSUPPORTED_MESSAGE + ".",
+                            color = NostrordColors.TextMuted,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = Spacing.sm),
+                        )
+                    }
                 }
             },
             confirmButton = {
+                if (!vm.canJoin) {
+                    TextButton(onClick = { sheetOpen = false }) {
+                        Text("Close", color = NostrordColors.Primary)
+                    }
+                    return@AlertDialog
+                }
+                if (connection == AvConnectionState.Connected) {
+                    TextButton(onClick = { vm.toggleMic() }) {
+                        Text(if (micOn) "Mute" else "Unmute", color = NostrordColors.Primary)
+                    }
+                    TextButton(onClick = { vm.leave() }) {
+                        Text("Leave", color = NostrordColors.Error)
+                    }
+                } else {
+                    TextButton(
+                        onClick = { vm.join() },
+                        enabled = connection == AvConnectionState.Disconnected,
+                    ) {
+                        Text(
+                            if (connection == AvConnectionState.Connecting) "Joining..." else "Join room",
+                            color = NostrordColors.Primary,
+                        )
+                    }
+                }
+            },
+            dismissButton = {
                 TextButton(onClick = { sheetOpen = false }) {
-                    Text("Close", color = NostrordColors.Primary)
+                    Text("Close", color = NostrordColors.TextSecondary)
                 }
             },
         )

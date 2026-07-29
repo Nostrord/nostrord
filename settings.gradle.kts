@@ -25,6 +25,12 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        // livekit-kmp (desktop AV for NIP-29 spaces) is not on Maven Central. Build it from
+        // ../livekit-kmp with `./gradlew publishToMavenLocal` before building the desktop
+        // target. Scoped to that group so nothing else can silently resolve from ~/.m2.
+        mavenLocal {
+            mavenContent { includeGroup("io.github.nostrord") }
+        }
     }
 }
 

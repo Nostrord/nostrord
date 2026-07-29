@@ -174,6 +174,21 @@ kotlin {
             implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-jvm:0.14.0")
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             implementation("org.slf4j:slf4j-nop:2.0.9")
+
+            // LiveKit for NIP-29 AV spaces. The natives are separate artifacts (~25 MB each),
+            // so a packaged installer carries only its own platform; all six are listed here
+            // because a dev build runs on whatever machine is at hand.
+            implementation("io.github.nostrord:livekit-kmp:0.1.0-SNAPSHOT")
+            listOf(
+                "linux-x86-64",
+                "linux-aarch64",
+                "darwin-x86-64",
+                "darwin-aarch64",
+                "win32-x86-64",
+                "win32-aarch64",
+            ).forEach { platform ->
+                implementation("io.github.nostrord:livekit-kmp-natives-$platform:0.1.0-SNAPSHOT")
+            }
             // Inline video player (GStreamer on Linux, MediaFoundation on Win, AVPlayer on Mac)
             implementation("io.github.kdroidfilter:composemediaplayer:0.8.3")
             // JavaFX WebView for YouTube iframe on desktop
