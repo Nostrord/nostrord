@@ -29,6 +29,12 @@ data class AvSpaceParticipant(
     val isSpeaking: Boolean = false,
     val micEnabled: Boolean = false,
     val cameraEnabled: Boolean = false,
+    /**
+     * LiveKit identity, present only for participants the local engine is connected to. It is
+     * what the media layer keys tracks on: the pubkey alone cannot address one person's two
+     * sessions, which the spec's random JWT suffix explicitly allows.
+     */
+    val identity: String? = null,
 )
 
 /**
@@ -88,6 +94,7 @@ class AvSpaceViewModel(
                     isSpeaking = engineView?.isSpeaking == true,
                     micEnabled = engineView?.micEnabled == true,
                     cameraEnabled = engineView?.cameraEnabled == true,
+                    identity = engineView?.identity,
                 )
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())

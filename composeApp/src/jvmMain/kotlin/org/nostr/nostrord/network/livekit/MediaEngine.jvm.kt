@@ -20,4 +20,8 @@ actual class MediaEngine actual constructor() {
     actual suspend fun setMicEnabled(enabled: Boolean): Result<Unit> = stub.unsupported()
 
     actual suspend fun setCameraEnabled(enabled: Boolean): Result<Unit> = stub.unsupported()
+
+    actual fun attachVideo(identity: String, surface: Any): Boolean = false
+
+    actual fun detachVideo(identity: String, surface: Any) {}
 }

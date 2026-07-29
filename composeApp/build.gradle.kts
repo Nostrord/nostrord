@@ -238,6 +238,11 @@ kotlin {
             // Pure-JS QR generator for the NIP-46 nostrconnect login (no canvas needed).
             implementation(npm("qrcode-generator", "1.4.4"))
 
+            // WebRTC transport for NIP-29 AV spaces (kind:39004 rooms). The imperative SDK
+            // only — @livekit/components-react would need externals for a whole component
+            // tree, and the room UI is our own React anyway.
+            implementation(npm("livekit-client", "2.17.2"))
+
             // FROST trusted dealer for pomegranate (Login with Google). Hosted on JSR;
             // the npm: alias + the @jsr registry mapping (root build.gradle.kts) resolve it.
             implementation(npm("@fiatjaf/promenade-trusted-dealer", "npm:@jsr/fiatjaf__promenade-trusted-dealer@0.4.3"))

@@ -18,6 +18,7 @@ import org.nostr.nostrord.network.NostrGroupClient.NostrMessage
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.ui.components.chat.LiveSpaceSection
 import org.nostr.nostrord.ui.components.sidebars.MemberDrawerOverlay
 import org.nostr.nostrord.ui.components.sidebars.MemberSidebar
 import org.nostr.nostrord.ui.screens.group.components.GroupHeader
@@ -203,6 +204,9 @@ fun GroupScreenDesktop(
                         }
                     },
                 )
+
+                // Live NIP-29 AV space (kind:39004); self-hiding when there is no room.
+                LiveSpaceSection(groupId = groupId)
 
                 Box(
                     modifier =

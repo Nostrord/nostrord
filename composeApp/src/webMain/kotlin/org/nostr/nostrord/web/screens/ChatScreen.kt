@@ -55,6 +55,7 @@ import org.nostr.nostrord.web.components.ChatMessageList
 import org.nostr.nostrord.web.components.ChatVideo
 import org.nostr.nostrord.web.components.EmojiPicker
 import org.nostr.nostrord.web.components.Ic
+import org.nostr.nostrord.web.components.LiveSpaceBar
 import org.nostr.nostrord.web.components.Spoiler
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
@@ -73,6 +74,7 @@ import org.nostr.nostrord.web.components.uploadBlob
 import org.nostr.nostrord.web.components.useEscClose
 import org.nostr.nostrord.web.components.zapBadge
 import org.nostr.nostrord.web.modals.AddMemberModal
+import org.nostr.nostrord.web.modals.AvSpaceModal
 import org.nostr.nostrord.web.modals.GroupInfoModal
 import org.nostr.nostrord.web.modals.GroupInviteModal
 import org.nostr.nostrord.web.modals.InviteCodesModal
@@ -1116,6 +1118,9 @@ val ChatScreen =
         val connState = useStateFlow(vm.connectionState)
         val membersLoading = group.id in useStateFlow(vm.loadingMembers)
         val myPubkey = vm.getPublicKey()
+        // NIP-29 AV space: the relay publishes the live roster as kind:39004.
+        val liveParticipants = useStateFlow(AppModule.nostrRepository.liveKitParticipants)[group.id].orEmpty()
+        val (avSpaceOpen, setAvSpaceOpen) = useState(false)
         // Zaps require signing a kind:9734 request, so only offer them when an account
         // with a usable signer is active.
         val canSign = useStateFlow(ActiveAccountManager.session) != null
@@ -1909,6 +1914,21 @@ val ChatScreen =
                     // subgroup channels, the header cog above.
                 }
 
+                // Live AV space (NIP-29 LiveKit rooms). Shown only while kind:39004 lists
+                // somebody, so an AV-capable group with an empty room stays quiet. Keyed like
+                // every conditional sibling of .chat-main so toggling it never remounts the
+                // message list.
+                if (group.hasLiveKit && liveParticipants.isNotEmpty()) {
+                    div {
+                        key = "live-space-bar"
+                        LiveSpaceBar {
+                            participants = liveParticipants
+                            this.userMetadata = userMetadata
+                            onOpen = { setAvSpaceOpen(true) }
+                        }
+                    }
+                }
+
                 // In-chat search bar. Floats as an overlay anchored under the header (absolute
                 // inside .chat-main) so opening search does NOT shrink the .chat-messages viewport
                 // or force the scroller to recalculate. One keyed child of .chat-main (see the
@@ -2347,48 +2367,58 @@ val ChatScreen =
                     }
                 }
 
-                ChatComposer {
-                    key = "chat-composer"
-                    // Share the screen's GroupViewModel — don't let the composer spin up a
-                    // second instance (separate viewModelScope + unobserved sendError) for
-                    // the same group.
-                    this.groupVm = vm
-                    this.groupId = group.id
-                    this.groupName = groupName
-                    this.groupIsOpen = group.isOpen
-                    this.canPost = canPost
-                    this.isOrphaned = isOrphaned
-                    this.isPending = composerPending
-                    this.mentionRequest = mentionRequest
-                    this.members = members
-                    this.allGroups = allGroups
-                    this.userMetadata = userMetadata
-                    this.relayUrl = relayUrl
-                    this.relayPubkeyOf = { r -> relayMetadata[r]?.groupNaddrAuthor ?: relayMetadata[r.normalizeRelayUrl()]?.groupNaddrAuthor }
-                    this.replyingToId = replyingToId
-                    this.replyNonce = replyNonce
-                    this.replyParentName =
-                        replyingToId?.let { id -> messagesById[id]?.let { p -> displayName(p.pubkey, userMetadata[p.pubkey]) } }
-                    this.replyParentContent =
-                        replyingToId?.let { id ->
-                            messagesById[id]?.let { p -> replyPreviewText(p.content, userMetadata, 80) }
-                        }
-                    this.onCancelReply = { setReplyingToId(null) }
-                    this.onSent = {
-                        setReplyingToId(null)
-                        // Sending acknowledges the "New messages" boundary: drop the divider.
-                        consumeDivider()
-                        // Own send always lands the view at the bottom, even when reading
-                        // history (native parity: AutoScrollEffect's ownAppend).
-                        setJumpNonce { it + 1 }
+                // AV-only group (`supported_kinds` present and empty): the relay accepts no
+                // text events at all, so there is nothing to compose and no join bar to show.
+                if (group.isAvOnly) {
+                    div {
+                        key = "chat-composer"
+                        className = ClassName("chat-av-only-note")
+                        +"This group is audio and video only."
                     }
-                    this.onJoin = { join() }
-                    this.pendingRequestedAtSeconds = pendingRequestedAt
-                    this.membersResolving = membersResolving
-                    // Cancel a pending join request = leave the group, then navigate away.
-                    this.onCancelJoinRequest = {
-                        launchApp { repo.leaveGroup(group.id) }
-                        props.onLeave()
+                } else {
+                    ChatComposer {
+                        key = "chat-composer"
+                        // Share the screen's GroupViewModel — don't let the composer spin up a
+                        // second instance (separate viewModelScope + unobserved sendError) for
+                        // the same group.
+                        this.groupVm = vm
+                        this.groupId = group.id
+                        this.groupName = groupName
+                        this.groupIsOpen = group.isOpen
+                        this.canPost = canPost
+                        this.isOrphaned = isOrphaned
+                        this.isPending = composerPending
+                        this.mentionRequest = mentionRequest
+                        this.members = members
+                        this.allGroups = allGroups
+                        this.userMetadata = userMetadata
+                        this.relayUrl = relayUrl
+                        this.relayPubkeyOf = { r -> relayMetadata[r]?.groupNaddrAuthor ?: relayMetadata[r.normalizeRelayUrl()]?.groupNaddrAuthor }
+                        this.replyingToId = replyingToId
+                        this.replyNonce = replyNonce
+                        this.replyParentName =
+                            replyingToId?.let { id -> messagesById[id]?.let { p -> displayName(p.pubkey, userMetadata[p.pubkey]) } }
+                        this.replyParentContent =
+                            replyingToId?.let { id ->
+                                messagesById[id]?.let { p -> replyPreviewText(p.content, userMetadata, 80) }
+                            }
+                        this.onCancelReply = { setReplyingToId(null) }
+                        this.onSent = {
+                            setReplyingToId(null)
+                            // Sending acknowledges the "New messages" boundary: drop the divider.
+                            consumeDivider()
+                            // Own send always lands the view at the bottom, even when reading
+                            // history (native parity: AutoScrollEffect's ownAppend).
+                            setJumpNonce { it + 1 }
+                        }
+                        this.onJoin = { join() }
+                        this.pendingRequestedAtSeconds = pendingRequestedAt
+                        this.membersResolving = membersResolving
+                        // Cancel a pending join request = leave the group, then navigate away.
+                        this.onCancelJoinRequest = {
+                            launchApp { repo.leaveGroup(group.id) }
+                            props.onLeave()
+                        }
                     }
                 }
             }
@@ -2495,6 +2525,13 @@ val ChatScreen =
                 }
             }
 
+            if (avSpaceOpen) {
+                AvSpaceModal {
+                    groupId = group.id
+                    this.groupName = groupName
+                    onClose = { setAvSpaceOpen(false) }
+                }
+            }
             if (infoOpen) {
                 GroupInfoModal {
                     this.group = group

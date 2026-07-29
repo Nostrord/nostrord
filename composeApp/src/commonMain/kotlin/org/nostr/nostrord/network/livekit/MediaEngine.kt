@@ -55,4 +55,19 @@ expect class MediaEngine() {
 
     /** Enable or disable camera capture. Prompts for permission on first enable. */
     suspend fun setCameraEnabled(enabled: Boolean): Result<Unit>
+
+    /**
+     * Render [identity]'s video into [surface] — the platform's video element, an
+     * `HTMLVideoElement` on the web. Untyped because the video element type lives in each
+     * platform's DOM/UI layer, which commonMain cannot name; each actual casts it back.
+     *
+     * Keyed on the LiveKit identity, not the pubkey: the spec lets one user hold several
+     * tokens, so a pubkey can map to more than one tile.
+     *
+     * Returns false when that participant is publishing no video, or on unsupported targets.
+     */
+    fun attachVideo(identity: String, surface: Any): Boolean
+
+    /** Release [surface] so a removed tile stops holding decoded frames. */
+    fun detachVideo(identity: String, surface: Any)
 }

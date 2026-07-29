@@ -484,7 +484,11 @@ interface NostrRepositoryApi {
     /** Request live AV participants (kind 39004) for a group whose metadata carries `livekit`. */
     suspend fun requestLiveKitParticipants(groupId: String)
 
-    /** Whether the relay hosting [groupId] advertises NIP-29 LiveKit rooms. */
+    /**
+     * Whether the relay hosting [groupId] advertises NIP-29 LiveKit rooms (204 at
+     * `/.well-known/nip29/livekit`). The spec's use for this is offering the AV option when
+     * creating or editing a group, which is where the `livekit` tag gets set.
+     */
     suspend fun relaySupportsAv(groupId: String): Boolean
 
     /**
