@@ -30,6 +30,7 @@ import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.shortNpub
 
@@ -175,6 +176,22 @@ class GroupViewModel(
     private fun <T> Map<String, T>.atHostRelay(): T? = hostRelay?.let { hr -> this[hr] ?: entries.firstOrNull { it.key.normalizeRelayUrl() == hr }?.value }
 
     /**
+     * The host relay's own mirror of a per-relay map, laid over the flat (bare-id) one.
+     *
+     * The flat map is last-writer-wins across relays, so for [groupId] it is trustworthy only
+     * while no OTHER relay has served that id: once one has, inheriting it reports another
+     * group's members and admins as ours — which handed out the admin UI, and its join-request
+     * list, on a group we do not administer. In that case the entry reads absent until this
+     * relay answers. Other groups' entries pass through untouched.
+     */
+    private fun <T> Map<String, Map<String, T>>.scopedOverFlat(flat: Map<String, T>): Map<String, T> {
+        val mine = atHostRelay().orEmpty()
+        if (groupId in mine) return flat + mine
+        val servedElsewhere = entries.any { it.key.normalizeRelayUrl() != hostRelay && groupId in it.value }
+        return if (servedElsewhere) (flat - groupId) + mine else flat + mine
+    }
+
+    /**
      * Chat messages with NIP-51 muted authors filtered out. The raw repo cache stays
      * untouched (membership derivation below reads it directly), so an unmute restores
      * the author's messages instantly without a re-fetch.
@@ -204,6 +221,23 @@ class GroupViewModel(
     val connectionState = repo.connectionState
     val joinedGroups = repo.joinedGroups
     val joinedGroupsByRelay = repo.joinedGroupsByRelay
+
+    /**
+     * Is this group in the user's own list ON THIS RELAY. The flat id view answers "some group
+     * with this id is joined somewhere", which for a repeated id ("nostrord") offered Leave for
+     * a group that was never joined here and hid the way in. Routes with no relay (legacy deep
+     * links) keep the flat answer, as there is no relay to scope to.
+     */
+    val isJoinedHere: StateFlow<Boolean> =
+        repo.joinedGroupsByRelay
+            .map { byRelay ->
+                if (hostRelay == null) {
+                    byRelay.values.any { groupId in it }
+                } else {
+                    byRelay.isJoinedOn(hostRelay, groupId)
+                }
+            }.distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val groups = repo.groups
     val groupsByRelay = repo.groupsByRelay
     val userMetadata = repo.userMetadata
@@ -238,7 +272,7 @@ class GroupViewModel(
             repo.groupMembers
         } else {
             combine(repo.groupMembers, repo.groupMembersByRelay) { flat, byRelay ->
-                byRelay.atHostRelay()?.let { flat + it } ?: flat
+                byRelay.scopedOverFlat(flat)
             }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupMembers.value)
         }
     val groupAdmins: StateFlow<Map<String, List<String>>> =
@@ -246,7 +280,7 @@ class GroupViewModel(
             repo.groupAdmins
         } else {
             combine(repo.groupAdmins, repo.groupAdminsByRelay) { flat, byRelay ->
-                byRelay.atHostRelay()?.let { flat + it } ?: flat
+                byRelay.scopedOverFlat(flat)
             }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupAdmins.value)
         }
     val groupRoles: StateFlow<Map<String, List<RoleDefinition>>> =
@@ -254,7 +288,7 @@ class GroupViewModel(
             repo.groupRoles
         } else {
             combine(repo.groupRoles, repo.groupRolesByRelay) { flat, byRelay ->
-                byRelay.atHostRelay()?.let { flat + it } ?: flat
+                byRelay.scopedOverFlat(flat)
             }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupRoles.value)
         }
     val loadingMembers = repo.loadingMembers
@@ -564,10 +598,13 @@ class GroupViewModel(
      * if any. Both UIs prompt on it: [acceptInvite] adopts the group into the joined set
      * + kind:10009; declining routes through [leaveGroup] (kind:9022 + durable left marker).
      */
+    /** This relay's invite only: an invite for the same id on another relay belongs to another group. */
+    private fun Map<String, PendingGroupInvite>.inviteHere(): PendingGroupInvite? = this[groupId]?.takeIf { hostRelay == null || it.relayUrl.normalizeRelayUrl() == hostRelay }
+
     val pendingInvite: StateFlow<PendingGroupInvite?> =
         repo.pendingGroupInvites
-            .map { it[groupId] }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, repo.pendingGroupInvites.value[groupId])
+            .map { it.inviteHere() }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, repo.pendingGroupInvites.value.inviteHere())
 
     /**
      * Who invited us, for the pending-invite prompt: display name, short-npub fallback,
@@ -598,6 +635,23 @@ class GroupViewModel(
 
     fun acceptInvite() {
         viewModelScope.launch { repo.acceptGroupInvite(groupId) }
+    }
+
+    /**
+     * True when the relay already grants us membership but our own kind:10009 has no entry for
+     * this (relay, group): readable and postable, yet absent from every list and from the rail.
+     * Drives the "Add to my groups" action, the way back in when no invite card is pending.
+     */
+    val canAddToMyList: StateFlow<Boolean> =
+        combine(membershipState, isJoinedHere, pendingInvite) { membership, joinedHere, invite ->
+            invite == null &&
+                !joinedHere &&
+                (membership.status == GroupMembership.MEMBER || membership.status == GroupMembership.ADMIN)
+        }.distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun addToMyList() {
+        viewModelScope.launch { repo.addGroupToMyList(groupId, hostRelay) }
     }
 
     /** Fetch [pubkey]'s public kind:10009 so the add-member "on this relay" hint has data. */

@@ -57,10 +57,11 @@ val GroupInfoModal =
         // on another relay.
         val vm = useViewModel("${props.relayUrl}|${group.id}") { GroupViewModel(AppModule.nostrRepository, group.id, props.relayUrl) }
         val memberCount = useStateFlow(vm.groupMembers)[group.id]?.size ?: 0
-        // Leaving is about the user's own kind:10009 list, so it must be offered whenever the
-        // group is in that list (any relay), even if the relay is dead and membership/posting
-        // can't be confirmed. Gating on "can post" would hide the only exit from a broken relay.
-        val isJoined = useStateFlow(AppModule.nostrRepository.joinedGroupsByRelay).values.any { group.id in it }
+        // Leaving is about the user's own kind:10009 list, so it is offered whenever the group is
+        // in that list for THIS relay, even if the relay is dead and membership/posting can't be
+        // confirmed. Gating on "can post" would hide the only exit from a broken relay; matching
+        // the id across all relays offered Leave for a same-id group joined somewhere else.
+        val isJoined = useStateFlow(vm.isJoinedHere)
         val focusedRelay = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
         val relayUrl = props.relayUrl ?: focusedRelay
         val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)

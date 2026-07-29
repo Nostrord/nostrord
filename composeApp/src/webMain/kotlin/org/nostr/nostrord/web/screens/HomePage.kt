@@ -9,6 +9,7 @@ import org.nostr.nostrord.ui.screens.home.Friend
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
 import org.nostr.nostrord.ui.screens.home.JoinedGroup
 import org.nostr.nostrord.ui.screens.onboarding.onboardingFollowSuggestions
+import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
@@ -72,8 +73,9 @@ val HomePage =
         val friendsGroupsLoading = useStateFlow(vm.friendsGroupsLoading)
         val recommendedGroupsLoading = useStateFlow(vm.recommendedGroupsLoading)
         val relayMeta = useStateFlow(vm.relayMetadata)
-        // Group ids you're a member of, to mark the "Joined" badge on cards in mixed lists.
-        val joinedIds = useStateFlow(AppModule.nostrRepository.joinedGroupsByRelay).values.flatten().toSet()
+        // Membership per (relay, id), to mark the "Joined" badge on cards in mixed lists: ids
+        // repeat across relays, so a flat id match badges a group you never joined.
+        val joinedByRelay = useStateFlow(AppModule.nostrRepository.joinedGroupsByRelay)
         // Follow state + actor metadata for the "People" filter's follow suggestions.
         val following = useStateFlow(AppModule.nostrRepository.following)
         val actorMeta = useStateFlow(AppModule.nostrRepository.userMetadata)
@@ -218,7 +220,7 @@ val HomePage =
                                     div {
                                         className = ClassName("card-grid")
                                         myGroups.forEach { group ->
-                                            discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, group.meta.id in joinedIds) {
+                                            discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, joinedByRelay.isJoinedOn(group.relayUrl, group.meta.id)) {
                                                 props.onOpenGroup(JoinedGroup(group.relayUrl, group.meta))
                                             }
                                         }
@@ -249,7 +251,7 @@ val HomePage =
                                     div {
                                         className = ClassName("card-grid")
                                         friendsGroups.forEach { fg ->
-                                            discoverGroupCard(fg, relayMeta[fg.relayUrl]?.icon, fg.meta.id in joinedIds) {
+                                            discoverGroupCard(fg, relayMeta[fg.relayUrl]?.icon, joinedByRelay.isJoinedOn(fg.relayUrl, fg.meta.id)) {
                                                 props.onOpenGroup(JoinedGroup(fg.relayUrl, fg.meta))
                                             }
                                         }
@@ -268,7 +270,7 @@ val HomePage =
                                 div {
                                     className = ClassName("card-grid")
                                     recommendedGroups.forEach { group ->
-                                        discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, group.meta.id in joinedIds) {
+                                        discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, joinedByRelay.isJoinedOn(group.relayUrl, group.meta.id)) {
                                             props.onOpenGroup(JoinedGroup(group.relayUrl, group.meta))
                                         }
                                     }

@@ -65,6 +65,7 @@ import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochMillis
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -3743,6 +3744,9 @@ class GroupManager(
         val self = currentPubkey
         val selfNowMember = self != null && self in members.members
         val selfWasAbsent = currentMembers?.contains(self) != true
+        // Relay this listing belongs to: every membership decision below is scoped to it,
+        // because group ids repeat across relays.
+        val hostRelay = (relayUrl ?: getRelayForGroup(members.groupId) ?: currentRelayUrl)?.normalizeRelayUrl()
 
         // The relay listing us in 39002 is the ground-truth approval signal. If we were gated
         // (locally pending OR persisted/CLOSED as restricted) and have just transitioned into the
@@ -3770,15 +3774,14 @@ class GroupManager(
         if (self != null &&
             self in members.members &&
             members.groupId in _leftGroups.value &&
-            _joinedGroupsByRelay.value.values.any { members.groupId in it }
+            hostRelay != null &&
+            isJoinedOn(hostRelay, members.groupId)
         ) {
             _leftGroups.update { it - members.groupId }
-            getRelayForGroup(members.groupId)?.let { relay ->
-                currentPubkey?.let { pk ->
-                    try {
-                        SecureStorage.removeLeftGroupForRelay(pk, relay.normalizeRelayUrl(), members.groupId)
-                    } catch (_: Exception) {}
-                }
+            currentPubkey?.let { pk ->
+                try {
+                    SecureStorage.removeLeftGroupForRelay(pk, hostRelay, members.groupId)
+                } catch (_: Exception) {}
             }
         }
 
@@ -3790,7 +3793,8 @@ class GroupManager(
             registerExternalAdd(members.groupId, relayUrl, createdAtSeconds = createdAt)
         } else if (self != null && !selfNowMember) {
             // No longer listed (admin removed us before we decided): the invite is moot.
-            discardPendingInvite(members.groupId)
+            // Only this relay's invite: a same-id invite from another relay is a different group.
+            if (_pendingGroupInvites.value[members.groupId]?.relayUrl == hostRelay) discardPendingInvite(members.groupId)
         }
 
         return members.members
@@ -3849,13 +3853,22 @@ class GroupManager(
         // registered an "invite" here; without this the creator is prompted to accept
         // their own group.
         scope.launch {
-            _joinedGroupsByRelay.collect { byRelay ->
+            _joinedGroupsByRelay.collect {
                 if (_pendingGroupInvites.value.isEmpty()) return@collect
-                val joined = byRelay.values.flatten().toSet()
-                _pendingGroupInvites.value.keys.filter { it in joined }.forEach { discardPendingInvite(it) }
+                // Settled only on the invite's OWN relay: the same id joined elsewhere is a
+                // different group, and treating it as settled discarded the invite unanswered.
+                _pendingGroupInvites.value.values
+                    .filter { isJoinedOn(it.relayUrl, it.groupId) }
+                    .forEach { discardPendingInvite(it.groupId) }
             }
         }
     }
+
+    /** True when [groupId] is in the joined set of [relayUrl] specifically (ids repeat across relays). */
+    private fun isJoinedOn(
+        relayUrl: String,
+        groupId: String,
+    ): Boolean = _joinedGroupsByRelay.value.isJoinedOn(relayUrl, groupId)
 
     private fun persistPendingInvites() {
         val pk = currentPubkey ?: return
@@ -3872,9 +3885,8 @@ class GroupManager(
             emptyList()
         }
         if (stored.isEmpty()) return
-        val joined = _joinedGroupsByRelay.value.values.flatten().toSet()
         val valid = stored.filter {
-            it.groupId !in joined && it.groupId !in _leftGroups.value && it.groupId !in deletedGroupIds
+            !isJoinedOn(it.relayUrl, it.groupId) && it.groupId !in _leftGroups.value && it.groupId !in deletedGroupIds
         }
         if (valid.isEmpty()) return
         // Keep in-memory entries: a live registration this session is fresher than the slot.
@@ -3899,11 +3911,14 @@ class GroupManager(
         // are the actor when we add ourselves) is not an external add.
         if (actorPubkey != null && actorPubkey == currentPubkey) return
         if (isRecentlyLeft(groupId) || groupId in deletedGroupIds) return
-        if (_joinedGroupsByRelay.value.values.any { groupId in it }) return
+        val relay = (relayUrl ?: getRelayForGroup(groupId) ?: currentRelayUrl ?: return).normalizeRelayUrl()
+        // Per relay: the same id joined elsewhere is a different group. Matching across all
+        // relays swallowed the invite, so a group we are a relay-side member of never got a
+        // prompt, never entered the joined set, and never reached kind:10009 (no rail entry).
+        if (isJoinedOn(relay, groupId)) return
         // A create/join we initiated is still in flight (id pre-claimed before the send):
         // the relay's put-user echo for it is our own doing, not an external add.
         if (isRecentlyJoined(groupId)) return
-        val relay = (relayUrl ?: getRelayForGroup(groupId) ?: currentRelayUrl ?: return).normalizeRelayUrl()
         val leftAt = _leftGroups.value[groupId]
         if (leftAt != null) {
             // Only an actual put-user event dated after the leave re-opens; 39002 listings
@@ -3916,7 +3931,9 @@ class GroupManager(
                 } catch (_: Exception) {}
             }
         }
-        val existing = _pendingGroupInvites.value[groupId]
+        // Scoped to this relay: an entry held for the same id on another relay is a different
+        // group's invite and must be replaced by this one, not refreshed in place.
+        val existing = _pendingGroupInvites.value[groupId]?.takeIf { it.relayUrl == relay }
         if (existing != null) {
             if (actorPubkey == null) return
             // The same put-user replayed by the inclusive since-cursor: nothing new.
@@ -3978,7 +3995,9 @@ class GroupManager(
     fun acceptPendingInvite(groupId: String) {
         val self = currentPubkey ?: return
         val invite = _pendingGroupInvites.value[groupId] ?: return
-        discardPendingInvite(groupId)
+        // The entry is dropped by the adoption itself, once the membership is really in the
+        // joined set. Discarding first spent the user's consent on a no-op whenever a guard
+        // then blocked the adoption: the card was gone and the group never reached kind:10009.
         adoptExternalMembership(
             groupId = groupId,
             pubkey = self,
@@ -3989,6 +4008,17 @@ class GroupManager(
         )
     }
 
+    /**
+     * Put a group the relay already lists us in (kind:39002) into our own kind:10009, without
+     * an invite card. The relay side and the list are separate states, and any missed prompt
+     * (or one answered while a guard blocked the adoption) leaves a group we can read and post
+     * in but that no list, and therefore no rail, knows about. This is the manual way in.
+     */
+    fun addRelaySideMembershipToList(groupId: String, relayUrl: String?) {
+        val self = currentPubkey ?: return
+        adoptExternalMembership(groupId = groupId, pubkey = self, relayUrl = relayUrl)
+    }
+
     /** Drop a pending invite without adopting (decline path, or the add became moot). */
     fun discardPendingInvite(groupId: String) {
         if (groupId !in _pendingGroupInvites.value) return
@@ -3997,10 +4027,12 @@ class GroupManager(
     }
 
     /**
-     * Adopt a membership created by an admin's kind:9000 (put-user) instead of our own
-     * join request — the [acceptPendingInvite] path. The durable left marker wins: a relay
-     * that keeps listing us after our kind:9022 must not resurrect the group (B2), and a
-     * rejoin has to be the user's call.
+     * Adopt a membership the relay already grants us into the joined set: the
+     * [acceptPendingInvite] and [addRelaySideMembershipToList] paths. Both are a deliberate
+     * user action, so a durable left marker (B2: the relay keeps listing us after our
+     * kind:9022) is CLEARED here rather than obeyed — obeying it turned an explicit rejoin
+     * into a silent no-op. Unattended adoption still can't happen: nothing calls this
+     * without the user asking for it.
      */
     private fun adoptExternalMembership(
         groupId: String,
@@ -4010,14 +4042,28 @@ class GroupManager(
         eventId: String? = null,
         createdAtSeconds: Long = 0L,
     ) {
-        if (groupId in _leftGroups.value) return
-        if (isRecentlyLeft(groupId) || groupId in deletedGroupIds) return
-        if (_joinedGroupsByRelay.value.values.any { groupId in it }) return
         val relay = (relayUrl ?: getRelayForGroup(groupId) ?: currentRelayUrl ?: return).normalizeRelayUrl()
+        // Already-joined check is per relay: group ids are relay-scoped, so a short one
+        // ("nostrord") commonly exists on several. Matching across all of them silently
+        // dropped the accept for every relay after the first.
+        if (isJoinedOn(relay, groupId)) {
+            discardPendingInvite(groupId)
+            return
+        }
         scope.launch {
             // Re-check inside the launch: two 39002s (or a 39002 + a live 9000) can both pass
             // the synchronous guard and only the first may adopt.
-            if (_joinedGroupsByRelay.value.values.any { groupId in it }) return@launch
+            if (isJoinedOn(relay, groupId)) {
+                discardPendingInvite(groupId)
+                return@launch
+            }
+            deletedGroupIds.remove(groupId)
+            persistDroppedGroups(pubkey)
+            recentlyLeftAt.remove(groupId)
+            _leftGroups.update { it - groupId }
+            try {
+                SecureStorage.removeLeftGroupForRelay(pubkey, relay, groupId)
+            } catch (_: Exception) {}
             // Merge with the persisted slot like joinGroup: the in-memory map can be partial
             // early in a session and a memory-only write would clobber the slot.
             val stored = try {
@@ -4030,6 +4076,8 @@ class GroupManager(
                 SecureStorage.saveJoinedGroupsForRelay(pubkey, relay, updated)
             } catch (_: Exception) {}
             _joinedGroupsByRelay.update { it + (relay to updated) }
+            // Consent is spent only now that the membership is really in the joined set.
+            discardPendingInvite(groupId)
             // Grace against the orphan auto-forget while this group's kind:39000 is in flight.
             markRecentlyJoined(groupId)
             clearGroupRestricted(groupId)

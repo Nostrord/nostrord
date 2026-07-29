@@ -607,6 +607,14 @@ class FakeNostrRepository : NostrRepositoryApi {
         pendingGroupInvitesFlow.update { it - groupId }
     }
 
+    val addedToList = mutableListOf<Pair<String, String?>>()
+
+    override suspend fun addGroupToMyList(groupId: String, relayUrl: String?) {
+        addedToList += groupId to relayUrl
+        val relay = relayUrl ?: return
+        _joinedGroupsByRelay.update { it + (relay to (it[relay].orEmpty() + groupId)) }
+    }
+
     override suspend fun sendReaction(
         groupId: String,
         targetEventId: String,

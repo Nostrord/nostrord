@@ -230,10 +230,6 @@ fun GroupScreen(
     var inputOverlayOpen by remember { mutableStateOf(false) }
     var createdInviteCode by remember { mutableStateOf<String?>(null) }
     var resolvedRequestPubkeys by remember(groupId) { mutableStateOf(emptySet<String>()) }
-    val isJoined =
-        remember(joinedGroups, groupId) {
-            joinedGroups.contains(groupId)
-        }
 
     val initialInviteCode = remember { pendingInviteCode }
     val isConnected = connectionState is ConnectionManager.ConnectionState.Connected
@@ -303,6 +299,17 @@ fun GroupScreen(
     val membership by vm.membershipState.collectAsState()
     val isPendingApproval = membership.status == GroupMembership.PENDING
     val pendingRequestedAtSeconds = membership.requestedAtSeconds
+    // Our own kind:10009 entry for THIS relay (the flat view answers for a same-id group
+    // elsewhere): gates Leave and the "Add to my groups" way back in.
+    val isJoinedHere by vm.isJoinedHere.collectAsState()
+    val canAddToMyList by vm.canAddToMyList.collectAsState()
+    // Participation gate (composer + header Join), same rule as the web canPost: the relay's
+    // member list decides. A member missing from our own list keeps writing while the header
+    // offers to add it.
+    val isJoined =
+        isJoinedHere ||
+            membership.status == GroupMembership.MEMBER ||
+            membership.status == GroupMembership.ADMIN
 
     // Switching accounts while a group is open leaves groupId unchanged, so the
     // per-session REQ effects must also key on the active account; otherwise the new
@@ -497,7 +504,9 @@ fun GroupScreen(
             groupMetadata = currentGroupMetadata,
             relayUrl = relayUrl ?: currentRelayUrl,
             onOpenRelay = onOpenRelay,
-            isMember = isJoined,
+            // Leave acts on our own kind:10009 entry, so the list decides, not the relay's
+            // member list.
+            isMember = isJoinedHere,
             memberCount = groupMembers.size,
             userMetadata = userMetadata,
             onUserClick = { pubkey ->
@@ -916,6 +925,8 @@ fun GroupScreen(
                     connectionStatus = connectionStatus,
                     connectionState = connectionState,
                     isJoined = isJoined,
+                    canAddToList = canAddToMyList,
+                    onAddToList = { vm.addToMyList() },
                     isAdmin = isAdmin,
                     userMetadata = userMetadata,
                     reactions = allReactions,
@@ -1060,6 +1071,8 @@ fun GroupScreen(
                     connectionStatus = connectionStatus,
                     connectionState = connectionState,
                     isJoined = isJoined,
+                    canAddToList = canAddToMyList,
+                    onAddToList = { vm.addToMyList() },
                     isAdmin = isAdmin,
                     userMetadata = userMetadata,
                     reactions = allReactions,

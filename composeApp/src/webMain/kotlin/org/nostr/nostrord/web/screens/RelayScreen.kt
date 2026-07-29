@@ -4,6 +4,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.ui.screens.home.DiscoverGroup
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
+import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
@@ -45,7 +46,9 @@ val RelayScreen =
         val currentRelay = useStateFlow(repo.currentRelayUrl)
         val myRelays = useStateFlow(repo.kind10009Relays)
         val unreachable = useStateFlow(repo.unreachableRelays)
-        val joinedIds = useStateFlow(repo.joinedGroupsByRelay).values.flatten().toSet()
+        // Per (relay, id): this page lists ONE relay's groups, and a same-id group joined on
+        // another relay must not badge them as joined.
+        val joinedByRelay = useStateFlow(repo.joinedGroupsByRelay)
 
         val target = props.relayUrl.normalizeRelayUrl()
         val info = relayMeta[props.relayUrl] ?: relayMeta[target]
@@ -204,7 +207,7 @@ val RelayScreen =
                         div {
                             className = ClassName("card-grid")
                             groups.forEach { g ->
-                                discoverGroupCard(g, info?.icon, g.meta.id in joinedIds) { props.onOpenGroup(g) }
+                                discoverGroupCard(g, info?.icon, joinedByRelay.isJoinedOn(g.relayUrl, g.meta.id)) { props.onOpenGroup(g) }
                             }
                         }
                     }

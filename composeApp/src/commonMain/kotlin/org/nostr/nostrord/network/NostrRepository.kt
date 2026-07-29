@@ -460,6 +460,10 @@ class NostrRepository(
         groupManager.acceptPendingInvite(groupId)
     }
 
+    override suspend fun addGroupToMyList(groupId: String, relayUrl: String?) {
+        groupManager.addRelaySideMembershipToList(groupId, relayUrl)
+    }
+
     // Expose auth state
     override val isLoggedIn: StateFlow<Boolean> = sessionManager.isLoggedIn
 

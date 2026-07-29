@@ -73,6 +73,74 @@ class GroupExternalMembershipAdoptionTest {
     }
 
     @Test
+    fun `the same group id joined on another relay does not block the invite`() = runTest {
+        val scope = TestScope(testScheduler)
+        val otherRelay = "wss://other.relay"
+        SecureStorage.saveJoinedGroupsForRelay(pubkey, otherRelay, setOf(group))
+        try {
+            val gm = makeManager(scope)
+            gm.setCurrentPubkey(pubkey)
+            // In memory too, not only in storage: every membership guard reads the live map.
+            gm.loadJoinedGroupsFromStorage(pubkey, otherRelay)
+            testScheduler.advanceUntilIdle()
+            assertTrue(group in gm.joinedGroupsByRelay.value[otherRelay].orEmpty())
+
+            gm.handleGroupMembers(GroupMembers(group, listOf(pubkey)), createdAt = 100, relayUrl = relay)
+            testScheduler.advanceUntilIdle()
+            assertEquals(relay, gm.pendingGroupInvites.value[group]?.relayUrl, "invite survives the id clash")
+
+            gm.acceptPendingInvite(group)
+            testScheduler.advanceUntilIdle()
+
+            assertTrue(group in gm.getGroupIdsForMux(relay), "short ids repeat across relays; each is its own group")
+            assertTrue(group in SecureStorage.getJoinedGroupsForRelay(pubkey, relay))
+            assertTrue(group in SecureStorage.getJoinedGroupsForRelay(pubkey, otherRelay), "the other relay is untouched")
+        } finally {
+            SecureStorage.saveJoinedGroupsForRelay(pubkey, otherRelay, emptySet())
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a relay-side membership can be added to the list with no invite pending`() = runTest {
+        val scope = TestScope(testScheduler)
+        val gm = makeManager(scope)
+        gm.setCurrentPubkey(pubkey)
+        testScheduler.advanceUntilIdle()
+
+        gm.addRelaySideMembershipToList(group, relay)
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(group in gm.getGroupIdsForMux(relay))
+        assertTrue(group in SecureStorage.getJoinedGroupsForRelay(pubkey, relay))
+
+        scope.cancel()
+    }
+
+    @Test
+    fun `the invite is spent by the adoption itself, not before it`() = runTest {
+        val scope = TestScope(testScheduler)
+        val gm = makeManager(scope)
+        gm.setCurrentPubkey(pubkey)
+        testScheduler.advanceUntilIdle()
+
+        gm.handleGroupMembers(GroupMembers(group, listOf(pubkey)), createdAt = 100, relayUrl = relay)
+        testScheduler.advanceUntilIdle()
+        assertTrue(group in gm.pendingGroupInvites.value)
+
+        // Accept, but do not let the adoption coroutine run yet: discarding here would spend
+        // the user's consent on work that has not happened (and may still be blocked).
+        gm.acceptPendingInvite(group)
+        assertTrue(group in gm.pendingGroupInvites.value, "card survives until the membership lands")
+
+        testScheduler.advanceUntilIdle()
+        assertFalse(group in gm.pendingGroupInvites.value)
+        assertTrue(group in SecureStorage.getJoinedGroupsForRelay(pubkey, relay))
+
+        scope.cancel()
+    }
+
+    @Test
     fun `accepting a pending invite adopts the membership into the joined set and storage`() = runTest {
         val scope = TestScope(testScheduler)
         val gm = makeManager(scope)
