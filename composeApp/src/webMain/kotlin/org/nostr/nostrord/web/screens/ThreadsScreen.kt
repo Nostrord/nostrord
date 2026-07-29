@@ -441,7 +441,16 @@ private fun ChildrenBuilder.threadMessage(
             }
             div {
                 className = ClassName("thread-msg-content")
-                +msg.content
+                // Same rich renderer as chat: media embeds, links, mentions, custom emoji, markdown.
+                renderMessageContent(
+                    msg.content,
+                    msg.tags,
+                    userMetadata,
+                    emptyMap(),
+                    onUser = {},
+                    onEventRef = {},
+                    onGroupRef = { _, _ -> },
+                )
                 // Inline send-state icon (clock/check) so no extra line shifts the list.
                 if (myPubkey != null && myPubkey == msg.pubkey) {
                     sendStateIcon(status)
