@@ -7329,6 +7329,12 @@ body {
     background: var(--color-background);
 }
 
+/* A modal opened from inside settings portals to <body>, landing as a sibling of
+   .settings-overlay: without this it paints under that opaque full-screen layer. */
+.modal-overlay.over-settings {
+    z-index: 300;
+}
+
 .settings-fill {
     flex: 1 1 0;
     min-width: 0;
