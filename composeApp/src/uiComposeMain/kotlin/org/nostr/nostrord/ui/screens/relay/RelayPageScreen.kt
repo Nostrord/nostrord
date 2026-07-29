@@ -53,6 +53,7 @@ import org.nostr.nostrord.ui.screens.home.HomePageViewModel
 import org.nostr.nostrord.ui.screens.home.RelayHeaderIcon
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
+import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
@@ -118,7 +119,6 @@ fun RelayPageScreen(
             ?: (pk.take(8) + "…")
     } ?: "Unknown"
     val software = info?.software?.let { it.substringAfterLast('/').ifBlank { it } } ?: "n/a"
-    val joinedIds = joinedByRelay.values.flatten().toSet()
 
     // My groups + friends' groups that live on this relay, de-duped, root-level only.
     val groups = (myGroups + friendsGroups)
@@ -278,7 +278,7 @@ fun RelayPageScreen(
                                                 hasMetadata = dg.hasMetadata,
                                                 relayUrl = dg.relayUrl,
                                                 relayIconUrl = info?.icon,
-                                                isJoined = dg.meta.id in joinedIds,
+                                                isJoined = joinedByRelay.isJoinedOn(dg.relayUrl, dg.meta.id),
                                                 onClick = { onOpenGroup(dg.relayUrl, dg.meta.id) },
                                             )
                                         }

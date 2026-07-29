@@ -60,6 +60,7 @@ import org.nostr.nostrord.ui.components.onboarding.FollowSuggestionRow
 import org.nostr.nostrord.ui.navigation.HomeTab
 import org.nostr.nostrord.ui.screens.onboarding.onboardingFollowSuggestions
 import org.nostr.nostrord.ui.theme.NostrordColors
+import org.nostr.nostrord.utils.isJoinedOn
 
 private val FILTERS = listOf("My groups", "From friends", "Recommended", "People")
 
@@ -107,9 +108,9 @@ fun HomePageScreen(
     val recommendedGroupsLoading by vm.recommendedGroupsLoading.collectAsState()
     val relayMetadata by vm.relayMetadata.collectAsState()
     val dmEnabled by AppModule.dmSettings.dmEnabled.collectAsState()
-    // Group ids you're a member of, to flag the "Joined" badge on cards in mixed lists.
+    // Membership per (relay, id), to flag the "Joined" badge on cards in mixed lists: ids
+    // repeat across relays, so a flat id match badges a group you never joined.
     val joinedGroupsByRelay by AppModule.nostrRepository.joinedGroupsByRelay.collectAsState()
-    val joinedIds = joinedGroupsByRelay.values.flatten().toSet()
     // Active tab is owned by the router; selecting routes (mirror) instead of local state.
     val filter = tab.ordinal
     // Each tab is its own screen; carrying the filter text across tabs is confusing, so reset it.
@@ -346,7 +347,7 @@ fun HomePageScreen(
                                                 hasMetadata = group.hasMetadata,
                                                 relayUrl = group.relayUrl,
                                                 relayIconUrl = relayMetadata[group.relayUrl]?.icon,
-                                                isJoined = group.meta.id in joinedIds,
+                                                isJoined = joinedGroupsByRelay.isJoinedOn(group.relayUrl, group.meta.id),
                                                 onRelayClick = { onOpenRelay(group.relayUrl) },
                                                 onClick = { onOpenGroup(JoinedGroup(group.relayUrl, group.meta)) },
                                             )
@@ -415,7 +416,7 @@ fun HomePageScreen(
                                                 hasMetadata = fg.hasMetadata,
                                                 relayUrl = fg.relayUrl,
                                                 relayIconUrl = relayMetadata[fg.relayUrl]?.icon,
-                                                isJoined = fg.meta.id in joinedIds,
+                                                isJoined = joinedGroupsByRelay.isJoinedOn(fg.relayUrl, fg.meta.id),
                                                 onRelayClick = { onOpenRelay(fg.relayUrl) },
                                                 onClick = { onOpenGroup(JoinedGroup(fg.relayUrl, fg.meta)) },
                                             )
@@ -461,7 +462,7 @@ fun HomePageScreen(
                                             hasMetadata = group.hasMetadata,
                                             relayUrl = group.relayUrl,
                                             relayIconUrl = relayMetadata[group.relayUrl]?.icon,
-                                            isJoined = group.meta.id in joinedIds,
+                                            isJoined = joinedGroupsByRelay.isJoinedOn(group.relayUrl, group.meta.id),
                                             onRelayClick = { onOpenRelay(group.relayUrl) },
                                             onClick = { onOpenGroup(JoinedGroup(group.relayUrl, group.meta)) },
                                         )

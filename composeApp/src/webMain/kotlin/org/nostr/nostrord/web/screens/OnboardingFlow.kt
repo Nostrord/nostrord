@@ -4,6 +4,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.screens.home.DiscoverGroup
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
 import org.nostr.nostrord.ui.screens.onboarding.onboardingFollowSuggestions
+import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
@@ -246,7 +247,8 @@ private val GroupsStep =
         val friendsGroupsResolving = useStateFlow(vm.friendsGroupsResolving)
         val relayMeta = useStateFlow(vm.relayMetadata)
         val following = useStateFlow(AppModule.nostrRepository.following)
-        val joinedIds = useStateFlow(AppModule.nostrRepository.joinedGroupsByRelay).values.flatten().toSet()
+        // Per (relay, id): a same-id group joined on another relay is not this one.
+        val joinedByRelay = useStateFlow(AppModule.nostrRepository.joinedGroupsByRelay)
 
         // Re-fire as the contact list resolves: a fresh login often reaches this step before
         // kind:3 arrives, so the first call requests nothing; keying on [following] picks up the
@@ -334,7 +336,7 @@ private val GroupsStep =
                         discoverGroupCard(
                             fg,
                             relayMeta[fg.relayUrl]?.icon,
-                            fg.meta.id in joinedIds,
+                            joinedByRelay.isJoinedOn(fg.relayUrl, fg.meta.id),
                             enableRelayLink = false,
                             showJoinCta = true,
                             interactive = false,

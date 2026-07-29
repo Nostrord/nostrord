@@ -79,6 +79,47 @@ class GroupViewModelTest {
     }
 
     @Test
+    fun `isJoinedHere ignores the same id joined on another relay`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("dev"))
+
+        val onB = GroupViewModel(fake, "dev", "wss://b")
+        val onA = GroupViewModel(fake, "dev", "wss://a")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, onB.isJoinedHere.value, "joined on another relay is a different group")
+        assertEquals(true, onA.isJoinedHere.value)
+    }
+
+    @Test
+    fun `canAddToMyList offers the way in for a relay-side member absent from the list`() = runTest {
+        val fake = FakeNostrRepository()
+        fake.fakePublicKey = "me"
+        fake._groupMembersByRelay.value = mapOf("wss://b" to mapOf("dev" to listOf("me")))
+
+        val vm = GroupViewModel(fake, "dev", "wss://b")
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(true, vm.canAddToMyList.value)
+
+        vm.addToMyList()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf<Pair<String, String?>>("dev" to "wss://b"), fake.addedToList.toList())
+        assertEquals(false, vm.canAddToMyList.value, "once listed there is nothing to add")
+    }
+
+    @Test
+    fun `pendingInvite ignores an invite held for the same id on another relay`() = runTest {
+        val fake = FakeNostrRepository()
+        fake.pendingGroupInvitesFlow.value = mapOf("dev" to invite("dev"))
+
+        val vm = GroupViewModel(fake, "dev", "wss://elsewhere")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertNull(vm.pendingInvite.value)
+    }
+
+    @Test
     fun `messages are scoped to the host relay, unstamped ones stay`() = runTest {
         val fake = FakeNostrRepository()
         fun msg(id: String, relay: String?) = org.nostr.nostrord.network.NostrGroupClient.NostrMessage(
@@ -116,10 +157,38 @@ class GroupViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(listOf("alice", "bob"), vmA.groupMembers.value["dev"])
-        // A group the host relay hasn't described yet falls back to the flat map.
+        // Other relays already served this id, so the flat map is one of THEIR lists: a relay
+        // that hasn't answered yet reads absent rather than inheriting it.
         val vmC = GroupViewModel(fake, "dev", "wss://c")
         testDispatcher.scheduler.advanceUntilIdle()
-        assertEquals(listOf("only-b"), vmC.groupMembers.value["dev"])
+        assertNull(vmC.groupMembers.value["dev"])
+    }
+
+    @Test
+    fun `admins are not inherited from a same-id group on another relay`() = runTest {
+        val fake = FakeNostrRepository()
+        // Flat map holds A's admins (last writer wins); B has not served its 39001 yet.
+        fake._groupAdmins.value = mapOf("dev" to listOf("me"))
+        fake._groupAdminsByRelay.value = mapOf("wss://a" to mapOf("dev" to listOf("me")))
+
+        val vmB = GroupViewModel(fake, "dev", "wss://b")
+        val vmA = GroupViewModel(fake, "dev", "wss://a")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertNull(vmB.groupAdmins.value["dev"], "admin on another relay is not admin here")
+        assertEquals(listOf("me"), vmA.groupAdmins.value["dev"])
+    }
+
+    @Test
+    fun `an unclaimed id still falls back to the flat map`() = runTest {
+        val fake = FakeNostrRepository()
+        // Nothing per-relay yet: the flat value is the only data and is unambiguous.
+        fake._groupAdmins.value = mapOf("dev" to listOf("me"))
+
+        val vm = GroupViewModel(fake, "dev", "wss://b")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("me"), vm.groupAdmins.value["dev"])
     }
 
     @Test

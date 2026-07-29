@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Search
@@ -56,6 +57,9 @@ fun GroupHeader(
     relayUrl: String = "",
     groupId: String = "",
     isJoined: Boolean,
+    /** Relay-side member with no entry in our own kind:10009: offer to add it. */
+    canAddToList: Boolean = false,
+    onAddToListClick: () -> Unit = {},
     onJoinClick: (inviteCode: String?) -> Unit,
     onLeaveClick: () -> Unit,
     onTitleClick: () -> Unit = {},
@@ -311,6 +315,32 @@ fun GroupHeader(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Relay grants membership but our list has no entry: one tap reconciles them.
+                // Placed before the join branch, which this state never reaches.
+                if (canAddToList) {
+                    Button(
+                        onClick = onAddToListClick,
+                        colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Primary),
+                        contentPadding =
+                        if (compact) {
+                            PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        } else {
+                            PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Add to my groups",
+                            modifier = Modifier.size(16.dp),
+                        )
+                        if (!compact) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add to my groups", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+
                 if (!isJoined) {
                     val showInviteButton = isClosed || initialInviteCode != null
                     var showInviteModal by remember { mutableStateOf(initialInviteCode != null) }

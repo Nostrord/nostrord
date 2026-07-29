@@ -1186,6 +1186,9 @@ val ChatScreen =
         // raw group.isPublic/isOpen so an outsider sees Private/Closed even before any placeholder.
         val access = useStateFlow(vm.groupAccess)
         val canPost = membership.status == GroupMembership.MEMBER || membership.status == GroupMembership.ADMIN
+        // Relay-side member with no entry in our own kind:10009: readable, postable, but in no
+        // list and no rail. One tap reconciles them.
+        val canAddToMyList = useStateFlow(vm.canAddToMyList)
         val isPendingApproval = membership.status == GroupMembership.PENDING
         val membersResolving = membership.status == GroupMembership.RESOLVING
         val composerPending = isPendingApproval
@@ -1860,6 +1863,15 @@ val ChatScreen =
                                 onClick = { setModal("edit") }
                                 icon(Ic.Settings)
                             }
+                        }
+                    }
+                    if (canAddToMyList && !membersResolving && !isOrphaned) {
+                        button {
+                            className = ClassName("chat-join-btn")
+                            title = "You are a member on this relay but the group is not in your groups"
+                            onClick = { vm.addToMyList() }
+                            icon(Ic.Add)
+                            span { +"Add to my groups" }
                         }
                     }
                     if (!canPost && !membersResolving && !isOrphaned) {

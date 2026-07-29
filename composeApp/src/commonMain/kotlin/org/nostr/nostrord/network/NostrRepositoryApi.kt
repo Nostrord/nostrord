@@ -143,6 +143,13 @@ interface NostrRepositoryApi {
     /** Adopt a pending external add into the joined set and republish kind:10009. */
     suspend fun acceptGroupInvite(groupId: String)
 
+    /**
+     * Put a group [relayUrl] already lists us in into our own kind:10009, with no invite card
+     * involved. Relay-side membership and the list are separate states; this is the manual way
+     * to reconcile them for a group we can read and post in but that no list knows about.
+     */
+    suspend fun addGroupToMyList(groupId: String, relayUrl: String?)
+
     // --- Metadata state ---
     val userMetadata: StateFlow<Map<String, UserMetadata>>
     val cachedEvents: StateFlow<Map<String, CachedEvent>>

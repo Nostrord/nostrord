@@ -55,6 +55,9 @@ fun GroupScreenDesktop(
     connectionStatus: String,
     connectionState: ConnectionManager.ConnectionState,
     isJoined: Boolean,
+    /** Relay-side member with no entry in our own kind:10009: offer to add it. */
+    canAddToList: Boolean = false,
+    onAddToList: () -> Unit = {},
     isAdmin: Boolean = false,
     userMetadata: Map<String, UserMetadata>,
     reactions: Map<String, Map<String, GroupManager.ReactionInfo>> = emptyMap(),
@@ -155,6 +158,8 @@ fun GroupScreenDesktop(
                     relayUrl = relayUrl,
                     groupId = groupId,
                     isJoined = isJoined,
+                    canAddToList = canAddToList,
+                    onAddToListClick = onAddToList,
                     isAdmin = isAdmin,
                     onJoinClick = onJoinGroup,
                     onLeaveClick = onLeaveGroup,
