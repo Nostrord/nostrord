@@ -149,6 +149,15 @@ class AvSpaceViewModel(
         _error.value = null
     }
 
+    /**
+     * Route a render surface to [identity]'s video track. The surface type is per platform
+     * (an HTMLVideoElement on the web, a [org.nostr.nostrord.network.livekit.VideoFrameSink]
+     * in Compose); the engine dispatches on it.
+     */
+    fun attachVideo(identity: String, surface: Any): Boolean = engine.attachVideo(identity, surface)
+
+    fun detachVideo(identity: String, surface: Any) = engine.detachVideo(identity, surface)
+
     override fun onCleared() {
         // The room must be left when the screen goes away, otherwise the relay keeps
         // publishing this user in kind 39004 and the mic stays hot.

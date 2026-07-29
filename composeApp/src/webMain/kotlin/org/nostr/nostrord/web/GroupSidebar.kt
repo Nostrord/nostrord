@@ -23,6 +23,7 @@ import org.nostr.nostrord.web.components.Portal
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.bannerGradientCss
 import org.nostr.nostrord.web.components.icon
+import org.nostr.nostrord.web.modals.AvSpaceModal
 import org.nostr.nostrord.web.modals.CreateGroupModal
 import org.nostr.nostrord.web.modals.ManageGroupModal
 import org.nostr.nostrord.web.modals.MembersModal
@@ -64,6 +65,8 @@ val GroupSidebar =
         val joinedGroupsByRelay = useStateFlow(vm.joinedGroupsByRelay)
         val unreadCounts = useStateFlow(AppModule.nostrRepository.unreadCounts)
         val (showMembers, setShowMembers) = useState { false }
+        val (showSpace, setShowSpace) = useState { false }
+        val liveParticipants = useStateFlow(AppModule.nostrRepository.liveKitParticipants)
         val (showCreateSubgroup, setShowCreateSubgroup) = useState { false }
         val (showManage, setShowManage) = useState { false }
         // Tab the Manage modal opens on: the Members row jumps admins straight to "Members".
@@ -222,6 +225,28 @@ val GroupSidebar =
                         +"Threads"
                     }
                 }
+                // Voice room row (prototype ChannelsSidebar): shown when the group has a
+                // LiveKit space, with the live participant count. The modal is self-contained,
+                // so the sidebar can open the room without routing through the chat pane.
+                if (rootMeta?.hasLiveKit == true) {
+                    val liveCount = liveParticipants[rootId].orEmpty().size
+                    button {
+                        className = ClassName("group-side-row")
+                        onClick = { setShowSpace(true) }
+                        icon(Ic.Mic)
+                        span {
+                            className = ClassName("group-side-row-label")
+                            +"Voice room"
+                        }
+                        if (liveCount > 0) {
+                            span {
+                                className = ClassName("group-side-live-count")
+                                span { className = ClassName("live-dot") }
+                                +"$liveCount"
+                            }
+                        }
+                    }
+                }
                 button {
                     className = ClassName("group-side-row")
                     // Admins manage members in the Manage modal; everyone else sees the roster.
@@ -344,6 +369,13 @@ val GroupSidebar =
         // The sidebar lives inside the mobile nav drawer, whose `transform` would trap a
         // position:fixed overlay inside the drawer; portal these modals to <body> so they cover
         // the viewport.
+        if (showSpace) {
+            AvSpaceModal {
+                groupId = rootId
+                groupName = rootName
+                onClose = { setShowSpace(false) }
+            }
+        }
         if (showMembers) {
             Portal {
                 MembersModal {

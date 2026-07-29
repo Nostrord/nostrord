@@ -41,6 +41,9 @@ actual class MediaEngine actual constructor() {
     private var room: LiveKitRoom? = null
     private var mirrorJob: Job? = null
 
+    /** Frame-forwarding jobs keyed by the sink they feed, cancelled on detach. */
+    private val videoJobs = mutableMapOf<VideoFrameSink, Job>()
+
     private val _connectionState = MutableStateFlow(AvConnectionState.Disconnected)
     actual val connectionState: StateFlow<AvConnectionState> = _connectionState.asStateFlow()
 
@@ -81,6 +84,8 @@ actual class MediaEngine actual constructor() {
         // Called from ViewModel.onCleared, where suspending is not available and leaving must
         // not be skipped: the relay would keep publishing this user in kind:39004 and the
         // microphone would stay hot.
+        videoJobs.values.forEach { it.cancel() }
+        videoJobs.clear()
         runCatching { runBlocking { current.disconnect() } }
         _connectionState.value = AvConnectionState.Disconnected
         _participants.value = emptyList()
@@ -103,10 +108,27 @@ actual class MediaEngine actual constructor() {
     /** No camera on this platform: the JDK has no capture API, so nothing can be published. */
     actual suspend fun setCameraEnabled(enabled: Boolean): Result<Unit> = Result.Error(AppError.Unknown("Camera sharing is not available on desktop yet"))
 
-    /** Video rendering is not wired on desktop; the roster still shows who is publishing. */
-    actual fun attachVideo(identity: String, surface: Any): Boolean = false
+    /**
+     * Start forwarding [identity]'s video frames into [surface], a [VideoFrameSink].
+     *
+     * Returns false while that participant publishes no video; the tile shows its avatar
+     * fallback and re-attaches when the roster reports a track.
+     */
+    actual fun attachVideo(identity: String, surface: Any): Boolean {
+        val sink = surface as? VideoFrameSink ?: return false
+        val frames = room?.videoFrames(identity) ?: return false
+        videoJobs.remove(sink)?.cancel()
+        videoJobs[sink] = scope.launch {
+            frames.collect { frame ->
+                sink.push(VideoFrameSink.RgbaFrame(frame.width, frame.height, frame.rgba))
+            }
+        }
+        return true
+    }
 
-    actual fun detachVideo(identity: String, surface: Any) {}
+    actual fun detachVideo(identity: String, surface: Any) {
+        (surface as? VideoFrameSink)?.let { videoJobs.remove(it)?.cancel() }
+    }
 
     /** Project the room's flows onto the engine's, which is what the shared ViewModel reads. */
     private fun mirror(joined: LiveKitRoom) {

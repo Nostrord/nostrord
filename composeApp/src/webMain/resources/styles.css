@@ -11197,3 +11197,14 @@ button.hierarchy-crumb-item:hover {
     color: var(--color-text-muted);
     font-size: 13px;
 }
+
+/* Sidebar voice-room row: live participant count with the pulsing dot. */
+.group-side-live-count {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xxs);
+    margin-left: auto;
+    color: var(--color-error);
+    font-size: 11px;
+    font-weight: 700;
+}

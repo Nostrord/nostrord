@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -64,6 +65,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
+import org.nostr.nostrord.ui.components.chat.AvSpaceRoom
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
@@ -176,6 +178,8 @@ fun GroupSidebar(
             ?.supportsSubgroups == true
 
     var showMembers by remember { mutableStateOf(false) }
+    var showSpace by remember { mutableStateOf(false) }
+    val liveParticipants by AppModule.nostrRepository.liveKitParticipants.collectAsState()
     var showCreateSubgroup by remember { mutableStateOf(false) }
     var showManage by remember { mutableStateOf(false) }
     // Tab the Manage modal opens on: the Members row jumps admins straight to "Members".
@@ -214,6 +218,16 @@ fun GroupSidebar(
                 label = "Threads",
                 active = route.view == GroupView.Threads && route.groupId == rootId,
             ) { onNavigateGroup(GroupRoute(route.relayUrl, rootId, view = GroupView.Threads)) }
+            // Voice room row (prototype ChannelsSidebar): shown when the group has a LiveKit
+            // space, with the live participant count. The room dialog is self-contained, so
+            // the sidebar opens it without routing through the chat pane.
+            if (rootMeta?.hasLiveKit == true) {
+                val liveCount = liveParticipants[rootId].orEmpty().size
+                SidebarRow(
+                    icon = Icons.Default.Mic,
+                    label = if (liveCount > 0) "Voice room · $liveCount" else "Voice room",
+                ) { showSpace = true }
+            }
             SidebarRow(
                 icon = Icons.Default.People,
                 label = if (memberCount > 0) "Members · $memberCount" else "Members",
@@ -306,6 +320,9 @@ fun GroupSidebar(
         }
     }
 
+    if (showSpace) {
+        AvSpaceRoom(groupId = rootId, onClose = { showSpace = false })
+    }
     if (showMembers) {
         MembersModal(
             groupId = rootId,
