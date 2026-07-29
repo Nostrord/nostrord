@@ -1914,11 +1914,12 @@ val ChatScreen =
                     // subgroup channels, the header cog above.
                 }
 
-                // Live AV space (NIP-29 LiveKit rooms). Shown only while kind:39004 lists
-                // somebody, so an AV-capable group with an empty room stays quiet. Keyed like
-                // every conditional sibling of .chat-main so toggling it never remounts the
-                // message list.
-                if (group.hasLiveKit && liveParticipants.isNotEmpty()) {
+                // Live AV space (NIP-29 LiveKit rooms). Shown for any group carrying the
+                // `livekit` tag, empty room included: the relay creates the room on the first
+                // token request, so an empty room is exactly when someone needs the entry
+                // point. Keyed like every conditional sibling of .chat-main so toggling it
+                // never remounts the message list.
+                if (group.hasLiveKit) {
                     div {
                         key = "live-space-bar"
                         LiveSpaceBar {

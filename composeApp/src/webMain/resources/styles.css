@@ -11181,3 +11181,12 @@ button.hierarchy-crumb-item:hover {
     font-weight: 600;
     cursor: pointer;
 }
+
+/* Empty room: no LIVE badge, so the bar reads as an invitation rather than an alert. */
+.live-space-bar.live-space-idle {
+    background: var(--color-surface-variant);
+}
+
+.live-space-bar.live-space-idle:hover {
+    background: var(--color-hover);
+}

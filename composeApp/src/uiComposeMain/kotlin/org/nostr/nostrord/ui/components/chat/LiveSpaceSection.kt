@@ -45,8 +45,9 @@ private const val AVATAR_STACK = 4
  *
  * The relay publishes the room's occupants as kind 39004, so the roster is readable on every
  * platform. Capture and playback need a LiveKit SDK, which only the web build has, so the
- * sheet here explains that instead of offering a Join button. Renders nothing when the group
- * has no room or the room is empty.
+ * sheet here explains that instead of offering a Join button. Renders nothing unless the group
+ * carries the `livekit` tag; an empty room still shows, since that is when someone would want
+ * to be the first one in.
  */
 @Composable
 fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
@@ -59,7 +60,8 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
     val userMetadata by repo.userMetadata.collectAsState()
     var sheetOpen by remember(groupId) { mutableStateOf(false) }
 
-    if (!hasSpace || participants.isEmpty()) return
+    if (!hasSpace) return
+    val live = participants.isNotEmpty()
 
     fun nameOf(pubkey: String): String {
         val meta = userMetadata[pubkey]
@@ -77,13 +79,15 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Box(
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(NostrordColors.Error.copy(alpha = 0.15f))
-                .padding(horizontal = Spacing.xs, vertical = 2.dp),
-        ) {
-            Text("LIVE", color = NostrordColors.Error, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        if (live) {
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(NostrordColors.Error.copy(alpha = 0.15f))
+                    .padding(horizontal = Spacing.xs, vertical = 2.dp),
+            ) {
+                Text("LIVE", color = NostrordColors.Error, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
         }
         Icon(
             imageVector = Icons.Filled.Mic,
@@ -101,7 +105,11 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = if (participants.size == 1) "1 person" else "${participants.size} people",
+                text = when (participants.size) {
+                    0 -> "Nobody here yet"
+                    1 -> "1 person"
+                    else -> "${participants.size} people"
+                },
                 color = NostrordColors.TextMuted,
                 fontSize = 12.sp,
             )
@@ -124,7 +132,7 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
             containerColor = NostrordColors.Surface,
             title = {
                 Text(
-                    text = "Voice room · ${participants.size} in the room",
+                    text = if (live) "Voice room · ${participants.size} in the room" else "Voice room",
                     color = NostrordColors.TextPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -132,6 +140,13 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    if (!live) {
+                        Text(
+                            text = "Nobody is in the room yet.",
+                            color = NostrordColors.TextSecondary,
+                            fontSize = 14.sp,
+                        )
+                    }
                     participants.forEach { participant ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,

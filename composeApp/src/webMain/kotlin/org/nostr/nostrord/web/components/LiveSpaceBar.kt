@@ -20,21 +20,27 @@ external interface LiveSpaceBarProps : Props {
 private const val AVATAR_STACK = 4
 
 /**
- * In-chat banner for a live NIP-29 AV space: LIVE badge, participant count, a stack of the
- * first few faces and a Join action. Rendered only while the room has someone in it, so an
- * idle AV-capable group shows nothing.
+ * In-chat banner for a NIP-29 AV space: participant count, a stack of the first few faces and
+ * a Join action.
+ *
+ * Shown for every group carrying the `livekit` tag, including an empty room. NIP-29 has no
+ * "open the room" event - the relay creates it lazily on the first token request - so hiding
+ * the empty state would leave nobody able to be the first one in.
  */
 val LiveSpaceBar =
     FC<LiveSpaceBarProps> { props ->
         val count = props.participants.size
+        val live = count > 0
         button {
-            className = ClassName("live-space-bar")
+            className = ClassName(if (live) "live-space-bar" else "live-space-bar live-space-idle")
             onClick = { props.onOpen() }
 
-            span {
-                className = ClassName("live-badge")
-                span { className = ClassName("live-dot") }
-                +"LIVE"
+            if (live) {
+                span {
+                    className = ClassName("live-badge")
+                    span { className = ClassName("live-dot") }
+                    +"LIVE"
+                }
             }
             span {
                 className = ClassName("live-space-icon")
@@ -48,7 +54,11 @@ val LiveSpaceBar =
                 }
                 div {
                     className = ClassName("live-space-sub")
-                    +(if (count == 1) "1 person" else "$count people")
+                    +when (count) {
+                        0 -> "Nobody here yet"
+                        1 -> "1 person"
+                        else -> "$count people"
+                    }
                 }
             }
             div {
@@ -65,7 +75,7 @@ val LiveSpaceBar =
             }
             span {
                 className = ClassName("live-space-join")
-                +"Join"
+                +(if (live) "Join" else "Start")
             }
         }
     }
