@@ -1,6 +1,7 @@
 package org.nostr.nostrord.web.modals
 
 import org.nostr.nostrord.web.components.Ic
+import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.useEscClose
 import react.FC
@@ -28,6 +29,7 @@ val CreateThreadModal =
     FC<CreateThreadModalProps> { props ->
         val (title, setTitle) = useState { "" }
         val (body, setBody) = useState { "" }
+        val (uploadError, setUploadError) = useState<String?> { null }
 
         useEscClose { props.onClose() }
 
@@ -69,14 +71,30 @@ val CreateThreadModal =
                     onChange = { event -> setTitle(event.currentTarget.value) }
                 }
                 div {
-                    className = ClassName("field-label")
+                    className = ClassName("field-label field-label-row")
                     +"Content"
+                    // Attach media to the thread body (rendered inline like chat).
+                    UploadButton {
+                        cls = "thread-compose-attach"
+                        icon = Ic.AttachFile
+                        onUploaded = { up ->
+                            setUploadError(null)
+                            setBody { prev -> if (prev.isBlank()) up.url else "$prev ${up.url}" }
+                        }
+                        onError = { setUploadError(it) }
+                    }
                 }
                 textarea {
                     className = ClassName("modal-textarea")
                     placeholder = "Start a discussion..."
                     value = body
                     onChange = { event -> setBody(event.currentTarget.value) }
+                }
+                uploadError?.let {
+                    div {
+                        className = ClassName("form-error")
+                        +it
+                    }
                 }
 
                 div {

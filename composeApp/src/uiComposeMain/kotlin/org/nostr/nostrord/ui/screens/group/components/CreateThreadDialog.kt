@@ -31,6 +31,7 @@ import androidx.compose.ui.window.DialogProperties
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonVariant
 import org.nostr.nostrord.ui.components.forms.AppField
+import org.nostr.nostrord.ui.components.upload.MessageUploadButton
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
@@ -82,7 +83,16 @@ fun CreateThreadDialog(
                     AppField(value = title, onValueChange = { title = it }, placeholder = "Thread title", modifier = Modifier.fillMaxWidth())
 
                     Spacer(Modifier.height(Spacing.md))
-                    Text("Content", color = NostrordColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Content", color = NostrordColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.weight(1f))
+                        // Attach media to the thread body (rendered inline like chat).
+                        MessageUploadButton(
+                            onUploadComplete = { result ->
+                                body = if (body.isBlank()) result.url else "$body ${result.url}"
+                            },
+                        )
+                    }
                     Spacer(Modifier.height(Spacing.xs))
                     AppField(
                         value = body,
