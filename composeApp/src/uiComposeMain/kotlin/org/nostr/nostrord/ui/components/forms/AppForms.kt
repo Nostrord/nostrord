@@ -87,14 +87,14 @@ fun appFieldTextStyle() = LocalTextStyle.current.copy(fontSize = 14.sp)
  * this, so the input background never drifts per screen.
  */
 @Composable
-fun appFieldColors() = OutlinedTextFieldDefaults.colors(
+fun appFieldColors(container: Color = NostrordColors.BackgroundFloating) = OutlinedTextFieldDefaults.colors(
     focusedTextColor = NostrordColors.TextContent,
     unfocusedTextColor = NostrordColors.TextContent,
     focusedBorderColor = NostrordColors.Primary,
     unfocusedBorderColor = NostrordColors.Divider,
     cursorColor = NostrordColors.Primary,
-    focusedContainerColor = NostrordColors.BackgroundFloating,
-    unfocusedContainerColor = NostrordColors.BackgroundFloating,
+    focusedContainerColor = container,
+    unfocusedContainerColor = container,
     focusedPlaceholderColor = NostrordColors.TextMuted,
     unfocusedPlaceholderColor = NostrordColors.TextMuted,
 )
@@ -135,6 +135,9 @@ fun AppField(
     onImeAction: (() -> Unit)? = null,
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
+    // Fields on a raised surface need one of their own: the default matches the page, so on a
+    // panel painted the same colour the value would read as loose text in a hairline box.
+    containerColor: Color = NostrordColors.BackgroundFloating,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
 ) {
     // Drop the inherited lineHeight (bodyLarge = 24sp): a standalone placeholder Text honors it,
@@ -147,7 +150,7 @@ fun AppField(
             lineHeight = TextUnit.Unspecified,
         )
     val visual = if (masked) PasswordVisualTransformation() else VisualTransformation.None
-    val colors = appFieldColors()
+    val colors = appFieldColors(containerColor)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
@@ -274,6 +277,7 @@ fun AppTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     maxLines: Int = 1,
     enabled: Boolean = true,
+    containerColor: Color = NostrordColors.BackgroundFloating,
     onDone: (() -> Unit)? = null,
     // Opt-in: when set, Escape clears focus and invokes this (filters clear with it).
     onEscape: (() -> Unit)? = null,
@@ -330,6 +334,7 @@ fun AppTextField(
             imeAction = if (onDone != null) ImeAction.Done else ImeAction.Default,
             onImeAction = onDone,
             enabled = enabled,
+            containerColor = containerColor,
         )
         hint?.let { FormHint(it) }
     }
@@ -359,6 +364,7 @@ fun AppSearchField(
     icon: ImageVector? = Icons.Default.Search,
     trailing: (@Composable () -> Unit)? = null,
     autoFocus: Boolean = false,
+    containerColor: Color = NostrordColors.BackgroundFloating,
     onEscape: (() -> Unit)? = null,
     onDone: (() -> Unit)? = null,
 ) {
@@ -385,7 +391,7 @@ fun AppSearchField(
         modifier
             .height(inputHeight)
             .clip(shape)
-            .background(NostrordColors.BackgroundFloating)
+            .background(containerColor)
             .border(1.dp, borderColor, shape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },

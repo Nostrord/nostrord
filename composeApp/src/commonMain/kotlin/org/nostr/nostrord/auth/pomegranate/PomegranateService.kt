@@ -5,6 +5,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -13,9 +14,12 @@ import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -62,6 +66,13 @@ class PomegranateService {
         val central: String,
     )
 
+    /** One operator's reachability, with the transport failure when it is down. */
+    data class OperatorHealth(
+        val url: String,
+        val reachable: Boolean,
+        val detail: String?,
+    )
+
     data class Recovery(
         val token: GoogleToken,
         val account: PomegranateAccount,
@@ -69,8 +80,8 @@ class PomegranateService {
 
     /**
      * First half of the login: Google popup + account existence check. When an account
-     * exists its operators/threshold are fixed server-side; otherwise [finishLogin]
-     * creates one with the default config.
+     * exists its operators/threshold are fixed server-side; otherwise the UI runs its
+     * setup step and passes the chosen config to [finishLogin].
      */
     suspend fun startLogin(
         centralUrl: String = PomegranateConfig.CENTRAL_URL,
@@ -84,17 +95,19 @@ class PomegranateService {
     }
 
     /**
-     * Second half: creates the account when needed (key sharded across the default
-     * operators), ensures a signing profile, and returns the bunker URL to log in with
-     * plus the central origin to persist on the account. Opens no popup.
+     * Second half: creates the account when needed (key sharded across [config]'s
+     * operators, or the defaults when the caller has no setup step), ensures a signing
+     * profile, and returns the bunker URL to log in with plus the central origin to
+     * persist on the account. Opens no popup.
      */
     suspend fun finishLogin(
         started: StartedLogin,
+        config: PomegranateAccountConfig? = null,
         onStatus: (PomegranateStatus) -> Unit,
     ): LoginOutcome {
         if (!started.hasAccount) {
             onStatus(PomegranateStatus.Creating)
-            createAccount(started.central, started.token)
+            createAccount(started.central, started.token, config)
         }
         var profiles = listProfiles(started.central, started.token)
         if (profiles.isEmpty()) {
@@ -120,6 +133,43 @@ class PomegranateService {
         if (account.pubkey != expectedPubkey) throw PomegranatePubkeyMismatchException()
         return Recovery(token, account)
     }
+
+    /**
+     * Probes each operator's registration endpoint with an empty body: a live one answers
+     * (rejecting the unsigned payload), a dead host fails to connect or times out. Run
+     * before creating an account so an operator that is down is named up front instead of
+     * surfacing as a half-finished registration.
+     */
+    suspend fun checkOperators(urls: List<String>): List<OperatorHealth> = coroutineScope {
+        urls
+            .map { url ->
+                async {
+                    val origin = runCatching { normalizePomegranateOrigin(url) }.getOrNull()
+                    if (origin == null) {
+                        OperatorHealth(url, reachable = false, detail = "Invalid URL")
+                    } else {
+                        probeOperator(url, origin)
+                    }
+                }
+            }.awaitAll()
+    }
+
+    private suspend fun probeOperator(
+        url: String,
+        origin: String,
+    ): OperatorHealth = withTimeoutOrNull(OPERATOR_PROBE_TIMEOUT_MS) {
+        try {
+            http.post("$origin/po/register") {
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
+            OperatorHealth(url, reachable = true, detail = null)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            OperatorHealth(url, reachable = false, detail = t.message?.take(120) ?: "No response")
+        }
+    } ?: OperatorHealth(url, reachable = false, detail = "Timed out")
 
     /** Recovers one shard via the operator's Google recovery popup. User gesture required. */
     suspend fun recoverShard(operator: PomegranateOperator): String {
@@ -186,37 +236,46 @@ class PomegranateService {
     }
 
     /**
-     * Creates a new account: generates a key, shards it via the trusted dealer, and
-     * registers with the central server (kind 20445) and every operator (kind 20444).
-     * The key only signs these registration events and is then dropped — it never
-     * exists whole anywhere afterwards.
+     * Creates a new account: shards [config]'s key (a fresh one when absent) via the
+     * trusted dealer and registers with the central server (kind 20445) and every
+     * operator (kind 20444). The key signs only these registration events here and is
+     * then dropped — afterwards it exists whole only in the backup the user saved.
      */
     @OptIn(ExperimentalUuidApi::class)
     private suspend fun createAccount(
         central: String,
         token: GoogleToken,
+        config: PomegranateAccountConfig?,
     ) {
-        val operators = PomegranateConfig.OPERATOR_URLS.map { normalizePomegranateOrigin(it) }
-        check(operators.size >= 2) { "At least 2 operators are required" }
-        val threshold = PomegranateConfig.defaultThreshold(operators.size)
+        val operators = (config?.operators ?: PomegranateConfig.OPERATOR_URLS).map { normalizePomegranateOrigin(it) }
+        check(operators.size >= PomegranateConfig.MIN_OPERATORS) {
+            "At least ${PomegranateConfig.MIN_OPERATORS} operators are required"
+        }
+        val threshold = config?.threshold ?: PomegranateConfig.defaultThreshold(operators.size)
         check(threshold in 1..operators.size) { "Invalid signing threshold" }
         val session = Uuid.random().toString()
 
-        val keyPair = KeyPair.generate()
-        val shards = PomegranateDealer.deal(keyPair.privateKeyHex, threshold, operators.size)
-
-        val regEvent =
-            Event(
-                pubkey = keyPair.publicKeyHex,
-                createdAt = epochSeconds(),
-                kind = KIND_ACCOUNT_REGISTRATION,
-                tags =
-                buildList {
-                    add(listOf("threshold", threshold.toString()))
-                    operators.forEachIndexed { i, op -> add(listOf("operator", op, shards[i].pubShardHex)) }
-                },
-                content = "",
-            ).sign(keyPair)
+        // Key derivation, the trusted dealer and every signature are CPU-bound and none of
+        // them suspend: left on the caller's dispatcher they run on the Android main thread,
+        // which froze the app long enough for a second tap to start a second registration.
+        val (keyPair, shards, regEvent) =
+            withContext(Dispatchers.Default) {
+                val pair = config?.privateKeyHex?.let { KeyPair.fromPrivateKeyHex(it) } ?: KeyPair.generate()
+                val dealt = PomegranateDealer.deal(pair.privateKeyHex, threshold, operators.size)
+                val event =
+                    Event(
+                        pubkey = pair.publicKeyHex,
+                        createdAt = epochSeconds(),
+                        kind = KIND_ACCOUNT_REGISTRATION,
+                        tags =
+                        buildList {
+                            add(listOf("threshold", threshold.toString()))
+                            operators.forEachIndexed { i, op -> add(listOf("operator", op, dealt[i].pubShardHex)) }
+                        },
+                        content = "",
+                    ).sign(pair)
+                Triple(pair, dealt, event)
+            }
         val regRes =
             http.post("$central/register") {
                 contentType(ContentType.Application.Json)
@@ -224,41 +283,67 @@ class PomegranateService {
                 header("X-Pomegranate-Session", session)
                 setBody(regEvent.toJsonString())
             }
-        if (regRes.status.value != 200) throw Exception("Central server registration failed")
+        // Carry the server's own words: "registration failed" alone left a re-register
+        // after a disconnect undiagnosable.
+        if (regRes.status == HttpStatusCode.Conflict) {
+            throw Exception(
+                "The central server is already registering an account for this Google login. " +
+                    "Wait a few seconds and try again.",
+            )
+        }
+        if (regRes.status.value != 200) {
+            throw Exception("Central server registration failed (${regRes.status.value}): ${regRes.errorDetail()}")
+        }
 
-        // Operators in parallel; a few may fail — the account works as long as at
-        // least `threshold` of them hold their shard.
-        val registered =
+        // Operators in parallel; a few may fail — the account works as long as at least
+        // `threshold` of them hold their shard. Each attempt is time-boxed: an operator
+        // whose host hangs (no TCP reset, no response) would otherwise stall the whole
+        // registration behind awaitAll.
+        val results =
             coroutineScope {
                 operators
                     .mapIndexed { i, operator ->
                         async {
                             val event =
-                                Event(
-                                    pubkey = keyPair.publicKeyHex,
-                                    createdAt = epochSeconds(),
-                                    kind = KIND_OPERATOR_REGISTRATION,
-                                    tags = listOf(listOf("central", central), listOf("email", token.email)),
-                                    content = shards[i].shardHex,
-                                ).sign(keyPair)
-                            try {
-                                http
-                                    .post("$operator/po/register") {
-                                        contentType(ContentType.Application.Json)
-                                        header("X-Pomegranate-Operator-Token", operatorToken(session, operator))
-                                        setBody(event.toJsonString())
-                                    }.status.isSuccess()
-                            } catch (c: CancellationException) {
-                                throw c
-                            } catch (_: Throwable) {
-                                false
-                            }
+                                withContext(Dispatchers.Default) {
+                                    Event(
+                                        pubkey = keyPair.publicKeyHex,
+                                        createdAt = epochSeconds(),
+                                        kind = KIND_OPERATOR_REGISTRATION,
+                                        tags = listOf(listOf("central", central), listOf("email", token.email)),
+                                        content = shards[i].shardHex,
+                                    ).sign(keyPair)
+                                }
+                            val ok =
+                                withTimeoutOrNull(OPERATOR_REGISTER_TIMEOUT_MS) {
+                                    try {
+                                        http
+                                            .post("$operator/po/register") {
+                                                contentType(ContentType.Application.Json)
+                                                header("X-Pomegranate-Operator-Token", operatorToken(session, operator))
+                                                setBody(event.toJsonString())
+                                            }.status.isSuccess()
+                                    } catch (c: CancellationException) {
+                                        throw c
+                                    } catch (_: Throwable) {
+                                        false
+                                    }
+                                } ?: false
+                            operator to ok
                         }
                     }.awaitAll()
-                    .count { it }
             }
+        val registered = results.count { it.second }
         if (registered < threshold) {
-            throw Exception("Could not register with enough operators ($registered/$threshold). Please try again.")
+            // Roll the central registration back. Left in place it would be found by the
+            // next sign-in as an existing account whose key can never reach a signing
+            // quorum, so login would succeed and every signature then fail.
+            runCatching { http.delete("$central/account") { header("Authorization", "Token ${token.raw}") } }
+            val unreachable = results.filterNot { it.second }.joinToString { pomegranateOperatorLabel(it.first) }
+            throw Exception(
+                "Only $registered of $threshold operators accepted a shard, so the account was not created. " +
+                    "Not accepted by: $unreachable. Remove them under Advanced options and try again.",
+            )
         }
     }
 
@@ -288,7 +373,9 @@ class PomegranateService {
                 header("Authorization", "Token ${token.raw}")
                 setBody("""{"name":"$name"}""")
             }
-        if (!res.status.isSuccess()) throw Exception("Signing profile creation failed")
+        if (!res.status.isSuccess()) {
+            throw Exception("Signing profile creation failed (${res.status.value}): ${res.errorDetail()}")
+        }
         val profile =
             try {
                 json.decodeFromString<PomegranateProfile>(res.bodyAsText())
@@ -346,7 +433,20 @@ class PomegranateService {
         const val KIND_ACCOUNT_REGISTRATION = 20445
         const val KIND_OPERATOR_REGISTRATION = 20444
         const val TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000L
+
+        /** Per-operator budget for accepting a shard; a dead host must not hold up the rest. */
+        const val OPERATOR_REGISTER_TIMEOUT_MS = 20_000L
+
+        /** Health probes run while the user reads the setup step, so they give up sooner. */
+        const val OPERATOR_PROBE_TIMEOUT_MS = 8_000L
     }
+}
+
+/** The server's error text, trimmed to something a UI line can carry. */
+private suspend fun HttpResponse.errorDetail(): String = try {
+    bodyAsText().trim().take(200).ifBlank { status.description }
+} catch (_: Exception) {
+    status.description
 }
 
 /** Normalizes a central/operator URL to its origin (scheme://host[:port], no path). */

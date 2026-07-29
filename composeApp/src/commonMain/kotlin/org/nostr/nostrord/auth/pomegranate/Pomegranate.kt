@@ -16,7 +16,11 @@ object PomegranateConfig {
     /** Central coordinator: verifies the Google sign-in and relays NIP-46 signing to the operators. */
     const val CENTRAL_URL = "https://auth.njump.me"
 
-    /** Recommended shard operators (public promenade infra, mirrors Jumble's defaults). */
+    /**
+     * Recommended shard operators (the public promenade instances). Any of them can be
+     * offline at a given moment, so the setup step probes them and registration tolerates
+     * the ones that fail.
+     */
     val OPERATOR_URLS =
         listOf(
             "https://po.jumble.social",
@@ -26,11 +30,42 @@ object PomegranateConfig {
             "https://po.nostrver.se",
         )
 
+    /** With one operator the whole key would sit on a single server, so two is the floor. */
+    const val MIN_OPERATORS = 2
+
     /**
      * ceil(n * 7/12): a little over half, so signing tolerates a few operators being
      * offline while no small subset can sign on its own.
      */
     fun defaultThreshold(operatorCount: Int): Int = (operatorCount * 7 + 11) / 12
+}
+
+/**
+ * What a new account is created with, chosen by the user in the setup step: the key they
+ * just backed up, the operators that hold its shards, and how many must sign.
+ */
+data class PomegranateAccountConfig(
+    val operators: List<String>,
+    val threshold: Int,
+    val privateKeyHex: String,
+)
+
+/** Host of an operator URL, for display (`https://po.f7z.io` -> `po.f7z.io`). */
+fun pomegranateOperatorLabel(url: String): String = url.trim().trimEnd('/').substringAfter("://")
+
+/** Normalized operator origin, or null when [raw] is not a usable URL. */
+fun pomegranateOperatorUrlOrNull(raw: String): String? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty() || trimmed.any { it.isWhitespace() }) return null
+    val origin =
+        try {
+            normalizePomegranateOrigin(trimmed)
+        } catch (_: Exception) {
+            return null
+        }
+    val host = origin.substringAfter("://").substringBefore(':')
+    val validHost = host == "localhost" || (host.contains('.') && !host.startsWith('.') && !host.endsWith('.'))
+    return origin.takeIf { validHost }
 }
 
 /** Google auth token minted by the central server's popup; the server honors it for 24h. */

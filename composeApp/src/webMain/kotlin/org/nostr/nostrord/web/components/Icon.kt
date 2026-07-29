@@ -212,6 +212,7 @@ enum class Ic(val d: String) {
         "M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z",
     ),
     Download("M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"),
+    Remove("M19 13H5v-2h14v2z"),
 }
 
 /** Render a Material icon as inline SVG (24×24 viewBox); colour/size come from CSS (`fill: currentColor`). */

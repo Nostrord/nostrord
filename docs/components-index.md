@@ -130,6 +130,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `JoinWithCodeModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinWithCodeModal.kt | Join-with-invite-code modal — web port of the Compose InviteCodeJoinModal |
 | `ManageGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ManageGroupModal.kt | Unified admin "Manage group" modal (port of the prototype GroupManage): a left tab |
 | `MembersModal` | webMain/kotlin/org/nostr/nostrord/web/modals/MembersModal.kt | Read-only member roster (port of the prototype GroupPanels "Members" panel): avatar + |
+| `PomegranateDisconnectModal` | webMain/kotlin/org/nostr/nostrord/web/modals/PomegranateDisconnectModal.kt | Confirmation for unlinking a Login-with-Google account from its central server. The |
 | `Portal` | webMain/kotlin/org/nostr/nostrord/web/components/Portal.kt | Renders its children into `<body>` through a React portal, so they escape any ancestor that |
 | `ReportUserModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ReportUserModal.kt | NIP-56 report modal (prototype ReportModal): reason radio cards, optional note, |
 | `ShareGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ShareGroupModal.kt | Share-group modal — real port of the Compose ShareGroupModal: a single cycling identifier field |

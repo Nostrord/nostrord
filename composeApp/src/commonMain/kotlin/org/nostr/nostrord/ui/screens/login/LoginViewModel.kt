@@ -9,9 +9,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.nostr.nostrord.auth.Account
+import org.nostr.nostrord.auth.pomegranate.PomegranateAccountConfig
 import org.nostr.nostrord.auth.pomegranate.PomegranateConfig
 import org.nostr.nostrord.auth.pomegranate.PomegranateService
 import org.nostr.nostrord.auth.pomegranate.PomegranateStatus
@@ -287,24 +289,42 @@ class LoginViewModel(
     val isGoogleLoginAvailable: Boolean get() = pomegranate.isAvailable
 
     /**
-     * Login with Google via the pomegranate threshold signer. The popup mints a token,
-     * a first login creates the account (key sharded across operators), and the
-     * resulting `bunker://` URL rides the normal NIP-46 login. The central URL is
-     * persisted per account so settings can offer nsec export / disconnect. Must be
-     * called from a click handler; a popup opened outside a user gesture is blocked.
+     * Non-null while the Google flow waits on the "Create your account" step: this Google
+     * identity has no account yet, so the user backs up the generated key and can review
+     * the operators before anything is registered.
+     */
+    private val _googleSetup = MutableStateFlow<GoogleAccountSetup?>(null)
+    val googleSetup: StateFlow<GoogleAccountSetup?> = _googleSetup.asStateFlow()
+
+    /** The authenticated Google token the setup step will create the account with. */
+    private var startedGoogleLogin: PomegranateService.StartedLogin? = null
+
+    private var operatorCheckJob: Job? = null
+    private var createAccountJob: Job? = null
+
+    /**
+     * Login with Google via the pomegranate threshold signer. The popup mints a token; an
+     * existing account logs straight in over the resulting `bunker://` URL, a first-time
+     * one stops at [googleSetup] and finishes in [createGoogleAccount]. Must be called
+     * from a click handler; a popup opened outside a user gesture is blocked.
      */
     fun loginWithGoogle(
         centralUrl: String = PomegranateConfig.CENTRAL_URL,
         onStatus: (PomegranateStatus) -> Unit,
+        onNewAccount: () -> Unit = {},
         onResult: (Result<Unit>) -> Unit,
     ) {
         viewModelScope.launch {
             try {
                 val started = pomegranate.startLogin(centralUrl, onStatus = onStatus)
-                val outcome = pomegranate.finishLogin(started, onStatus)
-                onStatus(PomegranateStatus.Connecting)
-                val pubkey = repo.loginWithBunker(outcome.bunkerUrl).toKotlinResult().getOrThrow()
-                SecureStorage.savePomegranateCentralFor(pubkey, outcome.central)
+                if (!started.hasAccount) {
+                    startedGoogleLogin = started
+                    _googleSetup.value = newGoogleSetup()
+                    onNewAccount()
+                    return@launch
+                }
+                // Existing account: its operators are fixed server-side, nothing to configure.
+                finishGoogleLogin(started, config = null, onStatus = onStatus)
                 onResult(Result.success(Unit))
             } catch (c: CancellationException) {
                 throw c
@@ -313,6 +333,127 @@ class LoginViewModel(
                 onResult(Result.failure(t))
             }
         }
+    }
+
+    /**
+     * Registers the new account with the key and operator config in [googleSetup], then
+     * logs in with it. Reuses the token from [loginWithGoogle], so no second Google popup.
+     */
+    fun createGoogleAccount(
+        onStatus: (PomegranateStatus) -> Unit,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        val started = startedGoogleLogin
+        val setup = _googleSetup.value
+        if (started == null || setup == null) {
+            onResult(Result.failure(IllegalStateException("Sign in with Google again to continue")))
+            return
+        }
+        // The button disables itself, but a frozen frame can still queue a second tap, and a
+        // second /register races the first into a 409 from the central.
+        if (createAccountJob?.isActive == true) return
+        createAccountJob = viewModelScope.launch {
+            try {
+                finishGoogleLogin(started, setup.toConfig(), onStatus)
+                onResult(Result.success(Unit))
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                onResult(Result.failure(t))
+            }
+        }
+    }
+
+    /** Leaves the setup step (Back); the next attempt signs in with Google again. */
+    fun cancelGoogleSetup() {
+        operatorCheckJob?.cancel()
+        operatorCheckJob = null
+        startedGoogleLogin = null
+        _googleSetup.value = null
+    }
+
+    /** Replaces the offered key with a fresh one; the shown nsec is what gets registered. */
+    fun regenerateGoogleKey() {
+        _googleSetup.update { current ->
+            current?.let { newGoogleSetup(it.operators, it.threshold).copy(operatorStatus = it.operatorStatus) }
+        }
+    }
+
+    /**
+     * Shards an identity the user already has instead of the generated one: they paste its
+     * nsec or hex and the account is created for that pubkey. Returns the error message
+     * when the input is not a usable key. An ncryptsec is rejected here — it needs its
+     * password, which the private-key login handles.
+     */
+    fun importGoogleKey(input: String): String? {
+        if (_googleSetup.value == null) return null
+        val hex = parsePrivateKeyHex(input) ?: return "Enter a valid nsec or 64-character hex key"
+        _googleSetup.update { it?.withImportedKey(hex, Nip19.encodeNsec(hex)) }
+        return null
+    }
+
+    /** Adds an operator to the new account; returns the error message when it can't be added. */
+    fun addGoogleOperator(raw: String): String? {
+        val setup = _googleSetup.value ?: return null
+        val next = setup.withOperatorAdded(raw)
+        next.getOrNull()?.let {
+            _googleSetup.value = it
+            checkGoogleOperators()
+        }
+        return next.exceptionOrNull()?.message
+    }
+
+    /**
+     * Probes the listed operators so a host that is down is named in the setup step rather
+     * than surfacing as a failed registration. The screens run it when the step opens and
+     * after an operator is added; it is also the Retry action on the warning.
+     */
+    fun checkGoogleOperators() {
+        val setup = _googleSetup.value ?: return
+        operatorCheckJob?.cancel()
+        _googleSetup.value = setup.checking()
+        operatorCheckJob =
+            viewModelScope.launch {
+                val results =
+                    pomegranate.checkOperators(setup.operators).associate { health ->
+                        health.url to
+                            if (health.reachable) {
+                                GoogleAccountSetup.OperatorStatus.Reachable
+                            } else {
+                                GoogleAccountSetup.OperatorStatus.Unreachable
+                            }
+                    }
+                _googleSetup.update { it?.withStatuses(results) }
+            }
+    }
+
+    fun removeGoogleOperator(url: String) {
+        _googleSetup.update { it?.withOperatorRemoved(url) }
+    }
+
+    fun setGoogleThreshold(value: Int) {
+        _googleSetup.update { it?.withThreshold(value) }
+    }
+
+    private fun newGoogleSetup(
+        operators: List<String> = PomegranateConfig.OPERATOR_URLS,
+        threshold: Int = PomegranateConfig.defaultThreshold(operators.size),
+    ): GoogleAccountSetup {
+        val hex = generateNewKeyHex()
+        return GoogleAccountSetup(hex, Nip19.encodeNsec(hex), operators, threshold)
+    }
+
+    /** Creates the account when needed, logs in over its bunker URL, and clears the setup step. */
+    private suspend fun finishGoogleLogin(
+        started: PomegranateService.StartedLogin,
+        config: PomegranateAccountConfig?,
+        onStatus: (PomegranateStatus) -> Unit,
+    ) {
+        val outcome = pomegranate.finishLogin(started, config, onStatus)
+        onStatus(PomegranateStatus.Connecting)
+        val pubkey = repo.loginWithBunker(outcome.bunkerUrl).toKotlinResult().getOrThrow()
+        SecureStorage.savePomegranateCentralFor(pubkey, outcome.central)
+        cancelGoogleSetup()
     }
 
     fun startQrSession(
