@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -190,6 +192,7 @@ private fun AvSpaceRoomDialog(
     val participants by vm.participants.collectAsState()
     val connection by vm.connectionState.collectAsState()
     val micOn by vm.micEnabled.collectAsState()
+    val cameraOn by vm.cameraEnabled.collectAsState()
     val error by vm.error.collectAsState()
 
     val connected = connection == AvConnectionState.Connected
@@ -317,6 +320,12 @@ private fun AvSpaceRoomDialog(
                                 icon = if (micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
                                 label = if (micOn) "Mute" else "Unmute",
                                 onClick = { vm.toggleMic() },
+                            )
+                            ControlButton(
+                                active = cameraOn,
+                                icon = if (cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
+                                label = if (cameraOn) "Turn camera off" else "Turn camera on",
+                                onClick = { vm.toggleCamera() },
                             )
                             Box(
                                 modifier = Modifier

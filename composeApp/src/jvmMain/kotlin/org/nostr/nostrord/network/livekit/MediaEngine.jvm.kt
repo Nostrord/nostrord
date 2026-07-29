@@ -1,9 +1,11 @@
 package org.nostr.nostrord.network.livekit
 
+import io.github.nostrord.livekit.CameraCapture
 import io.github.nostrord.livekit.LiveKitRoom
 import io.github.nostrord.livekit.Participant
 import io.github.nostrord.livekit.PlatformAudio
 import io.github.nostrord.livekit.RoomState
+import io.github.nostrord.livekit.VideoPublication
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -21,8 +23,9 @@ import org.nostr.nostrord.utils.networkClientDispatcher
  * Desktop AV transport, backed by livekit-kmp over WebRTC.
  *
  * Audio belongs to WebRTC's device module, so no PCM is pumped from here and echo cancellation
- * runs against the real device loop. Video is receive-only: the JDK has no camera API, so this
- * build publishes nothing.
+ * runs against the real device loop. The camera rides an ffmpeg subprocess, the one capture
+ * stack a JVM desktop has; without ffmpeg installed the camera reports unavailable and
+ * everything else keeps working.
  */
 actual class MediaEngine actual constructor() {
     actual val isSupported: Boolean = true
@@ -43,6 +46,12 @@ actual class MediaEngine actual constructor() {
 
     /** Frame-forwarding jobs keyed by the sink they feed, cancelled on detach. */
     private val videoJobs = mutableMapOf<VideoFrameSink, Job>()
+
+    private var cameraPublication: VideoPublication? = null
+    private var cameraCapture: CameraCapture? = null
+
+    /** Sinks showing the local camera preview; fed straight from the capture pump. */
+    private val localPreviewSinks = mutableSetOf<VideoFrameSink>()
 
     private val _connectionState = MutableStateFlow(AvConnectionState.Disconnected)
     actual val connectionState: StateFlow<AvConnectionState> = _connectionState.asStateFlow()
@@ -84,6 +93,9 @@ actual class MediaEngine actual constructor() {
         // Called from ViewModel.onCleared, where suspending is not available and leaving must
         // not be skipped: the relay would keep publishing this user in kind:39004 and the
         // microphone would stay hot.
+        stopCamera()
+        cameraPublication = null
+        synchronized(localPreviewSinks) { localPreviewSinks.clear() }
         videoJobs.values.forEach { it.cancel() }
         videoJobs.clear()
         runCatching { runBlocking { current.disconnect() } }
@@ -106,7 +118,52 @@ actual class MediaEngine actual constructor() {
     }
 
     /** No camera on this platform: the JDK has no capture API, so nothing can be published. */
-    actual suspend fun setCameraEnabled(enabled: Boolean): Result<Unit> = Result.Error(AppError.Unknown("Camera sharing is not available on desktop yet"))
+    actual suspend fun setCameraEnabled(enabled: Boolean): Result<Unit> {
+        val current = room ?: return Result.Error(AppError.Unknown("Join the room before using the camera"))
+        if (!enabled) {
+            stopCamera()
+            cameraPublication?.setMuted(true)
+            _cameraEnabled.value = false
+            return Result.Success(Unit)
+        }
+        val capture = CameraCapture.open(CAMERA_WIDTH, CAMERA_HEIGHT)
+            ?: return Result.Error(
+                AppError.Unknown(
+                    if (CameraCapture.ffmpegAvailable) {
+                        "No camera was found on this computer"
+                    } else {
+                        "Camera sharing needs ffmpeg installed"
+                    },
+                ),
+            )
+        return try {
+            val publication = cameraPublication
+                ?: current.publishVideo(CAMERA_WIDTH, CAMERA_HEIGHT).also { cameraPublication = it }
+            publication.setMuted(false)
+            capture.start { rgba, timestampUs ->
+                publication.source.capture(CAMERA_WIDTH, CAMERA_HEIGHT, rgba, timestampUs)
+                if (localPreviewSinks.isNotEmpty()) {
+                    // The pump reuses its buffer, so the preview needs its own copy.
+                    val frame = VideoFrameSink.RgbaFrame(CAMERA_WIDTH, CAMERA_HEIGHT, rgba.copyOf())
+                    synchronized(localPreviewSinks) { localPreviewSinks.forEach { it.push(frame) } }
+                }
+            }
+            cameraCapture = capture
+            _cameraEnabled.value = true
+            Result.Success(Unit)
+        } catch (e: CancellationException) {
+            capture.stop()
+            throw e
+        } catch (e: Throwable) {
+            capture.stop()
+            Result.Error(AppError.Unknown(e.message ?: "Could not start the camera"))
+        }
+    }
+
+    private fun stopCamera() {
+        cameraCapture?.stop()
+        cameraCapture = null
+    }
 
     /**
      * Start forwarding [identity]'s video frames into [surface], a [VideoFrameSink].
@@ -116,6 +173,13 @@ actual class MediaEngine actual constructor() {
      */
     actual fun attachVideo(identity: String, surface: Any): Boolean {
         val sink = surface as? VideoFrameSink ?: return false
+        // The local participant's own tile: fed from the capture pump, not from a stream —
+        // LiveKit does not loop your published track back to you.
+        if (identity == localIdentity()) {
+            if (!_cameraEnabled.value) return false
+            synchronized(localPreviewSinks) { localPreviewSinks.add(sink) }
+            return true
+        }
         val frames = room?.videoFrames(identity) ?: return false
         videoJobs.remove(sink)?.cancel()
         videoJobs[sink] = scope.launch {
@@ -127,8 +191,12 @@ actual class MediaEngine actual constructor() {
     }
 
     actual fun detachVideo(identity: String, surface: Any) {
-        (surface as? VideoFrameSink)?.let { videoJobs.remove(it)?.cancel() }
+        val sink = surface as? VideoFrameSink ?: return
+        synchronized(localPreviewSinks) { localPreviewSinks.remove(sink) }
+        videoJobs.remove(sink)?.cancel()
     }
+
+    private fun localIdentity(): String? = room?.participants?.value?.firstOrNull { it.isLocal }?.identity
 
     /** Project the room's flows onto the engine's, which is what the shared ViewModel reads. */
     private fun mirror(joined: LiveKitRoom) {
@@ -137,12 +205,20 @@ actual class MediaEngine actual constructor() {
             launch { joined.microphoneEnabled.collect { _micEnabled.value = it } }
             launch {
                 joined.participants.collect { people ->
-                    _participants.value = people.map { it.toAvParticipant() }
+                    _participants.value = people.map { person ->
+                        val mapped = person.toAvParticipant()
+                        // Subscription events only describe remote tracks; the local camera
+                        // state is this engine's own.
+                        if (person.isLocal) mapped.copy(cameraEnabled = _cameraEnabled.value, micEnabled = _micEnabled.value) else mapped
+                    }
                 }
             }
         }
     }
 }
+
+private const val CAMERA_WIDTH = 960
+private const val CAMERA_HEIGHT = 540
 
 private fun RoomState.toAvState(): AvConnectionState = when (this) {
     RoomState.Disconnected -> AvConnectionState.Disconnected
