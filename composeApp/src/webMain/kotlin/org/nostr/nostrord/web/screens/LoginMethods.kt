@@ -7,6 +7,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.screens.login.LoginMethod
 import org.nostr.nostrord.ui.screens.login.LoginViewModel
 import org.nostr.nostrord.ui.screens.login.availableLoginMethods
+import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.GoogleLogo
 import org.nostr.nostrord.web.components.Ic
@@ -71,6 +72,14 @@ private fun ChildrenBuilder.methodRow(
     }
 }
 
+private fun googleStatusLabel(status: PomegranateStatus?): String = when (status) {
+    PomegranateStatus.WaitingForGoogle -> "Waiting for Google sign-in…"
+    PomegranateStatus.Checking -> "Checking your account…"
+    PomegranateStatus.Creating -> "Setting up your secure account…"
+    PomegranateStatus.Connecting -> "Connecting…"
+    null -> "Continue with Google"
+}
+
 private fun ChildrenBuilder.benefit(text: String) {
     div {
         className = ClassName("benefit")
@@ -121,6 +130,22 @@ val LoginMethods =
         val (googleStatus, setGoogleStatus) = useState<PomegranateStatus?> { null }
         val (googleCentral, setGoogleCentral) = useState { PomegranateConfig.CENTRAL_URL }
         val (googleAdvanced, setGoogleAdvanced) = useState { false }
+
+        // Non-null once a Google sign-in finds no account: the setup panel replaces the tab.
+        val googleSetup = useStateFlow(vm.googleSetup)
+
+        // Terminal callback of both Google phases (direct login and account creation).
+        fun finishGoogleLogin(result: Result<Unit>) {
+            setBusy(false)
+            setGoogleStatus(null)
+            val err = result.exceptionOrNull()
+            when {
+                err == null -> props.onSuccess()
+                // User dismissed the popup: a cancel, not an error.
+                err is PomegranatePopupClosedException -> {}
+                else -> setError(err.message ?: "Google login failed")
+            }
+        }
 
         // Run a VM auth action. The VM launches on its own scope, so we just react to the
         // callback: success calls onSuccess, failure surfaces the error string.
@@ -287,8 +312,26 @@ val LoginMethods =
                 }
 
                 // "Login with Google" (pomegranate threshold signer), web-only.
-                // The whole flow runs in the VM; this tab only reflects its status.
-                LoginMethod.Google -> {
+                // The whole flow runs in the VM; this tab only reflects its status. A Google
+                // identity with no account yet stops at the setup panel to back up its key.
+                LoginMethod.Google -> if (googleSetup != null) {
+                    GoogleAccountSetupPanel {
+                        this.vm = vm
+                        this.busy = busy
+                        this.createLabel = if (busy) googleStatusLabel(googleStatus) else "Create account"
+                        onCreate = {
+                            if (!busy) {
+                                setError(null)
+                                setBusy(true)
+                                setGoogleStatus(PomegranateStatus.Creating)
+                                vm.createGoogleAccount(
+                                    onStatus = { setGoogleStatus(it) },
+                                    onResult = { result -> finishGoogleLogin(result) },
+                                )
+                            }
+                        }
+                    }
+                } else {
                     div {
                         className = ClassName("ext-content")
                         span {
@@ -313,29 +356,19 @@ val LoginMethods =
                                     vm.loginWithGoogle(
                                         centralUrl = googleCentral,
                                         onStatus = { setGoogleStatus(it) },
-                                    ) { result ->
-                                        setBusy(false)
-                                        setGoogleStatus(null)
-                                        val err = result.exceptionOrNull()
-                                        when {
-                                            err == null -> props.onSuccess()
-                                            // User dismissed the popup: a cancel, not an error.
-                                            err is PomegranatePopupClosedException -> {}
-                                            else -> setError(err.message ?: "Google login failed")
-                                        }
-                                    }
+                                        // New account: the setup panel takes over, so drop the busy state.
+                                        onNewAccount = {
+                                            setBusy(false)
+                                            setGoogleStatus(null)
+                                        },
+                                        onResult = { result -> finishGoogleLogin(result) },
+                                    )
                                 }
                             }
                             if (googleStatus != null) {
                                 span { className = ClassName("btn-spinner") }
                             }
-                            +when (googleStatus) {
-                                PomegranateStatus.WaitingForGoogle -> "Waiting for Google sign-in…"
-                                PomegranateStatus.Checking -> "Checking your account…"
-                                PomegranateStatus.Creating -> "Setting up your secure account…"
-                                PomegranateStatus.Connecting -> "Connecting…"
-                                null -> "Continue with Google"
-                            }
+                            +googleStatusLabel(googleStatus)
                         }
 
                         div {

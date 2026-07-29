@@ -826,7 +826,8 @@ body {
     color: var(--color-text-secondary);
 }
 
-/* Wizard password recommendation card (brand tint; brand is theme-invariant) */
+/* Callout card: brand tint by default, `.alert` for the save-your-key warning
+   (brand and warning are both theme-invariant) */
 .protect-info {
     display: flex;
     align-items: flex-start;
@@ -856,6 +857,16 @@ body {
     margin-top: 2px;
     font-size: 12px;
     color: var(--color-text-secondary);
+}
+
+.protect-info.alert {
+    border-color: rgba(255, 165, 0, 0.4);
+    background: rgba(255, 165, 0, 0.1);
+}
+
+.protect-info.alert .ico,
+.protect-info.alert .protect-info-title {
+    color: var(--color-warning-orange);
 }
 
 .form-divider {
@@ -1189,6 +1200,146 @@ body {
 
 .advanced-apply {
     margin-top: 12px;
+}
+
+/* Google new-account setup: key backup, acknowledgement and operator notes */
+.key-panel {
+    margin-top: 16px;
+    padding: 14px;
+    background: var(--color-floating);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+}
+
+.key-panel-label {
+    margin-bottom: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+}
+
+/* The panel already sits on --color-floating, so its fields need a lighter surface of
+   their own or they read as flat text on the panel. */
+.key-panel .input-group {
+    background: var(--color-input);
+    border-color: var(--color-divider);
+}
+
+.key-panel .input-group:focus-within {
+    border-color: var(--color-primary);
+}
+
+.key-import {
+    margin-top: 10px;
+}
+
+.key-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.key-warning .ico {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
+    color: var(--color-warning-orange);
+}
+
+.key-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.ack-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--color-text-content);
+    cursor: pointer;
+}
+
+.ack-row input[type="checkbox"] {
+    accent-color: var(--color-primary);
+}
+
+.po-operator-note {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
+.po-operator-note .link-inline {
+    margin-left: 6px;
+    vertical-align: baseline;
+}
+
+/* Google new-account setup: operator list + signing threshold */
+.po-section-label {
+    margin-top: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+.po-operator-down {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--color-error);
+}
+
+.po-add-error {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--color-error);
+}
+
+.po-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.po-threshold {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.po-step {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.po-threshold-value {
+    min-width: 24px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-primary);
+}
+
+.po-threshold-desc {
+    font-size: 13px;
+    color: var(--color-text-muted);
 }
 
 .benefits-title {
@@ -4932,6 +5083,17 @@ body {
 }
 
 /* Size and width modifiers */
+
+.btn-sm {
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+}
+
+.btn-sm .ico {
+    width: 14px;
+    height: 14px;
+}
 
 .btn-lg {
     height: 48px;

@@ -3,6 +3,7 @@ package org.nostr.nostrord.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,6 +71,9 @@ fun IdentifierRow(
     ids: List<Identifier>,
     modifier: Modifier = Modifier,
     showQr: Boolean = false,
+    // Same reason as AppField's: on a panel painted the default colour the row would vanish.
+    containerColor: Color = NostrordColors.BackgroundFloating,
+    trailing: @Composable RowScope.() -> Unit = {},
 ) {
     if (ids.isEmpty()) return
     var index by remember(ids) { mutableStateOf(0) }
@@ -85,7 +90,7 @@ fun IdentifierRow(
     }
 
     Column(modifier = modifier) {
-        Surface(shape = NostrordShapes.shapeMedium, color = NostrordColors.BackgroundFloating) {
+        Surface(shape = NostrordShapes.shapeMedium, color = containerColor) {
             // Compact icon buttons + tight spacing to match the web .identifier-field (22px
             // buttons, 6px gap), instead of Material's 48dp touch targets.
             Row(
@@ -95,7 +100,7 @@ fun IdentifierRow(
             ) {
                 Text(
                     id.value,
-                    color = NostrordColors.TextMuted,
+                    color = NostrordColors.TextSecondary,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -136,6 +141,7 @@ fun IdentifierRow(
                         modifier = Modifier.size(16.dp),
                     )
                 }
+                trailing()
             }
         }
         if (showQr && qrOpen) {

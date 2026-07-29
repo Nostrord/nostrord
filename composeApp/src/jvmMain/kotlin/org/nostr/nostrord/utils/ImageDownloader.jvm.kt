@@ -25,7 +25,7 @@ actual fun rememberImageDownloader(): suspend (bytes: ByteArray, fileName: Strin
 }
 
 /** Avoids clobbering an existing file by appending " (1)", " (2)", ... before the extension. */
-private fun uniqueFile(
+internal fun uniqueFile(
     dir: File,
     name: String,
 ): File {
