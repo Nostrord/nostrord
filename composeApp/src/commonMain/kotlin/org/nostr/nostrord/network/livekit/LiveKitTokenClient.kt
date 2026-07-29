@@ -49,8 +49,11 @@ class LiveKitTokenClient(
     private val supportCache = mutableMapOf<String, Boolean>()
 
     /**
-     * Whether [relayUrl] hosts LiveKit rooms. The spec has the relay answer 204; any 2xx is
-     * accepted, since some deployments answer 200 with an empty body.
+     * Whether [relayUrl] hosts LiveKit rooms. The spec has the relay answer 204; a 200 with a
+     * non-HTML body also counts, for deployments that answer empty-200.
+     *
+     * An HTML 200 is explicitly NOT support: most relays serve a catch-all landing page for
+     * unknown paths, which would otherwise read as every relay having AV.
      *
      * Unauthenticated on purpose: it is a capability probe, not a room request.
      */
@@ -58,7 +61,9 @@ class LiveKitTokenClient(
         supportCache[relayUrl]?.let { return it }
         val client = createNip11HttpClient()
         val supported = try {
-            client.get(liveKitSupportUrl(relayUrl)).status.isSuccess()
+            val response = client.get(liveKitSupportUrl(relayUrl))
+            val contentType = response.headers[HttpHeaders.ContentType] ?: ""
+            response.status.isSuccess() && !contentType.contains("text/html", ignoreCase = true)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
