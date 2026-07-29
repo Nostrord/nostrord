@@ -7,8 +7,10 @@ import org.nostr.nostrord.ui.screens.backup.BackupViewModel.ShardStatus
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.IdentifierRow
+import org.nostr.nostrord.web.components.Portal
 import org.nostr.nostrord.web.components.formError
 import org.nostr.nostrord.web.components.icon
+import org.nostr.nostrord.web.modals.PomegranateDisconnectModal
 import react.FC
 import react.Props
 import react.dom.html.ReactHTML.button
@@ -33,7 +35,7 @@ val PomegranateKeySection =
         val export = useStateFlow(vm.pomExport)
         val disconnect = useStateFlow(vm.pomDisconnect)
         val pomError = useStateFlow(vm.pomError)
-        val (disconnectArmed, setDisconnectArmed) = useState { false }
+        val (confirming, setConfirming) = useState { false }
 
         div {
             className = ClassName("settings-card")
@@ -156,7 +158,7 @@ val PomegranateKeySection =
                         "signs with that key locally. Without it the account can no longer sign anything."
                     )
             }
-            if (disconnect is PomegranateDisconnect.Done) {
+            if (disconnect is PomegranateDisconnect.Done && !confirming) {
                 div {
                     className = ClassName("settings-tip")
                     +(
@@ -172,19 +174,20 @@ val PomegranateKeySection =
                     className = ClassName("pom-actions")
                     button {
                         className = ClassName("btn-danger")
-                        disabled = disconnect == PomegranateDisconnect.Working
-                        onClick = {
-                            if (!disconnectArmed) setDisconnectArmed(true) else vm.disconnectPomegranate()
-                        }
-                        if (disconnect == PomegranateDisconnect.Working) {
-                            span { className = ClassName("btn-spinner") }
-                        }
-                        +when {
-                            disconnect == PomegranateDisconnect.Working -> "Disconnecting…"
-                            disconnectArmed -> "Click again to confirm"
-                            else -> "Disconnect from central server"
-                        }
+                        onClick = { setConfirming(true) }
+                        +"Disconnect from central server"
                     }
+                }
+            }
+        }
+
+        // Portaled to <body>: the settings panel this section renders inside establishes a
+        // containing block, which would pin the overlay to the panel instead of the viewport.
+        if (confirming) {
+            Portal {
+                PomegranateDisconnectModal {
+                    this.vm = vm
+                    onClose = { setConfirming(false) }
                 }
             }
         }

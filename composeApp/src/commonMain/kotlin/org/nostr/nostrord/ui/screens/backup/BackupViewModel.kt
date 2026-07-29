@@ -5,12 +5,15 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.nostr.nostrord.auth.AccountManager
+import org.nostr.nostrord.auth.AccountStore
 import org.nostr.nostrord.auth.AuthMethod
 import org.nostr.nostrord.auth.pomegranate.PomegranateOperator
 import org.nostr.nostrord.auth.pomegranate.PomegranatePopupClosedException
@@ -56,6 +59,7 @@ class BackupViewModel(
     private val cryptoDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val pomegranate: PomegranateService = PomegranateService(),
     private val accountManager: AccountManager = AppModule.accountManager,
+    private val accountStore: AccountStore = AppModule.accountStore,
 ) : ViewModel() {
     /** npub (default) / nprofile / hex. Empty when signed out. */
     val publicIds: List<Identifier> =
@@ -186,6 +190,62 @@ class BackupViewModel(
         data class Done(val convertedToLocal: Boolean) : PomegranateDisconnect
     }
 
+    /** Callout shown in the disconnect confirmation; [alert] picks the warning styling. */
+    data class DisconnectNotice(
+        val title: String,
+        val body: String,
+        val alert: Boolean,
+    )
+
+    /**
+     * Confirmation copy, keyed on whether the nsec was exported in this session. With the
+     * key in hand the account converts to a local-key login and the user stays signed in;
+     * without it the account can no longer sign, so it is signed out and only its nsec
+     * (recovered elsewhere) can bring it back.
+     */
+    fun pomDisconnectNotice(keyExported: Boolean): DisconnectNotice = if (keyExported) {
+        DisconnectNotice(
+            title = "You stay signed in",
+            body =
+            "You exported this account's private key, so disconnecting only removes the link to the " +
+                "central server: the account keeps working here and signs with that key locally. Keep " +
+                "your backup of the nsec safe, it is the only way to sign in elsewhere.",
+            alert = false,
+        )
+    } else {
+        DisconnectNotice(
+            title = "Keep your private key safe",
+            body =
+            "Disconnecting only removes the link between this account and the central server. Your " +
+                "account still exists, and you can keep using it by logging in with your private key " +
+                "(nsec). Before continuing, export and safely save your nsec using the \"Export private " +
+                "key\" option: without it here, this account is signed out and cannot sign again.",
+            alert = true,
+        )
+    }
+
+    /** Copy for the finished disconnect, mirroring the two outcomes of [pomDisconnectNotice]. */
+    fun pomDisconnectedNotice(convertedToLocal: Boolean): DisconnectNotice = if (convertedToLocal) {
+        DisconnectNotice(
+            title = "What happens next",
+            body =
+            "This account is no longer linked to the central server. It stays signed in here and " +
+                "signs with the private key you exported.",
+            alert = false,
+        )
+    } else {
+        DisconnectNotice(
+            title = "What happens next",
+            body =
+            "This account is no longer linked to the central server and is being signed out. To keep " +
+                "using it, log in again with your private key (nsec).",
+            alert = false,
+        )
+    }
+
+    /** True once the export flow has reassembled the key, which decides the disconnect outcome. */
+    val pomKeyExported: Boolean get() = _pomExport.value is PomegranateExport.Done
+
     private val _pomExport = MutableStateFlow<PomegranateExport>(PomegranateExport.Idle)
     val pomExport: StateFlow<PomegranateExport> = _pomExport.asStateFlow()
 
@@ -197,6 +257,8 @@ class BackupViewModel(
 
     // Shard hexes recovered so far; wiped on cancel and once the nsec is built.
     private val recoveredShards = mutableListOf<String>()
+
+    private var disconnectJob: Job? = null
 
     /**
      * Starts the nsec export: Google popup + account fetch, then the per-operator
@@ -251,7 +313,8 @@ class BackupViewModel(
                 val done = ops.count { it.status == ShardStatus.Recovered }
                 if (done >= cur.threshold) {
                     val pubkey = repo.getPublicKey() ?: return@launch
-                    val hex = pomegranate.aggregateKeyHex(recoveredShards.toList(), pubkey)
+                    val shardsToAggregate = recoveredShards.toList()
+                    val hex = withContext(cryptoDispatcher) { pomegranate.aggregateKeyHex(shardsToAggregate, pubkey) }
                     recoveredShards.clear()
                     _pomExport.value = PomegranateExport.Done(nsec = Nip19.encodeNsec(hex), hex = hex)
                 } else {
@@ -300,24 +363,67 @@ class BackupViewModel(
         if (_pomDisconnect.value == PomegranateDisconnect.Working) return
         _pomError.value = null
         _pomDisconnect.value = PomegranateDisconnect.Working
-        viewModelScope.launch {
-            try {
-                pomegranate.disconnectAccount(central, pubkey)
-                SecureStorage.clearPomegranateCentralFor(pubkey)
-                val exportedHex = (_pomExport.value as? PomegranateExport.Done)?.hex
-                val converted =
-                    exportedHex != null && accountManager.convertActiveToLocal(exportedHex).isSuccess
-                if (!converted) SecureStorage.markPomegranateDisconnectedFor(pubkey)
-                _pomDisconnect.value = PomegranateDisconnect.Done(convertedToLocal = converted)
-            } catch (c: CancellationException) {
-                throw c
-            } catch (t: Throwable) {
-                _pomDisconnect.value = PomegranateDisconnect.Idle
-                if (t !is PomegranatePopupClosedException) {
-                    _pomError.value = t.message ?: "Could not disconnect from the central server"
+        disconnectJob =
+            viewModelScope.launch {
+                try {
+                    pomegranate.disconnectAccount(central, pubkey)
+                    // Past the server call the account is already unlinked, so the local
+                    // swap has to finish even if the dialog closes: convertActiveToLocal
+                    // ends in reloadForActiveAccount, and cancelling that leaves the
+                    // joined-groups map empty, which reads as onboarding on an account
+                    // that is still signed in.
+                    withContext(NonCancellable) {
+                        SecureStorage.clearPomegranateCentralFor(pubkey)
+                        val exportedHex = (_pomExport.value as? PomegranateExport.Done)?.hex
+                        val converted =
+                            exportedHex != null && accountManager.convertActiveToLocal(exportedHex).isSuccess
+                        if (!converted) SecureStorage.markPomegranateDisconnectedFor(pubkey)
+                        _pomDisconnect.value = PomegranateDisconnect.Done(convertedToLocal = converted)
+                    }
+                } catch (c: CancellationException) {
+                    // Leaving Working behind would wedge the dialog: the button stays on
+                    // "Disconnecting..." and the guard above swallows every later click.
+                    _pomDisconnect.value = PomegranateDisconnect.Idle
+                    throw c
+                } catch (t: Throwable) {
+                    _pomDisconnect.value = PomegranateDisconnect.Idle
+                    _pomError.value =
+                        if (t is PomegranatePopupClosedException) {
+                            "Google sign-in was closed before it finished."
+                        } else {
+                            t.message ?: "Could not disconnect from the central server"
+                        }
                 }
             }
+    }
+
+    /** Abandons a disconnect still waiting on the Google popup (the user left the dialog). */
+    fun cancelPomegranateDisconnect() {
+        // Nothing to abandon once the server call went through; the rest is local cleanup.
+        if (_pomDisconnect.value is PomegranateDisconnect.Done) return
+        disconnectJob?.cancel()
+        disconnectJob = null
+        if (_pomDisconnect.value == PomegranateDisconnect.Working) {
+            _pomDisconnect.value = PomegranateDisconnect.Idle
         }
+        _pomError.value = null
+    }
+
+    /**
+     * Closes the disconnect flow. A converted account signs locally now, so it stays put;
+     * one that never exported its key can no longer sign, so it is removed here (falling
+     * back to another account, or to the login screen) rather than left unusable.
+     */
+    fun finishPomegranateDisconnect(onClosed: () -> Unit = {}) {
+        val done = _pomDisconnect.value as? PomegranateDisconnect.Done
+        val accountId = accountStore.activeId.value
+        if (done == null || done.convertedToLocal || accountId == null) {
+            onClosed()
+            return
+        }
+        // Removal runs on the manager's scope: it outlives this screen, which the
+        // account swap unmounts.
+        accountManager.removeAccountAsync(accountId) { onClosed() }
     }
 
     private fun setShardStatus(

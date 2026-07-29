@@ -118,7 +118,7 @@ private fun PomegranateBackupSection(vm: BackupViewModel) {
     val export by vm.pomExport.collectAsState()
     val disconnect by vm.pomDisconnect.collectAsState()
     val pomError by vm.pomError.collectAsState()
-    var disconnectArmed by remember { mutableStateOf(false) }
+    var confirmingDisconnect by remember { mutableStateOf(false) }
 
     BackupCard {
         FieldLabel("Private key")
@@ -214,7 +214,7 @@ private fun PomegranateBackupSection(vm: BackupViewModel) {
         )
         Spacer(Modifier.height(Spacing.md))
         val done = disconnect as? BackupViewModel.PomegranateDisconnect.Done
-        if (done != null) {
+        if (done != null && !confirmingDisconnect) {
             Text(
                 if (done.convertedToLocal) {
                     "Disconnected from Google. This account now signs with the exported key on this device."
@@ -226,19 +226,16 @@ private fun PomegranateBackupSection(vm: BackupViewModel) {
             )
         } else {
             Button(
-                onClick = { if (!disconnectArmed) disconnectArmed = true else vm.disconnectPomegranate() },
-                enabled = disconnect != BackupViewModel.PomegranateDisconnect.Working,
+                onClick = { confirmingDisconnect = true },
                 colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Error),
             ) {
-                Text(
-                    when {
-                        disconnect == BackupViewModel.PomegranateDisconnect.Working -> "Disconnecting…"
-                        disconnectArmed -> "Click again to confirm"
-                        else -> "Disconnect from central server"
-                    },
-                )
+                Text("Disconnect from central server")
             }
         }
+    }
+
+    if (confirmingDisconnect) {
+        PomegranateDisconnectDialog(vm) { confirmingDisconnect = false }
     }
 }
 
