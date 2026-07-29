@@ -193,8 +193,20 @@ private val ManageInfoSection =
         val (isClosed, setIsClosed) = useState { !group.isOpen }
         val (isRestricted, setIsRestricted) = useState { group.isRestricted }
         val (isHidden, setIsHidden) = useState { group.isHidden }
+        val (hasLiveKit, setHasLiveKit) = useState { group.hasLiveKit }
+        // The relay mints the LiveKit token, so the toggle is only meaningful where the relay
+        // advertises support. Probed once per relay; the answer is cached in the repository.
+        val (avSupported, setAvSupported) = useState { group.hasLiveKit }
         val (busy, setBusy) = useState { false }
         val (error, setError) = useState<String?> { null }
+
+        // A group already carrying the tag keeps the toggle visible regardless of the probe, so
+        // a relay that lost its LiveKit config can still be switched back off.
+        useEffect(group.id) {
+            launchApp {
+                if (AppModule.nostrRepository.relaySupportsAv(group.id)) setAvSupported(true)
+            }
+        }
         val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)
         val relayHost = props.relayUrl.removePrefix("wss://").removePrefix("ws://").trimEnd('/')
         val relayIconUrl =
@@ -257,6 +269,21 @@ private val ManageInfoSection =
         accessToggle(Ic.Send, GroupAccessCopy.RESTRICTED_LABEL, GroupAccessCopy.RESTRICTED_DESC, isRestricted) { setIsRestricted(!isRestricted) }
         accessToggle(Ic.VisibilityOff, GroupAccessCopy.HIDDEN_LABEL, GroupAccessCopy.HIDDEN_DESC, isHidden) { setIsHidden(!isHidden) }
 
+        div {
+            className = ClassName("access-section-title")
+            +"LIVE ROOM"
+        }
+        if (avSupported) {
+            accessToggle(Ic.Mic, GroupAccessCopy.LIVEKIT_LABEL, GroupAccessCopy.LIVEKIT_DESC, hasLiveKit) {
+                setHasLiveKit(!hasLiveKit)
+            }
+        } else {
+            div {
+                className = ClassName("access-unsupported")
+                +GroupAccessCopy.LIVEKIT_UNSUPPORTED
+            }
+        }
+
         if (error != null) {
             div {
                 className = ClassName("modal-error")
@@ -286,6 +313,7 @@ private val ManageInfoSection =
                                     isRestricted = isRestricted,
                                     isHidden = isHidden,
                                     picture = picture.trim().ifBlank { null },
+                                    hasLiveKit = hasLiveKit,
                                 )
                             setBusy(false)
                             when (result) {

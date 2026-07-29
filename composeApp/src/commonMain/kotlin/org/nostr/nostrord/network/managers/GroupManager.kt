@@ -1781,6 +1781,7 @@ class GroupManager(
         currentRelayUrl: String,
         signEvent: suspend (Event) -> Event,
         parentOp: ParentOp? = null,
+        hasLiveKit: Boolean? = null,
     ): Result<Unit> {
         val groupRelayUrl = getRelayForGroup(groupId) ?: currentRelayUrl
         val currentClient = connectionManager.getClientForRelay(groupRelayUrl)
@@ -1807,6 +1808,19 @@ class GroupManager(
             // The relay rejects an edit that doesn't enumerate every current child, so
             // always re-declare the full list in its current order.
             current?.children.orEmpty().forEach { metaTags.add(listOf("child", it)) }
+
+            // A kind:9002 carrying a name plus any flag is a full-state replace: the relay
+            // wipes livekit and supported_kinds before applying the event. Both must be
+            // re-declared or a plain rename would silently tear down the group's AV room.
+            // [hasLiveKit] null keeps the current setting; false emits the explicit off tag.
+            when (hasLiveKit ?: current?.hasLiveKit) {
+                true -> metaTags.add(listOf("livekit"))
+                false -> metaTags.add(listOf("no-livekit"))
+                null -> Unit
+            }
+            current?.supportedKinds?.let { kinds ->
+                metaTags.add(listOf("supported_kinds") + kinds.map { it.toString() })
+            }
 
             val signedMeta = signEvent(
                 Event(

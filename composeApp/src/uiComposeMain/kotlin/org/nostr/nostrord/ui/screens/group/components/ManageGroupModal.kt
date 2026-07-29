@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
@@ -341,6 +342,13 @@ private fun ManageInfoSection(
     var isClosed by remember(currentMetadata) { mutableStateOf(currentMetadata?.isOpen == false) }
     var isRestricted by remember(currentMetadata) { mutableStateOf(currentMetadata?.isRestricted == true) }
     var isHidden by remember(currentMetadata) { mutableStateOf(currentMetadata?.isHidden == true) }
+    var hasLiveKit by remember(currentMetadata) { mutableStateOf(currentMetadata?.hasLiveKit == true) }
+    // The relay mints the LiveKit token, so the toggle only appears where the relay advertises
+    // support. A group already carrying the tag keeps it visible, so it can still be switched off.
+    var avSupported by remember(currentMetadata) { mutableStateOf(currentMetadata?.hasLiveKit == true) }
+    LaunchedEffect(groupId) {
+        if (AppModule.nostrRepository.relaySupportsAv(groupId)) avSupported = true
+    }
     var isSaving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val relayMetadata by AppModule.nostrRepository.relayMetadata.collectAsState()
@@ -413,6 +421,20 @@ private fun ManageInfoSection(
         Spacer(modifier = Modifier.height(Spacing.xs))
         EditAccessToggleRow(Icons.Default.VisibilityOff, GroupAccessCopy.HIDDEN_LABEL, GroupAccessCopy.HIDDEN_DESC, isHidden) { isHidden = it }
 
+        Spacer(modifier = Modifier.height(Spacing.xxl))
+
+        Text("LIVE ROOM", style = NostrordTypography.SectionHeader, color = NostrordColors.TextMuted)
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        if (avSupported) {
+            EditAccessToggleRow(Icons.Default.Mic, GroupAccessCopy.LIVEKIT_LABEL, GroupAccessCopy.LIVEKIT_DESC, hasLiveKit) { hasLiveKit = it }
+        } else {
+            Text(
+                GroupAccessCopy.LIVEKIT_UNSUPPORTED,
+                style = NostrordTypography.Caption,
+                color = NostrordColors.TextMuted,
+            )
+        }
+
         if (error != null) {
             Spacer(modifier = Modifier.height(Spacing.md))
             Text(error!!, style = NostrordTypography.Caption, color = NostrordColors.Error)
@@ -439,6 +461,7 @@ private fun ManageInfoSection(
                                 isRestricted = isRestricted,
                                 isHidden = isHidden,
                                 picture = picture.trim().ifBlank { null },
+                                hasLiveKit = hasLiveKit,
                             )
                         isSaving = false
                         if (result is Result.Error) {

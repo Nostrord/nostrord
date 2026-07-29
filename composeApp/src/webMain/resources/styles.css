@@ -11190,3 +11190,10 @@ button.hierarchy-crumb-item:hover {
 .live-space-bar.live-space-idle:hover {
     background: var(--color-hover);
 }
+
+/* Relay without LiveKit configured: explain instead of showing a dead toggle. */
+.access-unsupported {
+    padding: var(--space-sm) 0;
+    color: var(--color-text-muted);
+    font-size: 13px;
+}

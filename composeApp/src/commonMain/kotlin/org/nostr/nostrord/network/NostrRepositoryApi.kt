@@ -449,6 +449,8 @@ interface NostrRepositoryApi {
         isHidden: Boolean = false,
         picture: String? = null,
         parentOp: GroupManager.ParentOp? = null,
+        /** NIP-29 `livekit`: null keeps the current setting, which a rename must not clear. */
+        hasLiveKit: Boolean? = null,
     ): Result<Unit>
 
     suspend fun deleteGroup(groupId: String): Result<Unit>

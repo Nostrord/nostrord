@@ -166,3 +166,59 @@ class AvSpaceProtocolTest {
         assertNull(parseCredentials("not json"))
     }
 }
+
+/**
+ * A kind:9002 carrying a name plus any flag is a full-state replace on the relay: it wipes
+ * `livekit` and `supported_kinds` before applying the event. The edit path must therefore
+ * re-declare both, or renaming a group would silently tear down its AV room.
+ */
+class EditGroupPreservesAvTest {
+    private val client = NostrGroupClient("wss://relay.example")
+
+    private fun reparse(tags: List<List<String>>): org.nostr.nostrord.network.GroupMetadata? {
+        val tagJson = tags.joinToString(",") { tag -> tag.joinToString(",", "[", "]") { "\"$it\"" } }
+        return client.parseGroupMetadata(
+            Json.parseToJsonElement("""{"kind":39000,"tags":[$tagJson],"content":""}""").jsonObject,
+        )
+    }
+
+    /** Mirrors the tag set `GroupManager.editGroup` emits for an unchanged AV group. */
+    private fun editTags(hasLiveKit: Boolean?, current: Boolean, supportedKinds: List<Int>?): List<List<String>> {
+        val tags = mutableListOf(listOf("d", "grp"), listOf("name", "renamed"), listOf("closed"))
+        when (hasLiveKit ?: current) {
+            true -> tags.add(listOf("livekit"))
+            false -> tags.add(listOf("no-livekit"))
+            else -> Unit
+        }
+        supportedKinds?.let { kinds -> tags.add(listOf("supported_kinds") + kinds.map { it.toString() }) }
+        return tags
+    }
+
+    @Test
+    fun `a rename keeps the room and the supported kinds`() {
+        val edited = assertNotNull(reparse(editTags(hasLiveKit = null, current = true, supportedKinds = listOf(9, 11))))
+        assertTrue(edited.hasLiveKit)
+        assertEquals(listOf(9, 11), edited.supportedKinds)
+    }
+
+    @Test
+    fun `a rename keeps an AV-only group AV-only`() {
+        val edited = assertNotNull(reparse(editTags(hasLiveKit = null, current = true, supportedKinds = emptyList())))
+        assertTrue(edited.isAvOnly)
+    }
+
+    @Test
+    fun `turning the room off emits the explicit no-livekit tag`() {
+        val tags = editTags(hasLiveKit = false, current = true, supportedKinds = null)
+        assertTrue(tags.contains(listOf("no-livekit")))
+        // `no-livekit` is an instruction to the relay, not group state: the republished
+        // kind:39000 simply carries no livekit tag.
+        assertFalse(assertNotNull(reparse(tags)).hasLiveKit)
+    }
+
+    @Test
+    fun `turning the room on emits the livekit tag`() {
+        val edited = assertNotNull(reparse(editTags(hasLiveKit = true, current = false, supportedKinds = null)))
+        assertTrue(edited.hasLiveKit)
+    }
+}

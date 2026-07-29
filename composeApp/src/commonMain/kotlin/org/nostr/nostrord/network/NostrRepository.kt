@@ -3404,6 +3404,7 @@ class NostrRepository(
         isHidden: Boolean,
         picture: String?,
         parentOp: GroupManager.ParentOp?,
+        hasLiveKit: Boolean?,
     ): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
@@ -3420,6 +3421,7 @@ class NostrRepository(
             currentRelayUrl = connectionManager.currentRelayUrl.value,
             signEvent = { sessionManager.signEvent(it) },
             parentOp = parentOp,
+            hasLiveKit = hasLiveKit,
         )
         if (result is Result.Success) refreshGroupMetadata(groupId)
         return result

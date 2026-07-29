@@ -351,7 +351,14 @@ class FakeNostrRepository : NostrRepositoryApi {
         isHidden: Boolean,
         picture: String?,
         parentOp: org.nostr.nostrord.network.managers.GroupManager.ParentOp?,
-    ): Result<Unit> = Result.Success(Unit)
+        hasLiveKit: Boolean?,
+    ): Result<Unit> {
+        editedLiveKit = hasLiveKit
+        return Result.Success(Unit)
+    }
+
+    /** Last `hasLiveKit` an edit was asked to apply; null means "keep whatever the group has". */
+    var editedLiveKit: Boolean? = null
 
     override suspend fun deleteGroup(groupId: String): Result<Unit> = Result.Success(Unit)
 
