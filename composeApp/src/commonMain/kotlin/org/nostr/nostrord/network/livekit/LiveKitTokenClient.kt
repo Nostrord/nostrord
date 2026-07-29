@@ -96,9 +96,14 @@ class LiveKitTokenClient(
         return try {
             val response = client.get(url) { header(HttpHeaders.Authorization, auth) }
             if (!response.status.isSuccess()) {
-                // 403 is the common one: the relay refused the room to a non-member.
+                // The reason lives in the body: relays distinguish "not allowed to access
+                // livekit for this group" (not a member) from "livekit not enabled for this
+                // group", and the status code alone cannot tell a user which one they hit.
+                val reason = runCatching { response.bodyAsText().trim() }.getOrNull()
+                    ?.takeIf { it.isNotBlank() && !it.startsWith("<") }
+                    ?.take(200)
                 return Result.Error(
-                    AppError.Unknown("$relayUrl refused the LiveKit token (${response.status.value})"),
+                    AppError.Unknown(reason ?: "$relayUrl refused the LiveKit token (${response.status.value})"),
                 )
             }
             parseCredentials(response.bodyAsText())
