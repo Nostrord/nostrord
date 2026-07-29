@@ -1298,12 +1298,16 @@ class GroupManager(
             // One batched #d REQ for ALL missing metadata, not one per group.
             client.requestGroupsMetadata(toFetch)
         } catch (_: Exception) {}
+        val relayKey = relayUrl.normalizeRelayUrl()
         for (groupId in toFetch) {
             try {
                 // Members/admins may already be live (mux_meta or an earlier fetch); only
                 // ask for what we still lack so we don't double the kind:39002/39001 REQs.
-                if (groupId !in _groupMembers.value) client.requestGroupMembers(groupId)
-                if (groupId !in _groupAdmins.value) client.requestGroupAdmins(groupId)
+                // Presence must be checked on THIS relay's mirror, not the flat bare-id map:
+                // a same-id group on another relay (or its cached snapshot) satisfies the
+                // flat check and suppresses the fetch, leaking that relay's admin badge here.
+                if (_groupMembersByRelay.value[relayKey]?.containsKey(groupId) != true) client.requestGroupMembers(groupId)
+                if (_groupAdminsByRelay.value[relayKey]?.containsKey(groupId) != true) client.requestGroupAdmins(groupId)
             } catch (_: Exception) {}
         }
     }
@@ -3668,28 +3672,41 @@ class GroupManager(
         val roleTs: Long = 0L,
     )
 
+    // v2: relay -> groupId -> snapshot. The old bare-groupId format was relay-ambiguous: on
+    // restore it hydrated only the flat maps, so a same-id group on another relay leaked its
+    // admin/member lists (a wrong ADMIN badge) until live 39001/39002s replaced them.
     private val membershipSnapshotSerializer =
-        MapSerializer(String.serializer(), MembershipSnapshot.serializer())
+        MapSerializer(String.serializer(), MapSerializer(String.serializer(), MembershipSnapshot.serializer()))
 
     /**
-     * Persist members/admins/roles for every known group as one per-account blob. Cheap and
-     * infrequent: only the rare kind:39001/39002/39003 handlers call it, and only when a list
-     * actually changed. No-op when [currentPubkey] is unset (unauthenticated state).
+     * Persist members/admins/roles for every known (relay, group) pair as one per-account blob.
+     * Cheap and infrequent: only the rare kind:39001/39002/39003 handlers call it, and only when
+     * a list actually changed. No-op when [currentPubkey] is unset (unauthenticated state).
+     * Lists that arrived without relay attribution exist only in the flat maps and are not
+     * persisted; they rebuild from the next live event.
      */
     private fun persistGroupMembershipSnapshot() {
         val pubKey = currentPubkey ?: return
-        val groupIds = _groupMembers.value.keys + _groupAdmins.value.keys + _groupRoles.value.keys
-        if (groupIds.isEmpty()) return
+        val membersByRelay = _groupMembersByRelay.value
+        val adminsByRelay = _groupAdminsByRelay.value
+        val rolesByRelay = _groupRolesByRelay.value
+        val relays = membersByRelay.keys + adminsByRelay.keys + rolesByRelay.keys
+        if (relays.isEmpty()) return
         val snapshot =
-            groupIds.associateWith { id ->
-                MembershipSnapshot(
-                    members = _groupMembers.value[id] ?: emptyList(),
-                    admins = _groupAdmins.value[id] ?: emptyList(),
-                    roles = _groupRoles.value[id] ?: emptyList(),
-                    memberTs = memberEventTimestamps[id] ?: 0L,
-                    adminTs = adminEventTimestamps[id] ?: 0L,
-                    roleTs = roleEventTimestamps[id] ?: 0L,
-                )
+            relays.associateWith { relay ->
+                val ids = membersByRelay[relay].orEmpty().keys +
+                    adminsByRelay[relay].orEmpty().keys +
+                    rolesByRelay[relay].orEmpty().keys
+                ids.associateWith { id ->
+                    MembershipSnapshot(
+                        members = membersByRelay[relay]?.get(id) ?: emptyList(),
+                        admins = adminsByRelay[relay]?.get(id) ?: emptyList(),
+                        roles = rolesByRelay[relay]?.get(id) ?: emptyList(),
+                        memberTs = scopedMemberEventTimestamps["$relay|$id"] ?: 0L,
+                        adminTs = scopedAdminEventTimestamps["$relay|$id"] ?: 0L,
+                        roleTs = scopedRoleEventTimestamps["$relay|$id"] ?: 0L,
+                    )
+                }
             }
         try {
             SecureStorage.saveGroupMembershipFor(pubKey, json.encodeToString(membershipSnapshotSerializer, snapshot))
@@ -3701,7 +3718,9 @@ class GroupManager(
      * Hydrate members/admins/roles from the per-account cache before sockets open, so opening a
      * previously-seen group shows its member list with no spinner. Live data already in memory
      * wins over the cache (existing keys are kept), and the seeded timestamps only advance the
-     * staleness guards, never roll them back.
+     * staleness guards, never roll them back. A blob in the old bare-groupId format fails to
+     * decode and is discarded (one cold start rebuilds it) — hydrating it flat is exactly what
+     * leaked another relay's admin badge onto a same-id group.
      */
     fun restoreGroupMembershipFromStorage(pubkey: String) {
         val raw = SecureStorage.loadGroupMembershipFor(pubkey) ?: return
@@ -3712,27 +3731,45 @@ class GroupManager(
                 return
             }
         if (snapshot.isEmpty()) return
-        val members = mutableMapOf<String, List<String>>()
-        val admins = mutableMapOf<String, List<String>>()
-        val roles = mutableMapOf<String, List<RoleDefinition>>()
-        snapshot.forEach { (id, snap) ->
-            if (snap.members.isNotEmpty()) {
-                members[id] = snap.members
-                memberEventTimestamps[id] = maxOf(memberEventTimestamps[id] ?: 0L, snap.memberTs)
-            }
-            if (snap.admins.isNotEmpty()) {
-                admins[id] = snap.admins
-                adminEventTimestamps[id] = maxOf(adminEventTimestamps[id] ?: 0L, snap.adminTs)
-            }
-            if (snap.roles.isNotEmpty()) {
-                roles[id] = snap.roles
-                roleEventTimestamps[id] = maxOf(roleEventTimestamps[id] ?: 0L, snap.roleTs)
+        val cachedMembers = mutableMapOf<String, MutableMap<String, List<String>>>()
+        val cachedAdmins = mutableMapOf<String, MutableMap<String, List<String>>>()
+        val cachedRoles = mutableMapOf<String, MutableMap<String, List<RoleDefinition>>>()
+        snapshot.forEach { (relay, groups) ->
+            groups.forEach { (id, snap) ->
+                val key = "$relay|$id"
+                if (snap.members.isNotEmpty()) {
+                    cachedMembers.getOrPut(relay) { mutableMapOf() }[id] = snap.members
+                    scopedMemberEventTimestamps[key] = maxOf(scopedMemberEventTimestamps[key] ?: 0L, snap.memberTs)
+                    memberEventTimestamps[id] = maxOf(memberEventTimestamps[id] ?: 0L, snap.memberTs)
+                }
+                if (snap.admins.isNotEmpty()) {
+                    cachedAdmins.getOrPut(relay) { mutableMapOf() }[id] = snap.admins
+                    scopedAdminEventTimestamps[key] = maxOf(scopedAdminEventTimestamps[key] ?: 0L, snap.adminTs)
+                    adminEventTimestamps[id] = maxOf(adminEventTimestamps[id] ?: 0L, snap.adminTs)
+                }
+                if (snap.roles.isNotEmpty()) {
+                    cachedRoles.getOrPut(relay) { mutableMapOf() }[id] = snap.roles
+                    scopedRoleEventTimestamps[key] = maxOf(scopedRoleEventTimestamps[key] ?: 0L, snap.roleTs)
+                    roleEventTimestamps[id] = maxOf(roleEventTimestamps[id] ?: 0L, snap.roleTs)
+                }
             }
         }
-        // `cached + live` so any group already updated this session keeps its live value.
-        if (members.isNotEmpty()) _groupMembers.update { members + it }
-        if (admins.isNotEmpty()) _groupAdmins.update { admins + it }
-        if (roles.isNotEmpty()) _groupRoles.update { roles + it }
+        // `cached + live` per relay so any list already updated this session keeps its live value.
+        fun <T> merge(
+            live: Map<String, Map<String, T>>,
+            cached: Map<String, out Map<String, T>>,
+        ): Map<String, Map<String, T>> = (live.keys + cached.keys).associateWith { relay ->
+            cached[relay].orEmpty() + live[relay].orEmpty()
+        }
+        if (cachedMembers.isNotEmpty()) _groupMembersByRelay.update { merge(it, cachedMembers) }
+        if (cachedAdmins.isNotEmpty()) _groupAdminsByRelay.update { merge(it, cachedAdmins) }
+        if (cachedRoles.isNotEmpty()) _groupRolesByRelay.update { merge(it, cachedRoles) }
+        // Flat compat maps (used when no host relay scopes the read): same cached + live merge,
+        // folded across relays. The relay-scoped mirrors above are what the scoped UIs read.
+        fun <T> flatten(byRelay: Map<String, out Map<String, T>>): Map<String, T> = byRelay.values.fold(emptyMap()) { acc, m -> acc + m }
+        if (cachedMembers.isNotEmpty()) _groupMembers.update { flatten(cachedMembers) + it }
+        if (cachedAdmins.isNotEmpty()) _groupAdmins.update { flatten(cachedAdmins) + it }
+        if (cachedRoles.isNotEmpty()) _groupRoles.update { flatten(cachedRoles) + it }
     }
 
     /**
