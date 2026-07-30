@@ -24,6 +24,23 @@ private fun displayEmoji(emoji: String): String = when (emoji) {
     else -> emoji
 }
 
+/** Hover tooltip content: who reacted, capped so a popular badge doesn't build a huge string. */
+private fun reactorNames(
+    reactors: List<String>,
+    userMetadata: Map<String, UserMetadata>,
+): String {
+    val names = reactors.take(MAX_TOOLTIP_NAMES).map { pk ->
+        val meta = userMetadata[pk]
+        meta?.displayName?.takeIf { it.isNotBlank() }
+            ?: meta?.name?.takeIf { it.isNotBlank() }
+            ?: shortNpub(pk)
+    }
+    val extra = reactors.size - MAX_TOOLTIP_NAMES
+    return names.joinToString(", ") + if (extra > 0) " +$extra" else ""
+}
+
+private const val MAX_TOOLTIP_NAMES = 20
+
 fun ChildrenBuilder.reactionBadges(
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: Collection<String>,
@@ -39,6 +56,8 @@ fun ChildrenBuilder.reactionBadges(
             val mine = myPubkey != null && myPubkey in info.reactors
             button {
                 className = ClassName(if (mine) "reaction-badge mine" else "reaction-badge")
+                // Desktop hover shows who reacted (mobile already stacks the reactor avatars).
+                title = reactorNames(info.reactors, userMetadata)
                 onClick = { onReact(emoji) }
                 val emojiUrl = info.emojiUrl
                 if (!emojiUrl.isNullOrBlank()) {
