@@ -3663,27 +3663,20 @@ private fun ChildrenBuilder.renderEntities(
             }
             if (url.length < token.length) +token.substring(url.length)
         } else if (token.startsWith("wss://") || token.startsWith("ws://")) {
-            // NIP-29 group address `wss://relay'groupId` renders as a tappable group card,
-            // mirroring native MessageContent (RelayPart). A bare relay url stays plain text.
+            // NIP-29 group address `wss://relay'groupId`: the full tappable card only when the
+            // message IS the link; mixed with text it renders as the compact chip, mirroring
+            // native MessageContent (RelayPart). A bare relay url stays plain text.
             val apostrophe = token.indexOf('\'')
             if (apostrophe > 0) {
-                GroupLinkCard {
-                    groupId = token.substring(apostrophe + 1)
-                    relayUrl = token.substring(0, apostrophe)
-                    onNavigate = onGroupRef
-                }
+                groupRef(token.substring(apostrophe + 1), token.substring(0, apostrophe), asCard = content.trim() == token, onGroupRef)
             } else {
                 +token
             }
         } else if (token.contains('\'')) {
             // Bare NIP-29 group address `relay'groupId` (no scheme): normalize with wss:// and
-            // render the same group card as the scheme form.
+            // render the same card-or-chip as the scheme form.
             val apostrophe = token.indexOf('\'')
-            GroupLinkCard {
-                groupId = token.substring(apostrophe + 1)
-                relayUrl = "wss://" + token.substring(0, apostrophe)
-                onNavigate = onGroupRef
-            }
+            groupRef(token.substring(apostrophe + 1), "wss://" + token.substring(0, apostrophe), asCard = content.trim() == token, onGroupRef)
         } else {
             // A mention standing alone (on its own line) keeps the rich form (group card,
             // @name); inline with other text it becomes a compact avatar+name chip, matching
@@ -4205,6 +4198,28 @@ private val GroupLinkCard =
  * group's square avatar + name when resolved, or `#name` when it has no picture. Clicking opens
  * the group. Standalone group references still render as the full GroupLinkCard.
  */
+/** A group reference in message text: the full card when the message is only the link, else the chip. */
+private fun ChildrenBuilder.groupRef(
+    gid: String,
+    relay: String?,
+    asCard: Boolean,
+    onNav: (String, String?) -> Unit,
+) {
+    if (asCard) {
+        GroupLinkCard {
+            groupId = gid
+            relayUrl = relay
+            onNavigate = onNav
+        }
+    } else {
+        GroupMentionChip {
+            groupId = gid
+            relayUrl = relay
+            onNavigate = onNav
+        }
+    }
+}
+
 private val GroupMentionChip =
     FC<GroupLinkCardProps> { props ->
         val repo = AppModule.nostrRepository
