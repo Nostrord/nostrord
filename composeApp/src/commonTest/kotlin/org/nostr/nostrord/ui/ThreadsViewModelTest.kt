@@ -14,6 +14,8 @@ import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.buildThreadSummaries
 import org.nostr.nostrord.ui.screens.group.filterMutedReactions
 import org.nostr.nostrord.ui.screens.group.friendlyReactionError
+import org.nostr.nostrord.ui.screens.group.threadParentIdTag
+import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
@@ -129,6 +131,22 @@ class ThreadsViewModelTest {
                 listOf(reply("r1", "a", "p", 110), reply("r2", "b", "p", 200)),
             ).map { it.rootId },
         )
+    }
+
+    @Test
+    fun `threadParentIdTag reads only the lowercase e tag of a nested reply`() {
+        val nested = NostrGroupClient.NostrMessage(
+            id = "n",
+            pubkey = "p",
+            content = "re",
+            createdAt = 1,
+            kind = 1111,
+            tags = listOf(listOf("E", "rootid", "", "rootpk"), listOf("e", "parentid", "", "parentpk")),
+        )
+        assertEquals("rootid", nested.threadRootIdTag())
+        assertEquals("parentid", nested.threadParentIdTag())
+        // A top-level reply carries only the uppercase root scope.
+        assertNull(reply("r1", "rootid", "p", 1).threadParentIdTag())
     }
 
     // -------------------------------------------------------------------------
