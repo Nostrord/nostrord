@@ -1,8 +1,11 @@
 package org.nostr.nostrord.ui.screens.group
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
@@ -122,6 +129,24 @@ fun ThreadsScreen(
     // Message being answered by the composer (context-menu Reply); null posts top-level.
     var replyingTo by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
 
+    // Deep-link target (?e=): the message to scroll to and flash once the thread loads.
+    var highlightId by remember { mutableStateOf<String?>(null) }
+    val highlightLoaded = route.messageId != null &&
+        openThread?.let { d -> (d.replies + d.root).any { it.id == route.messageId } } == true
+    LaunchedEffect(route.messageId, highlightLoaded) {
+        if (route.messageId != null && highlightLoaded) {
+            highlightId = route.messageId
+            delay(HIGHLIGHT_FLASH_MS)
+            highlightId = null
+        }
+    }
+    val threadScroll = rememberScrollState()
+    // Scroll target: the flashed message's y inside the scrolled column, reported on layout.
+    var highlightTargetY by remember(route.messageId) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(highlightTargetY) {
+        highlightTargetY?.let { threadScroll.animateScrollTo((it - HIGHLIGHT_SCROLL_MARGIN_PX).coerceAtLeast(0)) }
+    }
+
     // Keep the open thread synced with the route (#/g/<relay>/<id>/threads/<rootId>).
     LaunchedEffect(route.threadRootId) {
         vm.openThread(route.threadRootId)
@@ -173,7 +198,7 @@ fun ThreadsScreen(
             } else {
                 Column(
                     modifier = Modifier.weight(1f).fillMaxWidth()
-                        .verticalScroll(rememberScrollState()).padding(Spacing.md),
+                        .verticalScroll(threadScroll).padding(Spacing.md),
                 ) {
                     CompositionLocalProvider(
                         LocalImageViewerUrl provides imageViewerUrl,
@@ -196,6 +221,8 @@ fun ThreadsScreen(
                                     .map { it.substringAfter('|') }
                                     .toSet(),
                                 parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
+                                highlighted = msg.id == highlightId,
+                                onPositioned = if (msg.id == route.messageId) ({ y -> highlightTargetY = y }) else null,
                                 resolveMetadata = { userMetadata[it] },
                                 onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                 onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
@@ -406,6 +433,11 @@ fun ThreadsScreen(
     }
 }
 
+// Deep-link flash: duration mirrors the web msg-flash animation; the margin keeps a bit of
+// context visible above the target instead of pinning it to the very top.
+private const val HIGHLIGHT_FLASH_MS = 2_400L
+private const val HIGHLIGHT_SCROLL_MARGIN_PX = 120
+
 private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = meta?.displayName?.takeIf { it.isNotBlank() }
     ?: meta?.name?.takeIf { it.isNotBlank() }
     ?: shortNpub(pubkey)
@@ -505,6 +537,8 @@ private fun ThreadMessage(
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: Set<String>,
     parentMsg: NostrGroupClient.NostrMessage?,
+    highlighted: Boolean,
+    onPositioned: ((Int) -> Unit)?,
     resolveMetadata: (String) -> UserMetadata?,
     onReact: (String) -> Unit,
     onOpenReactionPicker: () -> Unit,
@@ -519,10 +553,30 @@ private fun ThreadMessage(
     var menuVisible by remember { mutableStateOf(false) }
     var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
     val writeClipboard = rememberClipboardWriter()
+    val interaction = remember { MutableInteractionSource() }
+    val isHovered by interaction.collectIsHoveredAsState()
+    // Hover tint like chat rows; the deep-link flash overrides it and fades back out.
+    val rowBackground by animateColorAsState(
+        when {
+            highlighted -> NostrordColors.Primary.copy(alpha = 0.18f)
+            isHovered -> NostrordColors.MessageHover
+            else -> Color.Transparent
+        },
+    )
     Box(
         modifier =
         Modifier
             .fillMaxWidth()
+            .clip(NostrordShapes.shapeMedium)
+            .background(rowBackground)
+            .hoverable(interaction)
+            .then(
+                if (onPositioned != null) {
+                    Modifier.onGloballyPositioned { onPositioned(it.positionInParent().y.toInt()) }
+                } else {
+                    Modifier
+                },
+            )
             // Right-click (desktop) / long-press (mobile) opens the thread context menu.
             .then(
                 rightClickContextMenuModifier { clickOffset ->
@@ -542,9 +596,12 @@ private fun ThreadMessage(
                     MessageContextAction.AddReaction -> onOpenReactionPicker()
                     MessageContextAction.Reply -> onReply()
                     MessageContextAction.CopyText -> writeClipboard(msg.content)
-                    // A reply links to its thread page too (the root id from the E tag).
+                    // A reply links to its thread page (root id from the E tag), targeting
+                    // this message via ?e= so opening it scrolls to and flashes it.
                     MessageContextAction.CopyMessageLink ->
-                        writeClipboard(threadShareLink(route.relayUrl, route.groupId, msg.threadRootIdTag() ?: msg.id))
+                        writeClipboard(
+                            threadShareLink(route.relayUrl, route.groupId, msg.threadRootIdTag() ?: msg.id, messageId = msg.id),
+                        )
                     MessageContextAction.CopyNevent ->
                         writeClipboard(
                             Nip19.encodeNevent(msg.id, relays = listOf(route.relayUrl), authorHex = msg.pubkey, kind = msg.kind),

@@ -46,12 +46,18 @@ data class GroupRoute(
 enum class GroupView { Chat, Threads }
 
 /**
- * Shareable web link for a thread: https://web.nostrord.com/#/g/<relay>/<id>/threads/<rootId>.
- * Backs "Copy event link" in the thread context menu (the chat's nostrord.com/open ?e= form
- * scrolls the chat, which never contains a kind:11/1111 event).
+ * Shareable web link for a thread: https://web.nostrord.com/#/g/<relay>/<id>/threads/<rootId>,
+ * plus `?e=<messageId>` targeting the specific message to scroll to and flash. Backs "Copy
+ * event link" in the thread context menu (the chat's nostrord.com/open ?e= form scrolls the
+ * chat, which never contains a kind:11/1111 event).
  */
-fun threadShareLink(relayUrl: String, groupId: String, rootId: String): String = "https://web.nostrord.com/" +
-    GroupRoute(relayUrl, groupId, view = GroupView.Threads, threadRootId = rootId).toHash()
+fun threadShareLink(
+    relayUrl: String,
+    groupId: String,
+    rootId: String,
+    messageId: String? = null,
+): String = "https://web.nostrord.com/" +
+    GroupRoute(relayUrl, groupId, view = GroupView.Threads, threadRootId = rootId, messageId = messageId).toHash()
 
 /**
  * The value to persist in the last-route slot ([SecureStorage.saveLastRoute]) for [route].

@@ -49,6 +49,7 @@ import react.useEffect
 import react.useRef
 import react.useState
 import web.cssom.ClassName
+import web.dom.ElementId
 import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
 import kotlin.js.Date
@@ -69,6 +70,9 @@ private fun relativeTime(createdAtSeconds: Long): String {
         else -> "${diff / 604_800}w"
     }
 }
+
+// Deep-link flash duration; mirrors the .thread-msg.highlight animation (2.4s msg-flash).
+private const val HIGHLIGHT_FLASH_MS = 2_400
 
 /** Right-click target for the thread context menu: the message plus the click viewport coords. */
 private data class ThreadCtxMenu(
@@ -130,6 +134,20 @@ val ThreadsScreen =
 
         // Message being answered by the composer (context-menu Reply); null posts top-level.
         val (replyingTo, setReplyingTo) = useState<NostrGroupClient.NostrMessage?> { null }
+
+        // Deep-link target (?e=): scroll to and flash the message once the thread loads.
+        val (highlightId, setHighlightId) = useState<String?> { null }
+        val highlightLoaded = route.messageId != null &&
+            openThread?.let { d -> (d.replies + d.root).any { it.id == route.messageId } } == true
+        useEffect(route.messageId, highlightLoaded) {
+            val target = route.messageId
+            if (target != null && highlightLoaded) {
+                setHighlightId(target)
+                document.getElementById("thread-msg-$target")?.asDynamic()
+                    ?.scrollIntoView(js("{ block: 'center', behavior: 'smooth' }"))
+                window.setTimeout({ setHighlightId(null) }, HIGHLIGHT_FLASH_MS)
+            }
+        }
 
         // Keep the open thread synced with the URL (#/g/<relay>/<id>/threads/<rootId>).
         useEffect(route.threadRootId) {
@@ -242,6 +260,7 @@ val ThreadsScreen =
                         reactions[msg.id] ?: emptyMap(),
                         pendingFor(msg.id),
                         parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
+                        highlighted = msg.id == highlightId,
                         onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                         onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
                         // A group ref in the body opens that group's chat page.
@@ -515,8 +534,9 @@ val ThreadsScreen =
                         setCtxMenu(null)
                     }
                     ctxItem(Ic.Link, "Copy event link") {
-                        // A reply links to its thread page too (the root id from the E tag).
-                        copyToClipboard(threadShareLink(route.relayUrl, route.groupId, m.msg.threadRootIdTag() ?: m.msg.id))
+                        // A reply links to its thread page (root id from the E tag), targeting
+                        // this message via ?e= so opening it scrolls to and flashes it.
+                        copyToClipboard(threadShareLink(route.relayUrl, route.groupId, m.msg.threadRootIdTag() ?: m.msg.id, messageId = m.msg.id))
                         setCtxMenu(null)
                     }
                     ctxItem(Ic.Code, "Copy nevent") {
@@ -612,6 +632,7 @@ private fun ChildrenBuilder.threadMessage(
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: List<String>,
     parentMsg: NostrGroupClient.NostrMessage?,
+    highlighted: Boolean,
     onReact: (String) -> Unit,
     onOpenMenu: (Double, Double) -> Unit,
     onGroupRef: (String, String?) -> Unit,
@@ -619,7 +640,11 @@ private fun ChildrenBuilder.threadMessage(
     onDismiss: () -> Unit,
 ) {
     div {
-        className = ClassName(if (isRoot) "thread-msg thread-msg-root" else "thread-msg")
+        id = ElementId("thread-msg-${msg.id}")
+        className = ClassName(
+            (if (isRoot) "thread-msg thread-msg-root" else "thread-msg") +
+                (if (highlighted) " highlight" else ""),
+        )
         // Right-click (desktop) / long-press (mobile browsers) opens the thread context menu.
         // Right-click directly on a hyperlink keeps the browser's native menu (chat parity),
         // so "Copy link address" copies the actual URL.

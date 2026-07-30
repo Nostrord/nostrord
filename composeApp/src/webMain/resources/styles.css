@@ -2276,6 +2276,16 @@ body {
     display: flex;
     gap: var(--space-md);
     padding: var(--space-sm) 0;
+    border-radius: var(--radius-md);
+}
+
+.thread-msg:hover {
+    background: var(--color-message-hover);
+}
+
+/* Deep-link target (?e=): same flash as the chat's .msg.highlight. */
+.thread-msg.highlight {
+    animation: msg-flash 2.4s ease-out;
 }
 
 .thread-msg-root {
