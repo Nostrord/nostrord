@@ -212,181 +212,12 @@ val ThreadsScreen =
         }
 
         div {
-            className = ClassName("threads-page")
+            className = ClassName(if (route.threadRootId != null) "threads-page detail-open" else "threads-page")
 
-            if (route.threadRootId != null) {
-                // ---- Single thread (detail) ----
-                div {
-                    className = ClassName("threads-header")
-                    button {
-                        className = ClassName("icon-btn")
-                        title = "Back to threads"
-                        onClick = { props.onNavigate(route.copy(threadRootId = null)) }
-                        icon(Ic.ArrowBack)
-                    }
-                    span {
-                        className = ClassName("threads-title")
-                        +"Thread"
-                    }
-                    val ownRoot = openThread?.root
-                    if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
-                        button {
-                            className = ClassName("icon-btn")
-                            title = "Delete thread"
-                            onClick = { setDeleteTarget(ownRoot) }
-                            icon(Ic.Delete)
-                        }
-                    }
-                }
-                val detail = openThread
-                if (detail == null) {
-                    div {
-                        className = ClassName("threads-empty")
-                        +"Loading thread..."
-                    }
-                } else {
-                    // Pending sends for one message: "eventId|emoji" keys -> that message's emojis.
-                    fun pendingFor(id: String) = pendingReactions.filter { it.startsWith("$id|") }.map { it.substringAfter('|') }
-
-                    // Nested replies resolve their lowercase-e parent from the loaded thread.
-                    val messagesById = (detail.replies + detail.root).associateBy { it.id }
-
-                    fun ChildrenBuilder.renderThreadMessage(msg: NostrGroupClient.NostrMessage, isRoot: Boolean) = threadMessage(
-                        msg,
-                        userMetadata,
-                        isRoot = isRoot,
-                        myPubkey,
-                        messageStatus[msg.id],
-                        reactions[msg.id] ?: emptyMap(),
-                        pendingFor(msg.id),
-                        parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
-                        highlighted = msg.id == highlightId,
-                        onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
-                        onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
-                        // A group ref in the body opens that group's chat page.
-                        onGroupRef = { gid, relay -> props.onNavigate(GroupRoute(relay ?: route.relayUrl, gid)) },
-                        onRetry = { vm.retrySend(msg.id) },
-                        onDismiss = { vm.dismissFailed(msg.id) },
-                    )
-
-                    div {
-                        className = ClassName("thread-detail-body")
-                        renderThreadMessage(detail.root, isRoot = true)
-                        div {
-                            className = ClassName("thread-replies-divider")
-                            +(if (detail.replies.size == 1) "1 reply" else "${detail.replies.size} replies")
-                        }
-                        detail.replies.forEach { r -> renderThreadMessage(r, isRoot = false) }
-                    }
-                    // Same composer as DM (.dm-composer): rounded bar, Enter to send, emoji picker.
-                    div {
-                        className = ClassName("dm-composer-wrap")
-                        // Reply chip above the composer while answering a specific message.
-                        replyingTo?.let { target ->
-                            div {
-                                className = ClassName("composer-reply")
-                                icon(Ic.Reply)
-                                span {
-                                    className = ClassName("composer-reply-label")
-                                    +"Replying to"
-                                }
-                                span {
-                                    className = ClassName("composer-reply-name")
-                                    +threadDisplayName(target.pubkey, userMetadata[target.pubkey])
-                                }
-                                target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { preview ->
-                                    span {
-                                        className = ClassName("composer-reply-text")
-                                        +preview
-                                    }
-                                }
-                                button {
-                                    className = ClassName("composer-reply-close")
-                                    onClick = { setReplyingTo(null) }
-                                    icon(Ic.Close)
-                                }
-                            }
-                        }
-                        div {
-                            className = ClassName("dm-composer")
-                            UploadButton {
-                                cls = "dm-composer-btn"
-                                icon = Ic.AttachFile
-                                busy = uploadCount > 0
-                                onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
-                                onPickerClosed = { composerInputRef.current?.focus() }
-                                onUploaded = { upload -> setReply { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
-                                onError = { setUploadError(it) }
-                            }
-                            textarea {
-                                ref = composerInputRef
-                                rows = 1
-                                value = reply
-                                placeholder = "Write a reply..."
-                                onChange = { setReply((it.target as HTMLTextAreaElement).value) }
-                                onKeyDown = { e ->
-                                    if (e.key == "Enter" && !e.shiftKey) {
-                                        e.preventDefault()
-                                        sendReply()
-                                    }
-                                }
-                                onPaste = { event ->
-                                    val items = event.asDynamic().clipboardData?.items
-                                    val count = (items?.length as? Int) ?: 0
-                                    for (i in 0 until count) {
-                                        val item = items[i]
-                                        val type = item.type.unsafeCast<String?>()
-                                        if (item.kind == "file" && isMediaMime(type)) {
-                                            val file = item.getAsFile()
-                                            if (file != null) {
-                                                event.preventDefault()
-                                                handleMediaFile(file)
-                                            }
-                                        }
-                                    }
-                                }
-                                onDragOver = { it.preventDefault() }
-                                onDrop = { event ->
-                                    val files = event.asDynamic().dataTransfer?.files
-                                    val count = (files?.length as? Int) ?: 0
-                                    if (count > 0) event.preventDefault()
-                                    for (i in 0 until count) {
-                                        val file = files[i]
-                                        if (isMediaMime(file.type.unsafeCast<String?>())) handleMediaFile(file)
-                                    }
-                                }
-                            }
-                            button {
-                                className = ClassName(if (emojiOpen) "dm-composer-btn active" else "dm-composer-btn")
-                                title = "Emoji"
-                                onClick = { setEmojiOpen(!emojiOpen) }
-                                icon(Ic.EmojiEmotions)
-                            }
-                            button {
-                                className = ClassName("dm-composer-btn send")
-                                title = "Send"
-                                disabled = (reply.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
-                                onMouseDown = { e -> e.preventDefault() }
-                                onClick = { sendReply() }
-                                if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
-                            }
-                            if (emojiOpen) {
-                                div {
-                                    className = ClassName("emoji-overlay")
-                                    onClick = { setEmojiOpen(false) }
-                                    EmojiPicker {
-                                        onPick = { emoji ->
-                                            insertAtCursor(emoji)
-                                            setEmojiOpen(false)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                // ---- Threads list ----
+            // ---- Threads list pane: always mounted. On desktop the open thread docks beside
+            // it (Discord-style split); on mobile .detail-open hides this pane instead. ----
+            div {
+                className = ClassName("threads-list-pane")
                 div {
                     className = ClassName("threads-header")
                     span {
@@ -398,15 +229,6 @@ val ThreadsScreen =
                         onClick = { setComposing(true) }
                         icon(Ic.Forum)
                         span { +"New thread" }
-                    }
-                }
-
-                if (composing) {
-                    Portal {
-                        CreateThreadModal {
-                            onClose = { setComposing(false) }
-                            onCreate = { title, content -> vm.createThread(title, content) }
-                        }
                     }
                 }
 
@@ -427,7 +249,7 @@ val ThreadsScreen =
                             threads.forEach { t ->
                                 button {
                                     key = t.rootId
-                                    className = ClassName("thread-card")
+                                    className = ClassName(if (t.rootId == route.threadRootId) "thread-card active" else "thread-card")
                                     onClick = { props.onNavigate(route.copy(threadRootId = t.rootId)) }
                                     WebAvatar {
                                         url = userMetadata[t.authorPubkey]?.picture
@@ -485,6 +307,199 @@ val ThreadsScreen =
                                 }
                             }
                         }
+                }
+            }
+
+            if (composing) {
+                Portal {
+                    CreateThreadModal {
+                        onClose = { setComposing(false) }
+                        onCreate = { title, content -> vm.createThread(title, content) }
+                    }
+                }
+            }
+
+            if (route.threadRootId != null) {
+                // ---- Open thread: full page on mobile, right dock on desktop ----
+                div {
+                    className = ClassName("thread-detail-pane")
+                    div {
+                        className = ClassName("threads-header")
+                        button {
+                            // Mobile only; on desktop the split stays and the X on the right closes.
+                            className = ClassName("icon-btn thread-back")
+                            title = "Back to threads"
+                            onClick = { props.onNavigate(route.copy(threadRootId = null)) }
+                            icon(Ic.ArrowBack)
+                        }
+                        span {
+                            className = ClassName("threads-title")
+                            +"Thread"
+                        }
+                        val ownRoot = openThread?.root
+                        if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
+                            button {
+                                className = ClassName("icon-btn")
+                                title = "Delete thread"
+                                onClick = { setDeleteTarget(ownRoot) }
+                                icon(Ic.Delete)
+                            }
+                        }
+                        button {
+                            // Desktop only (CSS): closes the docked thread, Discord-style.
+                            className = ClassName("icon-btn thread-close")
+                            title = "Close thread"
+                            onClick = { props.onNavigate(route.copy(threadRootId = null)) }
+                            icon(Ic.Close)
+                        }
+                    }
+                    val detail = openThread
+                    if (detail == null) {
+                        div {
+                            className = ClassName("threads-empty")
+                            +"Loading thread..."
+                        }
+                    } else {
+                        // Pending sends for one message: "eventId|emoji" keys -> that message's emojis.
+                        fun pendingFor(id: String) = pendingReactions.filter { it.startsWith("$id|") }.map { it.substringAfter('|') }
+
+                        // Nested replies resolve their lowercase-e parent from the loaded thread.
+                        val messagesById = (detail.replies + detail.root).associateBy { it.id }
+
+                        fun ChildrenBuilder.renderThreadMessage(msg: NostrGroupClient.NostrMessage, isRoot: Boolean) = threadMessage(
+                            msg,
+                            userMetadata,
+                            isRoot = isRoot,
+                            myPubkey,
+                            messageStatus[msg.id],
+                            reactions[msg.id] ?: emptyMap(),
+                            pendingFor(msg.id),
+                            parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
+                            highlighted = msg.id == highlightId,
+                            onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
+                            onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
+                            // A group ref in the body opens that group's chat page.
+                            onGroupRef = { gid, relay -> props.onNavigate(GroupRoute(relay ?: route.relayUrl, gid)) },
+                            onRetry = { vm.retrySend(msg.id) },
+                            onDismiss = { vm.dismissFailed(msg.id) },
+                        )
+
+                        div {
+                            className = ClassName("thread-detail-body")
+                            renderThreadMessage(detail.root, isRoot = true)
+                            div {
+                                className = ClassName("thread-replies-divider")
+                                +(if (detail.replies.size == 1) "1 reply" else "${detail.replies.size} replies")
+                            }
+                            detail.replies.forEach { r -> renderThreadMessage(r, isRoot = false) }
+                        }
+                        // Same composer as DM (.dm-composer): rounded bar, Enter to send, emoji picker.
+                        div {
+                            className = ClassName("dm-composer-wrap")
+                            // Reply chip above the composer while answering a specific message.
+                            replyingTo?.let { target ->
+                                div {
+                                    className = ClassName("composer-reply")
+                                    icon(Ic.Reply)
+                                    span {
+                                        className = ClassName("composer-reply-label")
+                                        +"Replying to"
+                                    }
+                                    span {
+                                        className = ClassName("composer-reply-name")
+                                        +threadDisplayName(target.pubkey, userMetadata[target.pubkey])
+                                    }
+                                    target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { preview ->
+                                        span {
+                                            className = ClassName("composer-reply-text")
+                                            +preview
+                                        }
+                                    }
+                                    button {
+                                        className = ClassName("composer-reply-close")
+                                        onClick = { setReplyingTo(null) }
+                                        icon(Ic.Close)
+                                    }
+                                }
+                            }
+                            div {
+                                className = ClassName("dm-composer")
+                                UploadButton {
+                                    cls = "dm-composer-btn"
+                                    icon = Ic.AttachFile
+                                    busy = uploadCount > 0
+                                    onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
+                                    onPickerClosed = { composerInputRef.current?.focus() }
+                                    onUploaded = { upload -> setReply { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
+                                    onError = { setUploadError(it) }
+                                }
+                                textarea {
+                                    ref = composerInputRef
+                                    rows = 1
+                                    value = reply
+                                    placeholder = "Write a reply..."
+                                    onChange = { setReply((it.target as HTMLTextAreaElement).value) }
+                                    onKeyDown = { e ->
+                                        if (e.key == "Enter" && !e.shiftKey) {
+                                            e.preventDefault()
+                                            sendReply()
+                                        }
+                                    }
+                                    onPaste = { event ->
+                                        val items = event.asDynamic().clipboardData?.items
+                                        val count = (items?.length as? Int) ?: 0
+                                        for (i in 0 until count) {
+                                            val item = items[i]
+                                            val type = item.type.unsafeCast<String?>()
+                                            if (item.kind == "file" && isMediaMime(type)) {
+                                                val file = item.getAsFile()
+                                                if (file != null) {
+                                                    event.preventDefault()
+                                                    handleMediaFile(file)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    onDragOver = { it.preventDefault() }
+                                    onDrop = { event ->
+                                        val files = event.asDynamic().dataTransfer?.files
+                                        val count = (files?.length as? Int) ?: 0
+                                        if (count > 0) event.preventDefault()
+                                        for (i in 0 until count) {
+                                            val file = files[i]
+                                            if (isMediaMime(file.type.unsafeCast<String?>())) handleMediaFile(file)
+                                        }
+                                    }
+                                }
+                                button {
+                                    className = ClassName(if (emojiOpen) "dm-composer-btn active" else "dm-composer-btn")
+                                    title = "Emoji"
+                                    onClick = { setEmojiOpen(!emojiOpen) }
+                                    icon(Ic.EmojiEmotions)
+                                }
+                                button {
+                                    className = ClassName("dm-composer-btn send")
+                                    title = "Send"
+                                    disabled = (reply.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
+                                    onMouseDown = { e -> e.preventDefault() }
+                                    onClick = { sendReply() }
+                                    if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
+                                }
+                                if (emojiOpen) {
+                                    div {
+                                        className = ClassName("emoji-overlay")
+                                        onClick = { setEmojiOpen(false) }
+                                        EmojiPicker {
+                                            onPick = { emoji ->
+                                                insertAtCursor(emoji)
+                                                setEmojiOpen(false)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             // Thread message context menu: quick reactions, copy text, delete (own message).

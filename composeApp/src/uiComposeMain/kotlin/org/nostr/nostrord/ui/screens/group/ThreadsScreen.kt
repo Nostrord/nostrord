@@ -8,10 +8,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -32,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -162,20 +165,25 @@ fun ThreadsScreen(
     // Shared with MessageContent via LocalImageViewerUrl: tap an inline image -> fullscreen viewer.
     val imageViewerUrl = remember { mutableStateOf<String?>(null) }
 
-    Column(modifier = Modifier.fillMaxSize().background(NostrordColors.Background)) {
-        if (route.threadRootId != null) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(NostrordColors.Background)) {
+        // Discord-style split on large widths: the list keeps living on the left and the open
+        // thread docks on the right; compact widths keep the swap (detail replaces the list).
+        val split = maxWidth >= 840.dp
+        val detailPane: @Composable ColumnScope.() -> Unit = {
             // ---- Single thread (detail) ----
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back to threads",
-                        tint = NostrordColors.TextSecondary,
-                    )
+                if (!split) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to threads",
+                            tint = NostrordColors.TextSecondary,
+                        )
+                    }
                 }
                 Text(
                     "Thread",
@@ -188,6 +196,12 @@ fun ThreadsScreen(
                 if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
                     IconButton(onClick = { deleteTarget = ownRoot }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete thread", tint = NostrordColors.TextSecondary)
+                    }
+                }
+                if (split) {
+                    // Desktop closes the docked thread via the X, Discord-style.
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.Close, contentDescription = "Close thread", tint = NostrordColors.TextSecondary)
                     }
                 }
             }
@@ -304,7 +318,8 @@ fun ThreadsScreen(
                     modifier = Modifier.padding(Spacing.md),
                 )
             }
-        } else {
+        }
+        val listPane: @Composable ColumnScope.() -> Unit = {
             // ---- Threads list ----
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm),
@@ -337,9 +352,22 @@ fun ThreadsScreen(
                                 t,
                                 userMetadata,
                                 chips = topReactionChips(reactions[t.rootId] ?: emptyMap()),
+                                selected = t.rootId == route.threadRootId,
                             ) { onNavigate(route.copy(threadRootId = t.rootId)) }
                         }
                     }
+            }
+        }
+
+        if (split && route.threadRootId != null) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) { listPane() }
+                VerticalDivider(color = NostrordColors.Divider)
+                Column(modifier = Modifier.weight(1.2f).fillMaxHeight()) { detailPane() }
+            }
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (route.threadRootId != null) detailPane() else listPane()
             }
         }
     }
@@ -468,11 +496,15 @@ private fun ThreadCard(
     t: ThreadSummary,
     userMetadata: Map<String, UserMetadata>,
     chips: List<ReactionChip>,
+    selected: Boolean,
     onClick: () -> Unit,
 ) {
     val meta = userMetadata[t.authorPubkey]
     Row(
-        modifier = Modifier.fillMaxWidth().clip(NostrordShapes.shapeLarge).clickable(onClick = onClick).padding(Spacing.md),
+        modifier = Modifier.fillMaxWidth().clip(NostrordShapes.shapeLarge)
+            // The thread open in the split view stays visibly selected in the list.
+            .background(if (selected) NostrordColors.MessageHover else Color.Transparent)
+            .clickable(onClick = onClick).padding(Spacing.md),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         ProfileAvatar(
