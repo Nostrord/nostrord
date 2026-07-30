@@ -37,6 +37,7 @@ import org.nostr.nostrord.web.components.reactionBadges
 import org.nostr.nostrord.web.components.sendStateIcon
 import org.nostr.nostrord.web.components.uploadBlob
 import org.nostr.nostrord.web.modals.CreateThreadModal
+import org.nostr.nostrord.web.modals.UserProfileModal
 import react.ChildrenBuilder
 import react.FC
 import react.Props
@@ -117,6 +118,9 @@ val ThreadsScreen =
 
         // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
         val (reactingTo, setReactingTo) = useState<Pair<String, String>?> { null }
+
+        // Avatar / author-name / mention tap target: opens the user profile modal (chat parity).
+        val (profilePubkey, setProfilePubkey) = useState<String?> { null }
 
         // Context menu (right-click / long-press) over a thread message.
         val (ctxMenu, setCtxMenu) = useState<ThreadCtxMenu?> { null }
@@ -409,6 +413,7 @@ val ThreadsScreen =
                                 highlighted = msg.id == highlightId,
                                 onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                 onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
+                                onUser = { setProfilePubkey(it) },
                                 // A group ref in the body opens that group's chat page.
                                 onGroupRef = { gid, relay -> props.onNavigate(GroupRoute(relay ?: route.relayUrl, gid)) },
                                 onRetry = { vm.retrySend(msg.id) },
@@ -627,6 +632,15 @@ val ThreadsScreen =
                     }
                 }
             }
+            // User profile modal (avatar / author-name / mention tap), same modal as chat.
+            profilePubkey?.let { pk ->
+                UserProfileModal {
+                    pubkey = pk
+                    groupId = route.groupId
+                    onClose = { setProfilePubkey(null) }
+                }
+            }
+
             // Delete confirm modal (chat parity: destructive confirm, no window.confirm).
             deleteTarget?.let { target ->
                 val isRoot = target.id == route.threadRootId
@@ -706,6 +720,7 @@ private fun ChildrenBuilder.threadMessage(
     highlighted: Boolean,
     onReact: (String) -> Unit,
     onOpenMenu: (Double, Double) -> Unit,
+    onUser: (String) -> Unit,
     onGroupRef: (String, String?) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
@@ -725,12 +740,17 @@ private fun ChildrenBuilder.threadMessage(
                 onOpenMenu(e.clientX, e.clientY)
             }
         }
-        WebAvatar {
-            url = userMetadata[msg.pubkey]?.picture
-            seed = msg.pubkey
-            this.name = threadDisplayName(msg.pubkey, userMetadata[msg.pubkey])
-            kind = AvatarKind.USER
-            cls = "thread-msg-avatar"
+        // Avatar and author name open the user profile modal (chat parity).
+        div {
+            className = ClassName("thread-msg-avatar-btn")
+            onClick = { onUser(msg.pubkey) }
+            WebAvatar {
+                url = userMetadata[msg.pubkey]?.picture
+                seed = msg.pubkey
+                this.name = threadDisplayName(msg.pubkey, userMetadata[msg.pubkey])
+                kind = AvatarKind.USER
+                cls = "thread-msg-avatar"
+            }
         }
         div {
             className = ClassName("thread-msg-main")
@@ -738,6 +758,7 @@ private fun ChildrenBuilder.threadMessage(
                 className = ClassName("thread-msg-head")
                 span {
                     className = ClassName("thread-msg-author")
+                    onClick = { onUser(msg.pubkey) }
                     +threadDisplayName(msg.pubkey, userMetadata[msg.pubkey])
                 }
                 span {
@@ -780,7 +801,7 @@ private fun ChildrenBuilder.threadMessage(
                     msg.tags,
                     userMetadata,
                     emptyMap(),
-                    onUser = {},
+                    onUser = onUser,
                     onEventRef = {},
                     onGroupRef = onGroupRef,
                 )

@@ -2396,6 +2396,20 @@ body {
     word-break: break-word;
 }
 
+/* Avatar and author name open the profile modal. */
+.thread-msg-avatar-btn {
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.thread-msg-author {
+    cursor: pointer;
+}
+
+.thread-msg-author:hover {
+    text-decoration: underline;
+}
+
 /* "Share to chat" opt-in in the create-thread modal. */
 .thread-share-check {
     display: flex;

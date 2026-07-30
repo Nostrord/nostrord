@@ -90,6 +90,7 @@ import org.nostr.nostrord.ui.navigation.HashRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
+import org.nostr.nostrord.ui.screens.group.components.UserProfileModal
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
@@ -133,6 +134,9 @@ fun ThreadsScreen(
 
     // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
     var reactingTo by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // Avatar / author-name / mention tap target: opens the user profile modal (chat parity).
+    var selectedUserPubkey by remember { mutableStateOf<String?>(null) }
 
     // Message being answered by the composer (context-menu Reply); null posts top-level.
     var replyingTo by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
@@ -283,6 +287,7 @@ fun ThreadsScreen(
                                     onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
                                     onReply = { replyingTo = msg },
                                     onShareToChat = { vm.shareThreadToChat(msg) },
+                                    onUserClick = { selectedUserPubkey = it },
                                     onDelete = { deleteTarget = msg },
                                     // A group ref in the body opens that group's chat page.
                                     onNavigateToGroup = { gid, _, relay, _ ->
@@ -481,6 +486,16 @@ fun ThreadsScreen(
         }
     }
 
+    // User profile modal (avatar / author-name / mention tap), same modal as chat.
+    selectedUserPubkey?.let { pk ->
+        UserProfileModal(
+            pubkey = pk,
+            metadata = userMetadata[pk],
+            userMetadata = userMetadata,
+            onDismiss = { selectedUserPubkey = null },
+        )
+    }
+
     // Relay rejected the kind:5/9005 delete - show the reason instead of silently swallowing
     // (chat parity: "Could Not Delete Message" + the relay's OK message).
     deleteError?.let { error ->
@@ -632,6 +647,7 @@ private fun ThreadMessage(
     onOpenReactionPicker: () -> Unit,
     onReply: () -> Unit,
     onShareToChat: () -> Unit,
+    onUserClick: (String) -> Unit,
     onDelete: () -> Unit,
     onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
     onRetry: () -> Unit,
@@ -707,12 +723,15 @@ private fun ThreadMessage(
             modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            ProfileAvatar(
-                imageUrl = meta?.picture,
-                displayName = threadDisplayName(msg.pubkey, meta),
-                pubkey = msg.pubkey,
-                size = 36.dp,
-            )
+            // Avatar and author name open the user profile modal (chat parity).
+            Box(modifier = Modifier.clip(NostrordShapes.shapeMedium).clickable { onUserClick(msg.pubkey) }) {
+                ProfileAvatar(
+                    imageUrl = meta?.picture,
+                    displayName = threadDisplayName(msg.pubkey, meta),
+                    pubkey = msg.pubkey,
+                    size = 36.dp,
+                )
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     Text(
@@ -720,6 +739,7 @@ private fun ThreadMessage(
                         color = NostrordColors.TextPrimary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable { onUserClick(msg.pubkey) },
                     )
                     Text(formatTimestamp(msg.createdAt), color = NostrordColors.TextMuted, fontSize = 12.sp)
                 }
@@ -748,6 +768,7 @@ private fun ThreadMessage(
                         tags = msg.tags,
                         currentGroupId = route.groupId,
                         currentRelayUrl = route.relayUrl,
+                        onMentionClick = onUserClick,
                         onNavigateToGroup = onNavigateToGroup,
                         modifier = Modifier.weight(1f, fill = false).padding(top = 2.dp),
                     )
