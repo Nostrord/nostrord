@@ -52,6 +52,8 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.network.toEventJson
+import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
@@ -71,6 +73,7 @@ import org.nostr.nostrord.ui.components.chat.rightClickContextMenuModifier
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.HashRoute
+import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
@@ -490,6 +493,14 @@ private fun ThreadMessage(
                     is MessageContextAction.QuickReact -> onReact(action.emoji)
                     MessageContextAction.AddReaction -> onOpenReactionPicker()
                     MessageContextAction.CopyText -> writeClipboard(msg.content)
+                    // A reply links to its thread page too (the root id from the E tag).
+                    MessageContextAction.CopyMessageLink ->
+                        writeClipboard(threadShareLink(route.relayUrl, route.groupId, msg.threadRootIdTag() ?: msg.id))
+                    MessageContextAction.CopyNevent ->
+                        writeClipboard(
+                            Nip19.encodeNevent(msg.id, relays = listOf(route.relayUrl), authorHex = msg.pubkey, kind = msg.kind),
+                        )
+                    MessageContextAction.CopyEventJson -> writeClipboard(msg.toEventJson())
                     MessageContextAction.DeleteMessage -> onDelete()
                     else -> Unit
                 }
