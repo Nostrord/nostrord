@@ -39,6 +39,13 @@ data class ThreadDetail(
 /** The `E` (root-scope) tag of a kind:1111 reply: the id of the thread it belongs to. */
 internal fun NostrGroupClient.NostrMessage.threadRootIdTag(): String? = tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1)
 
+/**
+ * The lowercase `e` (parent) tag of a kind:1111 reply: the specific message it answers.
+ * Present only on nested replies - a top-level reply's parent IS the root, so ThreadTags
+ * omits the lowercase triple (see [org.nostr.nostrord.network.managers.ThreadTags.reply]).
+ */
+internal fun NostrGroupClient.NostrMessage.threadParentIdTag(): String? = tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+
 /** Cap [this] at [max] chars, appending an ellipsis when something was cut. */
 private fun String.takeWithEllipsis(max: Int): String = if (length > max) take(max) + "..." else this
 
@@ -197,15 +204,21 @@ class ThreadsViewModel(
     }
 
     /**
-     * Post a top-level reply (kind:1111) to the open thread. No-op on blank content. [onSuccess]/
-     * [onFailure] fire after the local build/sign step (the reply then appears with a Sending
-     * status and delivers in the background), so the composer can show a send spinner like chat.
+     * Post a reply (kind:1111) to the open thread. [parent] targets a specific message for a
+     * nested reply; null (or the root itself) posts top-level. No-op on blank content.
+     * [onSuccess]/[onFailure] fire after the local build/sign step (the reply then appears with
+     * a Sending status and delivers in the background), so the composer can show a send spinner.
      */
-    fun sendReply(content: String, onSuccess: () -> Unit = {}, onFailure: () -> Unit = {}) {
+    fun sendReply(
+        content: String,
+        parent: NostrGroupClient.NostrMessage? = null,
+        onSuccess: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) {
         if (content.isBlank()) return
         val root = openThread.value?.root ?: return
         viewModelScope.launch {
-            val result = withMinDuration { repo.sendThreadReply(groupId, root = root, parent = root, content = content.trim()) }
+            val result = withMinDuration { repo.sendThreadReply(groupId, root = root, parent = parent ?: root, content = content.trim()) }
             when (result) {
                 is Result.Error -> onFailure()
                 is Result.Success -> onSuccess()

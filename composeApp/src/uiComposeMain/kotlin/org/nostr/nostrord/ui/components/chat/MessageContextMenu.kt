@@ -176,6 +176,17 @@ fun ThreadMessageContextMenu(
             ContextMenuDivider()
 
             ContextMenuItem(
+                icon = Icons.AutoMirrored.Outlined.Reply,
+                label = "Reply",
+                onClick = {
+                    onAction(MessageContextAction.Reply)
+                    onDismiss()
+                },
+            )
+
+            ContextMenuDivider()
+
+            ContextMenuItem(
                 icon = Icons.Outlined.ContentCopy,
                 label = "Copy text",
                 onClick = {

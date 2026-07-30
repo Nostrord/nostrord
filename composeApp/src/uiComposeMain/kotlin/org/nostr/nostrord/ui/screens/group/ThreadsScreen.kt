@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material3.AlertDialog
@@ -67,6 +68,7 @@ import org.nostr.nostrord.ui.components.chat.MessageContent
 import org.nostr.nostrord.ui.components.chat.MessageContextAction
 import org.nostr.nostrord.ui.components.chat.MessageStatusIndicator
 import org.nostr.nostrord.ui.components.chat.ReactionBadges
+import org.nostr.nostrord.ui.components.chat.ReplyPreview
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
 import org.nostr.nostrord.ui.components.chat.ThreadMessageContextMenu
 import org.nostr.nostrord.ui.components.chat.rightClickContextMenuModifier
@@ -117,8 +119,14 @@ fun ThreadsScreen(
     // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
     var reactingTo by remember { mutableStateOf<Pair<String, String>?>(null) }
 
+    // Message being answered by the composer (context-menu Reply); null posts top-level.
+    var replyingTo by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
+
     // Keep the open thread synced with the route (#/g/<relay>/<id>/threads/<rootId>).
-    LaunchedEffect(route.threadRootId) { vm.openThread(route.threadRootId) }
+    LaunchedEffect(route.threadRootId) {
+        vm.openThread(route.threadRootId)
+        replyingTo = null
+    }
 
     var showCompose by remember { mutableStateOf(false) }
     // Message pending delete confirmation (the root or any reply, from the header or the menu).
@@ -171,6 +179,8 @@ fun ThreadsScreen(
                         LocalImageViewerUrl provides imageViewerUrl,
                         LocalAnimatedImageHidden provides (imageViewerUrl.value != null),
                     ) {
+                        // Nested replies resolve their lowercase-e parent from the loaded thread.
+                        val messagesById = remember(detail) { (detail.replies + detail.root).associateBy { it.id } }
                         val renderMessage: @Composable (NostrGroupClient.NostrMessage, Boolean) -> Unit = { msg, isRoot ->
                             ThreadMessage(
                                 msg = msg,
@@ -185,9 +195,11 @@ fun ThreadsScreen(
                                     .filter { it.startsWith("${msg.id}|") }
                                     .map { it.substringAfter('|') }
                                     .toSet(),
+                                parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
                                 resolveMetadata = { userMetadata[it] },
                                 onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                 onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
+                                onReply = { replyingTo = msg },
                                 onDelete = { deleteTarget = msg },
                                 // A group ref in the body opens that group's chat page.
                                 onNavigateToGroup = { gid, _, relay, _ ->
@@ -209,6 +221,38 @@ fun ThreadsScreen(
                         detail.replies.forEach { renderMessage(it, false) }
                     }
                 }
+                // Reply chip above the composer while answering a specific message (web parity).
+                replyingTo?.let { target ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md).padding(top = Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    ) {
+                        Text("Replying to", color = NostrordColors.TextMuted, fontSize = 12.sp)
+                        Text(
+                            threadDisplayName(target.pubkey, userMetadata[target.pubkey]),
+                            color = NostrordColors.Primary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty(),
+                            color = NostrordColors.TextMuted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { replyingTo = null }, modifier = Modifier.size(24.dp)) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Cancel reply",
+                                tint = NostrordColors.TextMuted,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
                 MessageComposer(
                     value = reply,
                     onValueChange = { reply = it },
@@ -217,8 +261,10 @@ fun ThreadsScreen(
                             sending = true
                             vm.sendReply(
                                 reply.text.trim(),
+                                parent = replyingTo,
                                 onSuccess = {
                                     reply = TextFieldValue("")
+                                    replyingTo = null
                                     sending = false
                                 },
                                 onFailure = { sending = false },
@@ -458,9 +504,11 @@ private fun ThreadMessage(
     status: GroupManager.MessageStatus?,
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: Set<String>,
+    parentMsg: NostrGroupClient.NostrMessage?,
     resolveMetadata: (String) -> UserMetadata?,
     onReact: (String) -> Unit,
     onOpenReactionPicker: () -> Unit,
+    onReply: () -> Unit,
     onDelete: () -> Unit,
     onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
     onRetry: () -> Unit,
@@ -492,6 +540,7 @@ private fun ThreadMessage(
                 when (action) {
                     is MessageContextAction.QuickReact -> onReact(action.emoji)
                     MessageContextAction.AddReaction -> onOpenReactionPicker()
+                    MessageContextAction.Reply -> onReply()
                     MessageContextAction.CopyText -> writeClipboard(msg.content)
                     // A reply links to its thread page too (the root id from the E tag).
                     MessageContextAction.CopyMessageLink ->
@@ -533,6 +582,15 @@ private fun ThreadMessage(
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(vertical = Spacing.xs),
+                    )
+                }
+                // Nested reply: quote the answered message above the body (placeholder when the
+                // parent has not loaded), like chat's reply preview.
+                if (!isRoot && (parentMsg != null || msg.threadParentIdTag() != null)) {
+                    ReplyPreview(
+                        parentMessage = parentMsg,
+                        parentMetadata = parentMsg?.let { resolveMetadata(it.pubkey) },
+                        resolveMetadata = resolveMetadata,
                     )
                 }
                 Row(verticalAlignment = Alignment.Bottom) {

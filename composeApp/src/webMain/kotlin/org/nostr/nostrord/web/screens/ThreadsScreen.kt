@@ -13,6 +13,7 @@ import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
+import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadTitle
 import org.nostr.nostrord.ui.screens.group.topReactionChips
@@ -127,8 +128,14 @@ val ThreadsScreen =
             el.style.visibility = "visible"
         }
 
+        // Message being answered by the composer (context-menu Reply); null posts top-level.
+        val (replyingTo, setReplyingTo) = useState<NostrGroupClient.NostrMessage?> { null }
+
         // Keep the open thread synced with the URL (#/g/<relay>/<id>/threads/<rootId>).
-        useEffect(route.threadRootId) { vm.openThread(route.threadRootId) }
+        useEffect(route.threadRootId) {
+            vm.openThread(route.threadRootId)
+            setReplyingTo(null)
+        }
 
         val (composing, setComposing) = useState { false }
         val (reply, setReply) = useState { "" }
@@ -160,8 +167,10 @@ val ThreadsScreen =
             setSending(true)
             vm.sendReply(
                 reply,
+                parent = replyingTo,
                 onSuccess = {
                     setReply("")
+                    setReplyingTo(null)
                     setSending(false)
                 },
                 onFailure = { setSending(false) },
@@ -221,6 +230,9 @@ val ThreadsScreen =
                     // Pending sends for one message: "eventId|emoji" keys -> that message's emojis.
                     fun pendingFor(id: String) = pendingReactions.filter { it.startsWith("$id|") }.map { it.substringAfter('|') }
 
+                    // Nested replies resolve their lowercase-e parent from the loaded thread.
+                    val messagesById = (detail.replies + detail.root).associateBy { it.id }
+
                     fun ChildrenBuilder.renderThreadMessage(msg: NostrGroupClient.NostrMessage, isRoot: Boolean) = threadMessage(
                         msg,
                         userMetadata,
@@ -229,6 +241,7 @@ val ThreadsScreen =
                         messageStatus[msg.id],
                         reactions[msg.id] ?: emptyMap(),
                         pendingFor(msg.id),
+                        parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
                         onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                         onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
                         // A group ref in the body opens that group's chat page.
@@ -249,6 +262,32 @@ val ThreadsScreen =
                     // Same composer as DM (.dm-composer): rounded bar, Enter to send, emoji picker.
                     div {
                         className = ClassName("dm-composer-wrap")
+                        // Reply chip above the composer while answering a specific message.
+                        replyingTo?.let { target ->
+                            div {
+                                className = ClassName("composer-reply")
+                                icon(Ic.Reply)
+                                span {
+                                    className = ClassName("composer-reply-label")
+                                    +"Replying to"
+                                }
+                                span {
+                                    className = ClassName("composer-reply-name")
+                                    +threadDisplayName(target.pubkey, userMetadata[target.pubkey])
+                                }
+                                target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { preview ->
+                                    span {
+                                        className = ClassName("composer-reply-text")
+                                        +preview
+                                    }
+                                }
+                                button {
+                                    className = ClassName("composer-reply-close")
+                                    onClick = { setReplyingTo(null) }
+                                    icon(Ic.Close)
+                                }
+                            }
+                        }
                         div {
                             className = ClassName("dm-composer")
                             UploadButton {
@@ -465,6 +504,12 @@ val ThreadsScreen =
                         }
                     }
                     div { className = ClassName("ctx-divider") }
+                    ctxItem(Ic.Reply, "Reply") {
+                        setReplyingTo(m.msg)
+                        setCtxMenu(null)
+                        composerInputRef.current?.focus()
+                    }
+                    div { className = ClassName("ctx-divider") }
                     ctxItem(Ic.ContentCopy, "Copy text") {
                         copyToClipboard(m.msg.content)
                         setCtxMenu(null)
@@ -566,6 +611,7 @@ private fun ChildrenBuilder.threadMessage(
     status: GroupManager.MessageStatus?,
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: List<String>,
+    parentMsg: NostrGroupClient.NostrMessage?,
     onReact: (String) -> Unit,
     onOpenMenu: (Double, Double) -> Unit,
     onGroupRef: (String, String?) -> Unit,
@@ -607,6 +653,27 @@ private fun ChildrenBuilder.threadMessage(
                 h2 {
                     className = ClassName("thread-msg-title")
                     +msg.threadTitle()
+                }
+            }
+            // Nested reply: quote the answered message above the body (placeholder when the
+            // parent has not loaded), like chat's reply preview.
+            if (!isRoot && (parentMsg != null || msg.threadParentIdTag() != null)) {
+                div {
+                    className = ClassName("msg-reply")
+                    div { className = ClassName("msg-reply-bar") }
+                    div {
+                        className = ClassName("msg-reply-content")
+                        div {
+                            className = ClassName("msg-reply-author")
+                            +(parentMsg?.let { threadDisplayName(it.pubkey, userMetadata[it.pubkey]) } ?: "Replying to a message...")
+                        }
+                        parentMsg?.let { p ->
+                            div {
+                                className = ClassName("msg-reply-text")
+                                +p.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+                            }
+                        }
+                    }
                 }
             }
             div {
