@@ -2154,9 +2154,17 @@ body {
    Compose ThreadsScreen and the prototype's GroupPanels.ThreadsPanel / ThreadPanel, as a page. */
 .threads-page {
     display: flex;
+    flex-direction: column;
     min-height: 0;
     height: 100%;
     background: var(--color-background);
+}
+
+/* The panes row under the page header. */
+.threads-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
 }
 
 /* Discord-style split: the list keeps living on the left, the open thread docks right. */
@@ -2166,7 +2174,6 @@ body {
     flex-direction: column;
     min-height: 0;
     min-width: 0;
-    height: 100%;
 }
 
 .threads-list-pane {

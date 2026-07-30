@@ -797,7 +797,7 @@ private fun FrameContent(
                         // Smart "up": pop to the threads list when it's the entry we came from,
                         // else push it (a deep link straight to a thread has no list behind it).
                         onBack = { onNavigateBackOr(route.copy(threadRootId = null)) },
-                        onOpenDrawer = onOpenDrawer ?: {},
+                        onOpenDrawer = onOpenDrawer,
                     )
                 } else {
                     val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()

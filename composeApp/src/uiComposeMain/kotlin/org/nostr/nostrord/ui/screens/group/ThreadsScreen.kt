@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -87,6 +88,7 @@ import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.HashRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
+import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
@@ -107,7 +109,8 @@ fun ThreadsScreen(
     route: GroupRoute,
     onNavigate: (HashRoute) -> Unit,
     onBack: () -> Unit = { onNavigate(route.copy(threadRootId = null)) },
-    onOpenDrawer: () -> Unit = {},
+    // Non-null only on the mobile layout, where it opens the groups drawer (chat parity).
+    onOpenDrawer: (() -> Unit)? = null,
 ) {
     // Distinct key prefix: GroupSidebar/GroupScreen use viewModel(key = groupId) for GroupViewModel
     // in the same ViewModelStore, so a bare groupId key here collided with it and the two evicted +
@@ -165,209 +168,245 @@ fun ThreadsScreen(
     // Shared with MessageContent via LocalImageViewerUrl: tap an inline image -> fullscreen viewer.
     val imageViewerUrl = remember { mutableStateOf<String?>(null) }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(NostrordColors.Background)) {
-        // Discord-style split on large widths: the list keeps living on the left and the open
-        // thread docks on the right; compact widths keep the swap (detail replaces the list).
-        val split = maxWidth >= 840.dp
-        val detailPane: @Composable ColumnScope.() -> Unit = {
-            // ---- Single thread (detail) ----
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-            ) {
-                if (!split) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back to threads",
-                            tint = NostrordColors.TextSecondary,
-                        )
-                    }
-                }
-                Text(
-                    "Thread",
-                    color = NostrordColors.TextPrimary,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                val ownRoot = openThread?.root
-                if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
-                    IconButton(onClick = { deleteTarget = ownRoot }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete thread", tint = NostrordColors.TextSecondary)
-                    }
-                }
-                if (split) {
-                    // Desktop closes the docked thread via the X, Discord-style.
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.Close, contentDescription = "Close thread", tint = NostrordColors.TextSecondary)
-                    }
+    Column(modifier = Modifier.fillMaxSize().background(NostrordColors.Background)) {
+        // Page header: group identity over the whole pane, mirroring the chat header
+        // (drawer ≡ on mobile, avatar + name).
+        val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
+        val groupMeta = groupsByRelay[route.relayUrl]?.firstOrNull { it.id == route.groupId }
+            ?: groupsByRelay.values.flatten().firstOrNull { it.id == route.groupId }
+        val groupName = groupMeta?.name?.takeIf { it.isNotBlank() } ?: "#${route.groupId.take(8)}"
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            if (onOpenDrawer != null) {
+                IconButton(onClick = onOpenDrawer) {
+                    Icon(Icons.Default.Menu, contentDescription = "Open groups", tint = NostrordColors.TextSecondary)
                 }
             }
-            HorizontalDivider(color = NostrordColors.Divider)
+            GroupHeaderIcon(
+                pictureUrl = groupMeta?.picture,
+                groupId = route.groupId,
+                displayName = groupName,
+                size = 28.dp,
+                cornerRadius = 8.dp,
+            )
+            Text(
+                groupName,
+                color = NostrordColors.TextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        HorizontalDivider(color = NostrordColors.Divider)
 
-            val detail = openThread
-            if (detail == null) {
-                EmptyState("Loading thread...")
-            } else {
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxWidth()
-                        .verticalScroll(threadScroll).padding(Spacing.md),
+        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // Discord-style split on large widths: the list keeps living on the left and the open
+            // thread docks on the right; compact widths keep the swap (detail replaces the list).
+            val split = maxWidth >= 840.dp
+            val detailPane: @Composable ColumnScope.() -> Unit = {
+                // ---- Single thread (detail) ----
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
-                    CompositionLocalProvider(
-                        LocalImageViewerUrl provides imageViewerUrl,
-                        LocalAnimatedImageHidden provides (imageViewerUrl.value != null),
-                    ) {
-                        // Nested replies resolve their lowercase-e parent from the loaded thread.
-                        val messagesById = remember(detail) { (detail.replies + detail.root).associateBy { it.id } }
-                        val renderMessage: @Composable (NostrGroupClient.NostrMessage, Boolean) -> Unit = { msg, isRoot ->
-                            ThreadMessage(
-                                msg = msg,
-                                userMetadata = userMetadata,
-                                isRoot = isRoot,
-                                myPubkey = myPubkey,
-                                route = route,
-                                status = messageStatus[msg.id],
-                                reactions = reactions[msg.id] ?: emptyMap(),
-                                // Pending sends for this message: "eventId|emoji" keys -> emojis.
-                                pendingEmojis = pendingReactions
-                                    .filter { it.startsWith("${msg.id}|") }
-                                    .map { it.substringAfter('|') }
-                                    .toSet(),
-                                parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
-                                highlighted = msg.id == highlightId,
-                                onPositioned = if (msg.id == route.messageId) ({ y -> highlightTargetY = y }) else null,
-                                resolveMetadata = { userMetadata[it] },
-                                onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
-                                onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
-                                onReply = { replyingTo = msg },
-                                onDelete = { deleteTarget = msg },
-                                // A group ref in the body opens that group's chat page.
-                                onNavigateToGroup = { gid, _, relay, _ ->
-                                    onNavigate(GroupRoute(relay ?: route.relayUrl, gid))
-                                },
-                                onRetry = { vm.retrySend(msg.id) },
-                                onDismiss = { vm.dismissFailed(msg.id) },
-                            )
-                        }
-                        renderMessage(detail.root, true)
-                        Text(
-                            if (detail.replies.size == 1) "1 REPLY" else "${detail.replies.size} REPLIES",
-                            color = NostrordColors.TextMuted,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            modifier = Modifier.padding(vertical = Spacing.sm),
-                        )
-                        detail.replies.forEach { renderMessage(it, false) }
-                    }
-                }
-                // Reply chip above the composer while answering a specific message (web parity).
-                replyingTo?.let { target ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md).padding(top = Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                    ) {
-                        Text("Replying to", color = NostrordColors.TextMuted, fontSize = 12.sp)
-                        Text(
-                            threadDisplayName(target.pubkey, userMetadata[target.pubkey]),
-                            color = NostrordColors.Primary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty(),
-                            color = NostrordColors.TextMuted,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(onClick = { replyingTo = null }, modifier = Modifier.size(24.dp)) {
+                    if (!split) {
+                        IconButton(onClick = onBack) {
                             Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Cancel reply",
-                                tint = NostrordColors.TextMuted,
-                                modifier = Modifier.size(16.dp),
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to threads",
+                                tint = NostrordColors.TextSecondary,
                             )
+                        }
+                    }
+                    Text(
+                        "Thread",
+                        color = NostrordColors.TextPrimary,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    val ownRoot = openThread?.root
+                    if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
+                        IconButton(onClick = { deleteTarget = ownRoot }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete thread", tint = NostrordColors.TextSecondary)
+                        }
+                    }
+                    if (split) {
+                        // Desktop closes the docked thread via the X, Discord-style.
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Default.Close, contentDescription = "Close thread", tint = NostrordColors.TextSecondary)
                         }
                     }
                 }
-                MessageComposer(
-                    value = reply,
-                    onValueChange = { reply = it },
-                    onSend = {
-                        if (reply.text.isNotBlank() && !sending) {
-                            sending = true
-                            vm.sendReply(
-                                reply.text.trim(),
-                                parent = replyingTo,
-                                onSuccess = {
-                                    reply = TextFieldValue("")
-                                    replyingTo = null
-                                    sending = false
-                                },
-                                onFailure = { sending = false },
-                            )
-                        }
-                    },
-                    placeholder = "Write a reply...",
-                    isSending = sending,
-                    modifier = Modifier.padding(Spacing.md),
-                )
-            }
-        }
-        val listPane: @Composable ColumnScope.() -> Unit = {
-            // ---- Threads list ----
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                Text(
-                    "Threads",
-                    color = NostrordColors.TextPrimary,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                AppButton(
-                    text = "New thread",
-                    onClick = { showCompose = true },
-                    icon = Icons.Filled.Forum,
-                    size = AppButtonSize.Small,
-                )
-            }
-            HorizontalDivider(color = NostrordColors.Divider)
+                HorizontalDivider(color = NostrordColors.Divider)
 
-            when {
-                isLoading && threads.isEmpty() -> EmptyState("Loading threads...")
-                threads.isEmpty() -> EmptyState("No threads yet. Start the first one.")
-                else ->
-                    LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(Spacing.sm)) {
-                        items(threads, key = { it.rootId }) { t ->
-                            ThreadCard(
-                                t,
-                                userMetadata,
-                                chips = topReactionChips(reactions[t.rootId] ?: emptyMap()),
-                                selected = t.rootId == route.threadRootId,
-                            ) { onNavigate(route.copy(threadRootId = t.rootId)) }
+                val detail = openThread
+                if (detail == null) {
+                    EmptyState("Loading thread...")
+                } else {
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxWidth()
+                            .verticalScroll(threadScroll).padding(Spacing.md),
+                    ) {
+                        CompositionLocalProvider(
+                            LocalImageViewerUrl provides imageViewerUrl,
+                            LocalAnimatedImageHidden provides (imageViewerUrl.value != null),
+                        ) {
+                            // Nested replies resolve their lowercase-e parent from the loaded thread.
+                            val messagesById = remember(detail) { (detail.replies + detail.root).associateBy { it.id } }
+                            val renderMessage: @Composable (NostrGroupClient.NostrMessage, Boolean) -> Unit = { msg, isRoot ->
+                                ThreadMessage(
+                                    msg = msg,
+                                    userMetadata = userMetadata,
+                                    isRoot = isRoot,
+                                    myPubkey = myPubkey,
+                                    route = route,
+                                    status = messageStatus[msg.id],
+                                    reactions = reactions[msg.id] ?: emptyMap(),
+                                    // Pending sends for this message: "eventId|emoji" keys -> emojis.
+                                    pendingEmojis = pendingReactions
+                                        .filter { it.startsWith("${msg.id}|") }
+                                        .map { it.substringAfter('|') }
+                                        .toSet(),
+                                    parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
+                                    highlighted = msg.id == highlightId,
+                                    onPositioned = if (msg.id == route.messageId) ({ y -> highlightTargetY = y }) else null,
+                                    resolveMetadata = { userMetadata[it] },
+                                    onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
+                                    onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
+                                    onReply = { replyingTo = msg },
+                                    onDelete = { deleteTarget = msg },
+                                    // A group ref in the body opens that group's chat page.
+                                    onNavigateToGroup = { gid, _, relay, _ ->
+                                        onNavigate(GroupRoute(relay ?: route.relayUrl, gid))
+                                    },
+                                    onRetry = { vm.retrySend(msg.id) },
+                                    onDismiss = { vm.dismissFailed(msg.id) },
+                                )
+                            }
+                            renderMessage(detail.root, true)
+                            Text(
+                                if (detail.replies.size == 1) "1 REPLY" else "${detail.replies.size} REPLIES",
+                                color = NostrordColors.TextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                modifier = Modifier.padding(vertical = Spacing.sm),
+                            )
+                            detail.replies.forEach { renderMessage(it, false) }
                         }
                     }
+                    // Reply chip above the composer while answering a specific message (web parity).
+                    replyingTo?.let { target ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md).padding(top = Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                        ) {
+                            Text("Replying to", color = NostrordColors.TextMuted, fontSize = 12.sp)
+                            Text(
+                                threadDisplayName(target.pubkey, userMetadata[target.pubkey]),
+                                color = NostrordColors.Primary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty(),
+                                color = NostrordColors.TextMuted,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = { replyingTo = null }, modifier = Modifier.size(24.dp)) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Cancel reply",
+                                    tint = NostrordColors.TextMuted,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                    MessageComposer(
+                        value = reply,
+                        onValueChange = { reply = it },
+                        onSend = {
+                            if (reply.text.isNotBlank() && !sending) {
+                                sending = true
+                                vm.sendReply(
+                                    reply.text.trim(),
+                                    parent = replyingTo,
+                                    onSuccess = {
+                                        reply = TextFieldValue("")
+                                        replyingTo = null
+                                        sending = false
+                                    },
+                                    onFailure = { sending = false },
+                                )
+                            }
+                        },
+                        placeholder = "Write a reply...",
+                        isSending = sending,
+                        modifier = Modifier.padding(Spacing.md),
+                    )
+                }
             }
-        }
+            val listPane: @Composable ColumnScope.() -> Unit = {
+                // ---- Threads list ----
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    Text(
+                        "Threads",
+                        color = NostrordColors.TextPrimary,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    AppButton(
+                        text = "New thread",
+                        onClick = { showCompose = true },
+                        icon = Icons.Filled.Forum,
+                        size = AppButtonSize.Small,
+                    )
+                }
+                HorizontalDivider(color = NostrordColors.Divider)
 
-        if (split && route.threadRootId != null) {
-            Row(modifier = Modifier.fillMaxSize()) {
-                Column(modifier = Modifier.weight(1f).fillMaxHeight()) { listPane() }
-                VerticalDivider(color = NostrordColors.Divider)
-                Column(modifier = Modifier.weight(1.2f).fillMaxHeight()) { detailPane() }
+                when {
+                    isLoading && threads.isEmpty() -> EmptyState("Loading threads...")
+                    threads.isEmpty() -> EmptyState("No threads yet. Start the first one.")
+                    else ->
+                        LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(Spacing.sm)) {
+                            items(threads, key = { it.rootId }) { t ->
+                                ThreadCard(
+                                    t,
+                                    userMetadata,
+                                    chips = topReactionChips(reactions[t.rootId] ?: emptyMap()),
+                                    selected = t.rootId == route.threadRootId,
+                                ) { onNavigate(route.copy(threadRootId = t.rootId)) }
+                            }
+                        }
+                }
             }
-        } else {
-            Column(modifier = Modifier.fillMaxSize()) {
-                if (route.threadRootId != null) detailPane() else listPane()
+
+            if (split && route.threadRootId != null) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Column(modifier = Modifier.weight(1f).fillMaxHeight()) { listPane() }
+                    VerticalDivider(color = NostrordColors.Divider)
+                    Column(modifier = Modifier.weight(1.2f).fillMaxHeight()) { detailPane() }
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (route.threadRootId != null) detailPane() else listPane()
+                }
             }
         }
     }
