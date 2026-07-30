@@ -63,6 +63,7 @@ import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.memberSkeleton
 import org.nostr.nostrord.web.components.messageSendStatus
 import org.nostr.nostrord.web.components.messageSkeleton
+import org.nostr.nostrord.web.components.reactionBadges
 import org.nostr.nostrord.web.components.searchInput
 import org.nostr.nostrord.web.components.sendStateIcon
 import org.nostr.nostrord.web.components.uploadBlob
@@ -2739,7 +2740,7 @@ private fun ChildrenBuilder.uploadErrorDialog(message: String, onDismiss: () -> 
  *  GroupScreen: a "Join Required" variant (offers Join) when the relay says we're an
  *  unknown member, a signer-failure variant when the signer could not sign, otherwise
  *  "Cannot React" + OK. Classification is shared via classifyReactionError. */
-private fun ChildrenBuilder.reactionErrorDialog(message: String, onDismiss: () -> Unit, onJoin: () -> Unit) {
+internal fun ChildrenBuilder.reactionErrorDialog(message: String, onDismiss: () -> Unit, onJoin: () -> Unit) {
     val errorKind = classifyReactionError(message)
     val isUnknownMember = errorKind == ReactionErrorKind.JoinRequired
     div {
@@ -3170,57 +3171,7 @@ private val MessageRow =
                 if (props.myPubkey != null && props.myPubkey == props.pubkey) {
                     messageSendStatus(props.status, props.onRetrySend, props.onDismissFailed)
                 }
-                // Pending emojis still waiting on signEvent + relay; hide any
-                // that the optimistic update already merged into props.reactions
-                // so we never show a spinner badge next to its real counterpart.
-                val visiblePending = pendingEmojis.filter { it !in props.reactions }
-                if (props.reactions.isNotEmpty() || visiblePending.isNotEmpty()) {
-                    div {
-                        className = ClassName("msg-reactions")
-                        props.reactions.forEach { (emoji, info) ->
-                            val mine = props.myPubkey != null && props.myPubkey in info.reactors
-                            button {
-                                className = ClassName(if (mine) "reaction-badge mine" else "reaction-badge")
-                                onClick = { react(emoji) }
-                                val emojiUrl = info.emojiUrl
-                                if (!emojiUrl.isNullOrBlank()) {
-                                    img {
-                                        className = ClassName("reaction-emoji")
-                                        src = emojiUrl
-                                        alt = emoji
-                                    }
-                                } else {
-                                    +emoji
-                                }
-                                // Stacked avatars of who reacted (up to 3, overlapping), then +N overflow.
-                                div {
-                                    className = ClassName("reaction-avatars")
-                                    info.reactors.take(3).forEach { reactor ->
-                                        WebAvatar {
-                                            url = props.userMetadata[reactor]?.picture
-                                            seed = reactor
-                                            this.name = displayName(reactor, props.userMetadata[reactor])
-                                            cls = "reaction-avatar"
-                                        }
-                                    }
-                                }
-                                if (info.reactors.size > 3) {
-                                    span {
-                                        className = ClassName("reaction-count")
-                                        +"+${info.reactors.size - 3}"
-                                    }
-                                }
-                            }
-                        }
-                        visiblePending.forEach { emoji ->
-                            div {
-                                className = ClassName("reaction-badge pending")
-                                +emoji
-                                span { className = ClassName("reaction-spinner") }
-                            }
-                        }
-                    }
-                }
+                reactionBadges(props.reactions, pendingEmojis, props.myPubkey, props.userMetadata) { react(it) }
                 if (props.zapTotalMsats > 0) {
                     div {
                         className = ClassName("msg-zaps")

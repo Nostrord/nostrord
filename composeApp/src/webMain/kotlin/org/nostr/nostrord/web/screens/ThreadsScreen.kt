@@ -23,6 +23,7 @@ import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.messageSendStatus
+import org.nostr.nostrord.web.components.reactionBadges
 import org.nostr.nostrord.web.components.sendStateIcon
 import org.nostr.nostrord.web.components.uploadBlob
 import org.nostr.nostrord.web.modals.CreateThreadModal
@@ -82,7 +83,13 @@ val ThreadsScreen =
         val openThread = useStateFlow(vm.openThread)
         val userMetadata = useStateFlow(vm.userMetadata)
         val messageStatus = useStateFlow(vm.messageStatus)
+        val reactions = useStateFlow(vm.reactions)
+        val pendingReactions = useStateFlow(vm.pendingReactions)
+        val reactionError = useStateFlow(vm.reactionError)
         val myPubkey = vm.getPublicKey()
+
+        // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
+        val (reactingTo, setReactingTo) = useState<Pair<String, String>?> { null }
 
         // Keep the open thread synced with the URL (#/g/<relay>/<id>/threads/<rootId>).
         useEffect(route.threadRootId) { vm.openThread(route.threadRootId) }
@@ -175,32 +182,31 @@ val ThreadsScreen =
                         +"Loading thread..."
                     }
                 } else {
+                    // Pending sends for one message: "eventId|emoji" keys -> that message's emojis.
+                    fun pendingFor(id: String) = pendingReactions.filter { it.startsWith("$id|") }.map { it.substringAfter('|') }
+
+                    fun ChildrenBuilder.renderThreadMessage(msg: NostrGroupClient.NostrMessage, isRoot: Boolean) = threadMessage(
+                        msg,
+                        userMetadata,
+                        isRoot = isRoot,
+                        myPubkey,
+                        messageStatus[msg.id],
+                        reactions[msg.id] ?: emptyMap(),
+                        pendingFor(msg.id),
+                        onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
+                        onOpenPicker = { setReactingTo(msg.id to msg.pubkey) },
+                        onRetry = { vm.retrySend(msg.id) },
+                        onDismiss = { vm.dismissFailed(msg.id) },
+                    )
+
                     div {
                         className = ClassName("thread-detail-body")
-                        threadMessage(
-                            detail.root,
-                            userMetadata,
-                            isRoot = true,
-                            myPubkey,
-                            messageStatus[detail.root.id],
-                            { vm.retrySend(detail.root.id) },
-                            { vm.dismissFailed(detail.root.id) },
-                        )
+                        renderThreadMessage(detail.root, isRoot = true)
                         div {
                             className = ClassName("thread-replies-divider")
                             +(if (detail.replies.size == 1) "1 reply" else "${detail.replies.size} replies")
                         }
-                        detail.replies.forEach { r ->
-                            threadMessage(
-                                r,
-                                userMetadata,
-                                isRoot = false,
-                                myPubkey,
-                                messageStatus[r.id],
-                                { vm.retrySend(r.id) },
-                                { vm.dismissFailed(r.id) },
-                            )
-                        }
+                        detail.replies.forEach { r -> renderThreadMessage(r, isRoot = false) }
                     }
                     // Same composer as DM (.dm-composer): rounded bar, Enter to send, emoji picker.
                     div {
@@ -366,6 +372,31 @@ val ThreadsScreen =
                         }
                 }
             }
+            // Full emoji picker for a reaction (opened by the add-reaction button).
+            reactingTo?.let { (targetEventId, targetPubkey) ->
+                Portal {
+                    div {
+                        className = ClassName("emoji-overlay")
+                        onClick = { setReactingTo(null) }
+                        EmojiPicker {
+                            onPick = { emoji ->
+                                vm.sendReaction(targetEventId, targetPubkey, emoji)
+                                setReactingTo(null)
+                            }
+                        }
+                    }
+                }
+            }
+            reactionError?.let { err ->
+                reactionErrorDialog(
+                    err,
+                    onDismiss = { vm.clearReactionError() },
+                    onJoin = {
+                        vm.clearReactionError()
+                        vm.joinGroup()
+                    },
+                )
+            }
             uploadError?.let { uploadErrorDialog(it) { setUploadError(null) } }
         }
     }
@@ -408,6 +439,10 @@ private fun ChildrenBuilder.threadMessage(
     isRoot: Boolean,
     myPubkey: String?,
     status: GroupManager.MessageStatus?,
+    reactions: Map<String, GroupManager.ReactionInfo>,
+    pendingEmojis: List<String>,
+    onReact: (String) -> Unit,
+    onOpenPicker: () -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -458,6 +493,18 @@ private fun ChildrenBuilder.threadMessage(
             }
             if (myPubkey != null && myPubkey == msg.pubkey) {
                 messageSendStatus(status, onRetry, onDismiss)
+            }
+            // Reaction badges + the always-visible add-reaction affordance (threads have no
+            // hover-action row like chat, so the button is the way in to the full picker).
+            div {
+                className = ClassName("thread-msg-react-row")
+                reactionBadges(reactions, pendingEmojis, myPubkey, userMetadata, onReact)
+                button {
+                    className = ClassName("thread-react-btn")
+                    title = "Add reaction"
+                    onClick = { onOpenPicker() }
+                    icon(Ic.EmojiEmotions)
+                }
             }
         }
     }

@@ -4415,8 +4415,13 @@ class NostrRepository(
     // joined relays mutate this concurrently from Dispatchers.Default.
     private val _closedGroupSubscriptions = MutableStateFlow<Set<String>>(emptySet())
 
-    // Message IDs collected per msg_ subscription, used to fetch reactions after EOSE.
+    // Message IDs collected per msg_/thread subscription, used to fetch reactions after EOSE.
     private val pendingReactionFetch = mutableMapOf<String, MutableList<String>>()
+
+    /** Thread-pane subscriptions whose events get the same post-EOSE kind:7 backfill as msg_. */
+    private fun isThreadSub(subId: String) = subId.startsWith("threads_") ||
+        subId.startsWith("threadrepl_") ||
+        subId.startsWith("threadfocus_")
 
     // Pool relay URLs that have been actively connected during this session (were focused at
     // some point or were reconnected). Only these are eligible for reconnection on drop.
@@ -4781,8 +4786,8 @@ class NostrRepository(
                     if (subId.startsWith("mux_chat_")) {
                         detectAndFillGaps(client.getRelayUrl())
                     }
-                    // Fetch reactions for message IDs received in this msg_ subscription
-                    if (subId.startsWith("msg_")) {
+                    // Fetch reactions for message IDs received in this msg_ or thread subscription
+                    if (subId.startsWith("msg_") || isThreadSub(subId)) {
                         val messageIds = pendingReactionFetch.remove(subId)
                         if (!messageIds.isNullOrEmpty()) {
                             try {
@@ -4794,7 +4799,10 @@ class NostrRepository(
                             } catch (_: Exception) {}
                             // Zap receipts (kind 9735) carry no `h` tag, so they live on
                             // general relays, not the NIP-29 group relay — fetch them there.
-                            fetchZapReceiptsFromGeneralRelays(messageIds)
+                            // Chat only: the thread UI has no zap display.
+                            if (subId.startsWith("msg_")) {
+                                fetchZapReceiptsFromGeneralRelays(messageIds)
+                            }
                         }
                     }
                     // The forum thread-roots sub (threads_<groupId>) reached EOSE: stored threads
@@ -5096,7 +5104,7 @@ class NostrRepository(
                             }
                         }
                         // Track message ID for reaction fetch after EOSE
-                        if (subId.startsWith("msg_") && message.id.isNotBlank()) {
+                        if ((subId.startsWith("msg_") || isThreadSub(subId)) && message.id.isNotBlank()) {
                             pendingReactionFetch.getOrPut(subId) { mutableListOf() }.add(message.id)
                         }
                     }

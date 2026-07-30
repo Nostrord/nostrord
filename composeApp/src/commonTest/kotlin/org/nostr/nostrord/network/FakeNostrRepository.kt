@@ -615,12 +615,17 @@ class FakeNostrRepository : NostrRepositoryApi {
         _joinedGroupsByRelay.update { it + (relay to (it[relay].orEmpty() + groupId)) }
     }
 
+    var sendReactionResult: Result<Unit> = Result.Success(Unit)
+
     override suspend fun sendReaction(
         groupId: String,
         targetEventId: String,
         targetPubkey: String,
         emoji: String,
-    ): Result<Unit> = Result.Success(Unit)
+    ): Result<Unit> {
+        calls += "sendReaction:$groupId:$targetEventId:$emoji"
+        return sendReactionResult
+    }
 
     override val zaps: StateFlow<Map<String, ZapManager.ZapInfo>> = MutableStateFlow(emptyMap())
 
