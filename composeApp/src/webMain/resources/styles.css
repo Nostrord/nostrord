@@ -2396,6 +2396,67 @@ body {
     word-break: break-word;
 }
 
+/* Quoted kind:11 thread card (Share to chat announcement / pasted thread nevent). */
+.thread-quote-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 380px;
+    margin-top: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-surface);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+
+.thread-quote-card.static {
+    cursor: default;
+}
+
+.thread-quote-card:not(.static):hover {
+    background: var(--color-hover);
+}
+
+.thread-quote-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-primary);
+}
+
+.thread-quote-head svg {
+    width: 14px;
+    height: 14px;
+}
+
+.thread-quote-group {
+    font-weight: 400;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-quote-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-quote-snippet {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
 /* Avatar and author name open the profile modal. */
 .thread-msg-avatar-btn {
     cursor: pointer;

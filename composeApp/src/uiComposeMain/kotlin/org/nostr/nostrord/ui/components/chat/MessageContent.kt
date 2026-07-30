@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -68,6 +70,9 @@ import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.components.media.AudioPlayerContent
 import org.nostr.nostrord.ui.components.media.PlatformVideoPlayer
 import org.nostr.nostrord.ui.components.media.YouTubeLinkCard
+import org.nostr.nostrord.ui.navigation.GroupRoute
+import org.nostr.nostrord.ui.navigation.GroupView
+import org.nostr.nostrord.ui.navigation.LocalFrameNavigator
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
@@ -1339,6 +1344,103 @@ private fun extractGroupFromEvent(event: CachedEvent): Pair<String, String?>? {
 }
 
 /**
+ * A quoted kind:11 thread root, rendered as a tappable thread card ("Thread" header + title +
+ * snippet) that opens the thread page via [LocalFrameNavigator]. Used by [QuotedEvent] ahead of
+ * the forwarded-event rendering; mirrors the web `.thread-quote-card`.
+ */
+@Composable
+private fun ThreadQuoteCard(
+    event: CachedEvent,
+    eventId: String,
+    relayHint: String?,
+    currentGroupId: String?,
+    modifier: Modifier = Modifier,
+) {
+    val groupId = extractGroupFromEvent(event)?.first ?: currentGroupId
+    val navigate = LocalFrameNavigator.current
+    val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
+    val groupName = groupId?.let { gid -> groupsByRelay.values.flatten().firstOrNull { it.id == gid }?.name }
+        ?.takeIf { it.isNotBlank() }
+
+    val title = event.tags.firstOrNull { it.size >= 2 && (it[0] == "subject" || it[0] == "title") }
+        ?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: event.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(80)
+        ?: "Thread"
+    val snippet = event.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+        ?.take(140)?.takeIf { it != title }
+
+    val openThread: (() -> Unit)? =
+        if (navigate != null && groupId != null && relayHint != null) {
+            { navigate(GroupRoute(relayHint, groupId, view = GroupView.Threads, threadRootId = eventId)) }
+        } else {
+            null
+        }
+
+    DisableSelection {
+        Column(
+            modifier =
+            modifier
+                .fillMaxWidth()
+                .widthIn(max = 380.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(NostrordColors.Surface)
+                .then(
+                    if (openThread != null) {
+                        Modifier.clickable(onClick = openThread).pointerHoverIcon(PointerIcon.Hand)
+                    } else {
+                        Modifier
+                    },
+                ).padding(horizontal = Spacing.sm, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Forum,
+                    contentDescription = null,
+                    tint = NostrordColors.Primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    "Thread",
+                    color = NostrordColors.Primary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (groupName != null) {
+                    Text(
+                        "· $groupName",
+                        color = NostrordColors.TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Text(
+                title,
+                color = NostrordColors.TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (snippet != null) {
+                Text(
+                    snippet,
+                    color = NostrordColors.TextSecondary,
+                    fontSize = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
  * Forwarded event card - displays an event that originated from a different group.
  * Shows "forwarded from [group name]" header with group info, author info,
  * optional reply preview (if q tag exists), and the message content.
@@ -1709,6 +1811,20 @@ private fun QuotedEvent(
             authorPicture = metadata?.picture,
             pubkey = event.pubkey,
             onClick = onClick,
+            modifier = modifier,
+        )
+        return
+    }
+
+    // A quoted kind:11 renders as a thread card that opens the thread page - both the
+    // "Share to chat" announcement and any pasted thread nevent land here. Takes precedence
+    // over the forwarded-event rendering (a thread is a destination, not a chat quote).
+    if (event?.kind == 11) {
+        ThreadQuoteCard(
+            event = event,
+            eventId = eventId,
+            relayHint = extractGroupFromEvent(event)?.second ?: relayHints.firstOrNull() ?: currentRelayUrl,
+            currentGroupId = currentGroupId,
             modifier = modifier,
         )
         return
