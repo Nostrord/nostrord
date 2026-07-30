@@ -521,6 +521,8 @@ fun MessageItem(
                         MessageContextAction.DeleteMessage -> currentOnDeleteMessage()
                         MessageContextAction.ZapMessage -> ZapController.request(message.pubkey, message.id)
                         MessageContextAction.ReportMessage -> showReportModal = true
+                        // Thread-menu-only action; the chat menu never offers it.
+                        MessageContextAction.ShareToChat -> Unit
                     }
                 },
                 isAuthor = isAuthor,

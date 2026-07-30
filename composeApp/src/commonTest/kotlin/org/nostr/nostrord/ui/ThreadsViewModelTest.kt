@@ -180,6 +180,27 @@ class ThreadsViewModelTest {
     }
 
     @Test
+    fun `createThread with shareToChat announces a kind9 with the thread nevent`() = runTest {
+        val fake = FakeNostrRepository()
+        var announced: String? = null
+        fake.sendMessageAction = { _, content, _, _, _ ->
+            announced = content
+            Result.Success(Unit)
+        }
+        val vm = ThreadsViewModel(fake, "g1")
+        vm.createThread("My title", "body", shareToChat = true)
+        testDispatcher.scheduler.advanceUntilIdle()
+        val text = announced ?: error("no chat announcement sent")
+        assertTrue(text.startsWith("Started a thread: My title\nnostr:nevent1"), text)
+
+        // Opting out sends nothing.
+        announced = null
+        vm.createThread("Quiet", "body", shareToChat = false)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertNull(announced)
+    }
+
+    @Test
     fun `deleteThread surfaces the relay rejection as a friendly error`() = runTest {
         val fake = FakeNostrRepository()
         fake.deleteMessageResult = Result.Error(AppError.Group.SendFailed("g1", Exception("blocked: event kind 5 not allowed")))

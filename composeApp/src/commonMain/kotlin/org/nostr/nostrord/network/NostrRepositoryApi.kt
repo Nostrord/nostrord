@@ -555,7 +555,8 @@ interface NostrRepositoryApi {
     suspend fun fetchThread(groupId: String, rootId: String)
 
     /** Create a forum thread (kind:11 root). [title] becomes a NIP-14 subject tag when non-blank. */
-    suspend fun createThread(groupId: String, title: String, content: String): Result<Unit>
+    /** Publish a kind:11 thread root. Success carries the root's event id (stable NIP-01 id). */
+    suspend fun createThread(groupId: String, title: String, content: String): Result<String>
 
     /**
      * Publish a NIP-22 reply (kind:1111). [root] is the kind:11 thread root; [parent] is the item

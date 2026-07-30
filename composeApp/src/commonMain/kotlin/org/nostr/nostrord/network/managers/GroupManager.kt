@@ -3262,7 +3262,7 @@ class GroupManager(
         content: String,
         pubKey: String,
         signEvent: suspend (Event) -> Event,
-    ): Result<Unit> = try {
+    ): Result<String> = try {
         val tags = ThreadTags.root(groupId, getRelayForGroup(groupId), title)
         publishThreadEvent(groupId, kind = 11, content = content, tags = tags, pubKey = pubKey, signEvent = signEvent)
     } catch (e: Throwable) {
@@ -3284,12 +3284,16 @@ class GroupManager(
         signEvent: suspend (Event) -> Event,
     ): Result<Unit> = try {
         val tags = ThreadTags.reply(groupId, getRelayForGroup(groupId), root, parent)
-        publishThreadEvent(groupId, kind = 1111, content = content, tags = tags, pubKey = pubKey, signEvent = signEvent)
+        when (val result = publishThreadEvent(groupId, kind = 1111, content = content, tags = tags, pubKey = pubKey, signEvent = signEvent)) {
+            is Result.Success -> Result.Success(Unit)
+            is Result.Error -> Result.Error(result.error)
+        }
     } catch (e: Throwable) {
         Result.Error(AppError.Group.SendFailed(groupId, e))
     }
 
     /** Shared sign + optimistic-insert + deliver pipeline for thread events (kind 11 / 1111). */
+    /** Returns the published event's id (computed before signing; the NIP-01 id is stable). */
     private suspend fun publishThreadEvent(
         groupId: String,
         kind: Int,
@@ -3297,7 +3301,7 @@ class GroupManager(
         tags: List<List<String>>,
         pubKey: String,
         signEvent: suspend (Event) -> Event,
-    ): Result<Unit> {
+    ): Result<String> {
         val event = Event(
             pubkey = pubKey,
             createdAt = epochMillis() / 1000,
@@ -3322,7 +3326,7 @@ class GroupManager(
         )
         _messageStatus.update { it + (eventId to MessageStatus.Sending) }
         scope.launch { signAndDeliver(groupId, event, eventId, signEvent) }
-        return Result.Success(Unit)
+        return Result.Success(eventId)
     }
 
     /**

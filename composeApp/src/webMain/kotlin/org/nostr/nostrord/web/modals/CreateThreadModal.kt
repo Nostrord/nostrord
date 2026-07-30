@@ -9,15 +9,18 @@ import react.Props
 import react.dom.html.ReactHTML.button
 import react.dom.html.ReactHTML.div
 import react.dom.html.ReactHTML.input
+import react.dom.html.ReactHTML.label
 import react.dom.html.ReactHTML.textarea
 import react.useState
 import web.cssom.ClassName
+import web.html.InputType
+import web.html.checkbox
 
 external interface CreateThreadModalProps : Props {
     var onClose: () -> Unit
 
-    /** Publish a new thread: (title, content). Title is optional (becomes a NIP-14 subject). */
-    var onCreate: (String, String) -> Unit
+    /** Publish a new thread: (title, content, shareToChat). Title becomes the subject/title tags. */
+    var onCreate: (String, String, Boolean) -> Unit
 }
 
 /**
@@ -30,6 +33,8 @@ val CreateThreadModal =
         val (title, setTitle) = useState { "" }
         val (body, setBody) = useState { "" }
         val (uploadError, setUploadError) = useState<String?> { null }
+        // Default on: announcing the new thread in chat is the common case; one click opts out.
+        val (shareToChat, setShareToChat) = useState { true }
 
         useEscClose { props.onClose() }
 
@@ -97,6 +102,16 @@ val CreateThreadModal =
                     }
                 }
 
+                label {
+                    className = ClassName("thread-share-check")
+                    input {
+                        type = InputType.checkbox
+                        checked = shareToChat
+                        onChange = { event -> setShareToChat(event.currentTarget.checked) }
+                    }
+                    +"Share to chat"
+                }
+
                 div {
                     className = ClassName("modal-footer")
                     button {
@@ -108,7 +123,7 @@ val CreateThreadModal =
                         className = ClassName("btn-primary")
                         disabled = title.isBlank() || body.isBlank()
                         onClick = {
-                            props.onCreate(title, body)
+                            props.onCreate(title, body, shareToChat)
                             props.onClose()
                         }
                         +"Publish thread"

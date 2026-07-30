@@ -86,6 +86,9 @@ sealed class MessageContextAction {
 
     data object Reply : MessageContextAction()
 
+    /** Threads: announce the thread in the group chat (kind:9 with the root's nevent). */
+    data object ShareToChat : MessageContextAction()
+
     data object ZapMessage : MessageContextAction()
 
     data object CopyText : MessageContextAction()
@@ -158,6 +161,8 @@ fun ThreadMessageContextMenu(
     onAction: (MessageContextAction) -> Unit,
     anchorOffsetPx: Offset? = null,
     isAuthor: Boolean = false,
+    // Roots only: announce the thread in the group chat.
+    canShareToChat: Boolean = false,
 ) {
     if (!visible) return
     ContextMenuPopup(onDismiss, anchorOffsetPx, anchorWidthPx = 0) {
@@ -183,6 +188,17 @@ fun ThreadMessageContextMenu(
                     onDismiss()
                 },
             )
+
+            if (canShareToChat) {
+                ContextMenuItem(
+                    icon = Icons.Outlined.Forum,
+                    label = "Share to chat",
+                    onClick = {
+                        onAction(MessageContextAction.ShareToChat)
+                        onDismiss()
+                    },
+                )
+            }
 
             ContextMenuDivider()
 

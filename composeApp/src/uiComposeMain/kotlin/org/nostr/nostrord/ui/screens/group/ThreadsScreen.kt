@@ -282,6 +282,7 @@ fun ThreadsScreen(
                                     onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                     onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
                                     onReply = { replyingTo = msg },
+                                    onShareToChat = { vm.shareThreadToChat(msg) },
                                     onDelete = { deleteTarget = msg },
                                     // A group ref in the body opens that group's chat page.
                                     onNavigateToGroup = { gid, _, relay, _ ->
@@ -416,7 +417,7 @@ fun ThreadsScreen(
     if (showCompose) {
         CreateThreadDialog(
             onDismiss = { showCompose = false },
-            onCreate = { title, content -> vm.createThread(title, content) },
+            onCreate = { title, content, shareToChat -> vm.createThread(title, content, shareToChat) },
         )
     }
 
@@ -630,6 +631,7 @@ private fun ThreadMessage(
     onReact: (String) -> Unit,
     onOpenReactionPicker: () -> Unit,
     onReply: () -> Unit,
+    onShareToChat: () -> Unit,
     onDelete: () -> Unit,
     onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
     onRetry: () -> Unit,
@@ -677,11 +679,13 @@ private fun ThreadMessage(
             onDismiss = { menuVisible = false },
             anchorOffsetPx = menuAnchorPx,
             isAuthor = isAuthor,
+            canShareToChat = isRoot,
             onAction = { action ->
                 when (action) {
                     is MessageContextAction.QuickReact -> onReact(action.emoji)
                     MessageContextAction.AddReaction -> onOpenReactionPicker()
                     MessageContextAction.Reply -> onReply()
+                    MessageContextAction.ShareToChat -> onShareToChat()
                     MessageContextAction.CopyText -> writeClipboard(msg.content)
                     // A reply links to its thread page (root id from the E tag), targeting
                     // this message via ?e= so opening it scrolls to and flashes it.
