@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.screens.group
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,11 +44,14 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonSize
@@ -55,7 +61,9 @@ import org.nostr.nostrord.ui.components.chat.LocalImageViewerUrl
 import org.nostr.nostrord.ui.components.chat.MessageComposer
 import org.nostr.nostrord.ui.components.chat.MessageContent
 import org.nostr.nostrord.ui.components.chat.MessageStatusIndicator
+import org.nostr.nostrord.ui.components.chat.ReactionBadges
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
+import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.HashRoute
 import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
@@ -90,7 +98,13 @@ fun ThreadsScreen(
     val openThread by vm.openThread.collectAsState()
     val userMetadata by vm.userMetadata.collectAsState()
     val messageStatus by vm.messageStatus.collectAsState()
+    val reactions by vm.reactions.collectAsState()
+    val pendingReactions by vm.pendingReactions.collectAsState()
+    val reactionError by vm.reactionError.collectAsState()
     val myPubkey = remember { vm.getPublicKey() }
+
+    // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
+    var reactingTo by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // Keep the open thread synced with the route (#/g/<relay>/<id>/threads/<rootId>).
     LaunchedEffect(route.threadRootId) { vm.openThread(route.threadRootId) }
@@ -145,16 +159,28 @@ fun ThreadsScreen(
                         LocalImageViewerUrl provides imageViewerUrl,
                         LocalAnimatedImageHidden provides (imageViewerUrl.value != null),
                     ) {
-                        ThreadMessage(
-                            detail.root,
-                            userMetadata,
-                            isRoot = true,
-                            myPubkey,
-                            route,
-                            messageStatus[detail.root.id],
-                            { vm.retrySend(detail.root.id) },
-                            { vm.dismissFailed(detail.root.id) },
-                        )
+                        val renderMessage: @Composable (NostrGroupClient.NostrMessage, Boolean) -> Unit = { msg, isRoot ->
+                            ThreadMessage(
+                                msg = msg,
+                                userMetadata = userMetadata,
+                                isRoot = isRoot,
+                                myPubkey = myPubkey,
+                                route = route,
+                                status = messageStatus[msg.id],
+                                reactions = reactions[msg.id] ?: emptyMap(),
+                                // Pending sends for this message: "eventId|emoji" keys -> emojis.
+                                pendingEmojis = pendingReactions
+                                    .filter { it.startsWith("${msg.id}|") }
+                                    .map { it.substringAfter('|') }
+                                    .toSet(),
+                                resolveMetadata = { userMetadata[it] },
+                                onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
+                                onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
+                                onRetry = { vm.retrySend(msg.id) },
+                                onDismiss = { vm.dismissFailed(msg.id) },
+                            )
+                        }
+                        renderMessage(detail.root, true)
                         Text(
                             if (detail.replies.size == 1) "1 REPLY" else "${detail.replies.size} REPLIES",
                             color = NostrordColors.TextMuted,
@@ -163,18 +189,7 @@ fun ThreadsScreen(
                             letterSpacing = 0.5.sp,
                             modifier = Modifier.padding(vertical = Spacing.sm),
                         )
-                        detail.replies.forEach {
-                            ThreadMessage(
-                                it,
-                                userMetadata,
-                                isRoot = false,
-                                myPubkey,
-                                route,
-                                messageStatus[it.id],
-                                { vm.retrySend(it.id) },
-                                { vm.dismissFailed(it.id) },
-                            )
-                        }
+                        detail.replies.forEach { renderMessage(it, false) }
                     }
                 }
                 MessageComposer(
@@ -268,6 +283,62 @@ fun ThreadsScreen(
             onDismiss = { imageViewerUrl.value = null },
         )
     }
+
+    // Full emoji picker for a reaction (opened by the add-reaction button).
+    reactingTo?.let { (targetEventId, targetPubkey) ->
+        Popup(
+            alignment = Alignment.Center,
+            onDismissRequest = { reactingTo = null },
+            properties =
+            PopupProperties(
+                focusable = true,
+                dismissOnClickOutside = false,
+                dismissOnBackPress = true,
+            ),
+        ) {
+            Box(
+                modifier =
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { reactingTo = null },
+                    ),
+            ) {
+                EmojiPicker(
+                    onEmojiSelect = { emoji ->
+                        vm.sendReaction(targetEventId, targetPubkey, emoji)
+                        reactingTo = null
+                    },
+                    onDismiss = { reactingTo = null },
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        }
+    }
+
+    // Reaction error dialog (relay rejected the kind:7), same classification as chat.
+    reactionError?.let { error ->
+        val errorKind = classifyReactionError(error)
+        val isUnknownMember = errorKind == ReactionErrorKind.JoinRequired
+        ConfirmDialog(
+            title = if (isUnknownMember) "Join Required" else "Cannot React",
+            message =
+            when (errorKind) {
+                ReactionErrorKind.JoinRequired -> "You need to join this group before you can react to messages."
+                ReactionErrorKind.SignerFailure -> "Your signer could not sign the reaction. Please try again.\n\n$error"
+                ReactionErrorKind.RelayRejected -> "This relay does not support reactions.\n\n$error"
+            },
+            confirmLabel = if (isUnknownMember) "Join Group" else "OK",
+            cancelLabel = if (isUnknownMember) "Cancel" else null,
+            onConfirm = {
+                vm.clearReactionError()
+                if (isUnknownMember) vm.joinGroup()
+            },
+            onDismiss = { vm.clearReactionError() },
+        )
+    }
 }
 
 private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = meta?.displayName?.takeIf { it.isNotBlank() }
@@ -333,6 +404,11 @@ private fun ThreadMessage(
     myPubkey: String?,
     route: GroupRoute,
     status: GroupManager.MessageStatus?,
+    reactions: Map<String, GroupManager.ReactionInfo>,
+    pendingEmojis: Set<String>,
+    resolveMetadata: (String) -> UserMetadata?,
+    onReact: (String) -> Unit,
+    onOpenReactionPicker: () -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -381,6 +457,29 @@ private fun ThreadMessage(
             }
             if (myPubkey != null && myPubkey == msg.pubkey && status is GroupManager.MessageStatus.Failed) {
                 MessageStatusIndicator(status, onRetry, onDismiss)
+            }
+            // Reaction badges + the always-visible add-reaction affordance (threads have no
+            // hover-action row like chat, so the button is the way in to the full picker).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                ReactionBadges(
+                    reactions = reactions,
+                    currentUserPubkey = myPubkey,
+                    resolveMetadata = resolveMetadata,
+                    onReactionClick = onReact,
+                    pendingEmojis = pendingEmojis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                IconButton(onClick = onOpenReactionPicker, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Outlined.EmojiEmotions,
+                        contentDescription = "Add reaction",
+                        tint = NostrordColors.TextMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }

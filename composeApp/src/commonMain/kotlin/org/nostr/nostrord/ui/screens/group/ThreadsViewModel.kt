@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrRepositoryApi
+import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.normalizeRelayUrl
@@ -175,6 +176,49 @@ class ThreadsViewModel(
     }
 
     fun getPublicKey() = repo.getPublicKey()
+
+    /** Reactions with NIP-51 muted reactors removed, same contract as [GroupViewModel.reactions]. */
+    val reactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> =
+        combine(repo.reactions, repo.mutedPubkeys, ::filterMutedReactions)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repo.reactions.value)
+
+    // Reactions with an in-flight send, keyed "$targetEventId|$emoji" — pending badge + spinner
+    // during the sign round-trip (1-2s on a NIP-46 bunker), mirroring GroupViewModel.
+    private val _pendingReactions = MutableStateFlow<Set<String>>(emptySet())
+    val pendingReactions: StateFlow<Set<String>> = _pendingReactions
+
+    private val _reactionError = MutableStateFlow<String?>(null)
+    val reactionError: StateFlow<String?> = _reactionError
+
+    fun clearReactionError() {
+        _reactionError.value = null
+    }
+
+    /** Join the group (offered by the reaction-error dialog when the relay wants a member). */
+    fun joinGroup() {
+        viewModelScope.launch { repo.joinGroup(groupId) }
+    }
+
+    /** React (kind:7) to a thread root or reply; dedupes an in-flight send of the same emoji. */
+    fun sendReaction(
+        targetEventId: String,
+        targetPubkey: String,
+        emoji: String,
+    ) {
+        val key = "$targetEventId|$emoji"
+        if (key in _pendingReactions.value) return
+        _pendingReactions.value = _pendingReactions.value + key
+        viewModelScope.launch {
+            try {
+                when (val result = repo.sendReaction(groupId, targetEventId, targetPubkey, emoji)) {
+                    is Result.Error -> _reactionError.value = friendlyReactionError(result.error)
+                    is Result.Success -> Unit
+                }
+            } finally {
+                _pendingReactions.value = _pendingReactions.value - key
+            }
+        }
+    }
 
     /** Delete a thread you authored (NIP-09/NIP-29 deletion of the kind:11 root). The relay echo
      *  removes it from the list. Runs on viewModelScope, which survives list <-> detail nav. */

@@ -2319,6 +2319,39 @@ body {
     word-break: break-word;
 }
 
+/* Reaction badges + add-reaction button under a thread message. */
+.thread-msg-react-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    margin-top: 2px;
+}
+
+.thread-react-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.thread-react-btn:hover {
+    background: var(--color-hover);
+    opacity: 1;
+}
+
+.thread-react-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
 .thread-replies-divider {
     margin: var(--space-md) 0;
     padding-bottom: var(--space-xs);

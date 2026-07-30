@@ -248,19 +248,8 @@ class GroupViewModel(
      * repo cache stays untouched, so an unmute restores their reactions instantly.
      */
     val reactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> =
-        combine(repo.reactions, repo.mutedPubkeys) { byMessage, muted ->
-            if (muted.isEmpty()) {
-                byMessage
-            } else {
-                byMessage.mapNotNull { (messageId, byEmoji) ->
-                    val filtered = byEmoji.mapNotNull { (emoji, info) ->
-                        val reactors = info.reactors.filter { it !in muted }
-                        if (reactors.isEmpty()) null else emoji to info.copy(reactors = reactors)
-                    }.toMap()
-                    if (filtered.isEmpty()) null else messageId to filtered
-                }.toMap()
-            }
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.reactions.value)
+        combine(repo.reactions, repo.mutedPubkeys, ::filterMutedReactions)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, repo.reactions.value)
 
     /**
      * Member/admin/role lists, host-relay scoped: entries the host relay published win
@@ -706,15 +695,7 @@ class GroupViewModel(
         viewModelScope.launch {
             try {
                 when (val result = repo.sendReaction(groupId, targetEventId, targetPubkey, emoji)) {
-                    is Result.Error -> {
-                        val raw = result.error.cause?.message ?: result.error.toString()
-                        val friendly =
-                            raw
-                                .removePrefix("blocked: ")
-                                .removePrefix("error: ")
-                                .replaceFirstChar { it.uppercaseChar() }
-                        _reactionError.value = friendly
-                    }
+                    is Result.Error -> _reactionError.value = friendlyReactionError(result.error)
                     is Result.Success -> Unit
                 }
             } finally {
@@ -962,6 +943,30 @@ class GroupViewModel(
         viewModelScope.launch { repo.fetchGroupPreview(previewGroupId, relayUrl) }
     }
 }
+
+/**
+ * Reactions with NIP-51 muted reactors removed. The raw repo cache stays untouched, so an
+ * unmute restores their reactions instantly. Shared by [GroupViewModel] and [ThreadsViewModel].
+ */
+internal fun filterMutedReactions(
+    byMessage: Map<String, Map<String, GroupManager.ReactionInfo>>,
+    muted: Set<String>,
+): Map<String, Map<String, GroupManager.ReactionInfo>> {
+    if (muted.isEmpty()) return byMessage
+    return byMessage.mapNotNull { (messageId, byEmoji) ->
+        val filtered = byEmoji.mapNotNull { (emoji, info) ->
+            val reactors = info.reactors.filter { it !in muted }
+            if (reactors.isEmpty()) null else emoji to info.copy(reactors = reactors)
+        }.toMap()
+        if (filtered.isEmpty()) null else messageId to filtered
+    }.toMap()
+}
+
+/** User-facing message for a failed kind:7 send, relay prefixes stripped. */
+internal fun friendlyReactionError(error: AppError): String = (error.cause?.message ?: error.toString())
+    .removePrefix("blocked: ")
+    .removePrefix("error: ")
+    .replaceFirstChar { it.uppercaseChar() }
 
 /** How a failed reaction should be presented: the relay wants a join first, the signer could not sign the kind:7, or the relay rejected it. */
 enum class ReactionErrorKind { JoinRequired, SignerFailure, RelayRejected }

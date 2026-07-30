@@ -3177,6 +3177,9 @@ class GroupManager(
                 runCatching {
                     client.requestGroupMessageById(groupId, rootId)
                     client.requestThreadReplies(groupId, rootId = rootId, subscriptionId = "threadfocus_$rootId")
+                    // The root arrives via an id fetch (no post-EOSE kind:7 backfill like the
+                    // thread subs), so fetch its reactions directly.
+                    client.requestReactionsForMessages(listOf(rootId))
                 }
                 return
             }
