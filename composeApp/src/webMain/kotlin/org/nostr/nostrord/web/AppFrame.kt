@@ -680,6 +680,7 @@ val AppFrame =
                             this.route = r
                             this.group = selectedGroup
                             onNavigate = { pushRoute(it) }
+                            onOpenDrawer = { setDrawerOpen(true) }
                         }
                     r is GroupRoute && selectedGroup != null ->
                         // The legacy full-featured chat (messages, composer, search, member
