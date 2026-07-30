@@ -19,7 +19,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,6 +56,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.ui.theme.rememberEmojiFontFamily
 import org.nostr.nostrord.utils.proxyViaWeserv
+import org.nostr.nostrord.utils.shortNpub
 
 /**
  * Displays reaction badges for a message.
@@ -61,7 +67,7 @@ import org.nostr.nostrord.utils.proxyViaWeserv
  * @param resolveMetadata Resolves pubkey to UserMetadata for reactor avatars
  * @param onReactionClick Called when a reaction badge is clicked (for adding/removing reactions)
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ReactionBadges(
     reactions: Map<String, GroupManager.ReactionInfo>,
@@ -119,15 +125,22 @@ fun ReactionBadges(
         sortedReactions.forEach { (emoji, info) ->
             val hasCurrentUserReacted = currentUserPubkey != null && currentUserPubkey in info.reactors
 
-            ReactionBadge(
-                emoji = emoji,
-                emojiUrl = info.emojiUrl,
-                reactors = info.reactors,
-                count = info.reactors.size,
-                isUserReacted = hasCurrentUserReacted,
-                resolveMetadata = resolveMetadata,
-                onClick = { onReactionClick(emoji) },
-            )
+            // Who reacted: tooltip on hover (desktop) or long-press (touch).
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                tooltip = { PlainTooltip { Text(reactorNames(info.reactors, resolveMetadata)) } },
+                state = rememberTooltipState(),
+            ) {
+                ReactionBadge(
+                    emoji = emoji,
+                    emojiUrl = info.emojiUrl,
+                    reactors = info.reactors,
+                    count = info.reactors.size,
+                    isUserReacted = hasCurrentUserReacted,
+                    resolveMetadata = resolveMetadata,
+                    onClick = { onReactionClick(emoji) },
+                )
+            }
         }
 
         // In-flight reactions: emoji with a spinner where the avatar stack would be.
@@ -273,6 +286,22 @@ private fun ReactionBadge(
     }
 }
 
+/** Tooltip content: who reacted, capped so a popular badge doesn't build a huge string. */
+private fun reactorNames(
+    reactors: List<String>,
+    resolveMetadata: (String) -> UserMetadata?,
+): String {
+    val names = reactors.take(MAX_TOOLTIP_NAMES).map { pk ->
+        val meta = resolveMetadata(pk)
+        meta?.displayName?.takeIf { it.isNotBlank() }
+            ?: meta?.name?.takeIf { it.isNotBlank() }
+            ?: shortNpub(pk)
+    }
+    val extra = reactors.size - MAX_TOOLTIP_NAMES
+    return names.joinToString(", ") + if (extra > 0) " +$extra" else ""
+}
+
+private const val MAX_TOOLTIP_NAMES = 20
 private const val MAX_VISIBLE_AVATARS = 3
 private val AVATAR_SIZE = 16.dp
 private val AVATAR_OVERLAP = 6.dp
