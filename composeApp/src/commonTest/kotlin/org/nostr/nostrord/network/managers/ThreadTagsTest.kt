@@ -8,17 +8,19 @@ class ThreadTagsTest {
     private fun msg(id: String, pubkey: String, kind: Int) = NostrGroupClient.NostrMessage(id = id, pubkey = pubkey, content = "", createdAt = 0, kind = kind)
 
     @Test
-    fun `root carries group h tag with relay hint and subject`() {
+    fun `root carries group h tag with relay hint and the title as both title and subject`() {
         val tags = ThreadTags.root("grp", "wss://groups.0xchat.com", "My title")
         assertEquals(listOf("h", "grp", "wss://groups.0xchat.com"), tags[0])
+        // NIP-7D readers (Squalk - issue #221) want `title`; NIP-14 readers want `subject`.
+        assertEquals(listOf("title", "My title"), tags.first { it[0] == "title" })
         assertEquals(listOf("subject", "My title"), tags.first { it[0] == "subject" })
     }
 
     @Test
-    fun `root omits subject when blank and h has no hint when relay unknown`() {
+    fun `root omits the title tags when blank and h has no hint when relay unknown`() {
         val tags = ThreadTags.root("grp", null, "   ")
         assertEquals(listOf("h", "grp"), tags[0])
-        assertEquals(0, tags.count { it[0] == "subject" })
+        assertEquals(0, tags.count { it[0] == "subject" || it[0] == "title" })
     }
 
     @Test

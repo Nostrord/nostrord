@@ -42,10 +42,15 @@ internal fun NostrGroupClient.NostrMessage.threadRootIdTag(): String? = tags.fir
 /** Cap [this] at [max] chars, appending an ellipsis when something was cut. */
 private fun String.takeWithEllipsis(max: Int): String = if (length > max) take(max) + "..." else this
 
-/** A thread's title: its NIP-14 `subject` tag, else the first non-blank line of the content. */
+/**
+ * A thread's title: its NIP-14 `subject` tag (what we write), else the NIP-7D `title` tag
+ * (what other kind:11 clients write), else the first non-blank line of the content.
+ */
 internal fun NostrGroupClient.NostrMessage.threadTitle(): String {
-    val subject = tags.firstOrNull { it.size >= 2 && it[0] == "subject" }?.get(1)?.trim()
-    if (!subject.isNullOrEmpty()) return subject
+    for (name in listOf("subject", "title")) {
+        val value = tags.firstOrNull { it.size >= 2 && it[0] == name }?.get(1)?.trim()
+        if (!value.isNullOrEmpty()) return value
+    }
     return content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.takeWithEllipsis(80)
         ?: "Untitled thread"
 }
