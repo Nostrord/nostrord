@@ -68,8 +68,10 @@ fun CreateThreadDialog(
             Surface(
                 modifier =
                 Modifier
-                    .fillMaxWidth(0.92f)
+                    // Cap BEFORE fillMaxWidth: fillMaxWidth fixes min=max, so a later
+                    // widthIn(max) cannot shrink it and the dialog spanned the desktop window.
                     .widthIn(max = 480.dp)
+                    .fillMaxWidth(0.92f)
                     .padding(Spacing.lg)
                     // Absorb clicks so tapping the card doesn't fall through to the scrim.
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
