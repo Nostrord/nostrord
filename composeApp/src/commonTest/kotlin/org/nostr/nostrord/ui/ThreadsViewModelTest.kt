@@ -9,10 +9,12 @@ import kotlinx.coroutines.test.setMain
 import org.nostr.nostrord.network.FakeNostrRepository
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.ui.screens.group.ReactionChip
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.buildThreadSummaries
 import org.nostr.nostrord.ui.screens.group.filterMutedReactions
 import org.nostr.nostrord.ui.screens.group.friendlyReactionError
+import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import kotlin.test.AfterTest
@@ -77,6 +79,17 @@ class ThreadsViewModelTest {
     fun `title falls back to the first non-blank content line when no subject`() {
         val s = buildThreadSummaries(listOf(root("a", 1, "\n  First line  \nsecond")), emptyList()).single()
         assertEquals("First line", s.title)
+    }
+
+    @Test
+    fun `preview and fallback title end in an ellipsis when the content is cut`() {
+        val long = "x".repeat(200)
+        val s = buildThreadSummaries(listOf(root("a", 1, long)), emptyList()).single()
+        assertEquals("x".repeat(140) + "...", s.preview)
+        assertEquals("x".repeat(80) + "...", s.title)
+        // Exactly at the cap: nothing was cut, no ellipsis.
+        val exact = buildThreadSummaries(listOf(root("b", 1, "y".repeat(140))), emptyList()).single()
+        assertEquals("y".repeat(140), exact.preview)
     }
 
     @Test
@@ -147,6 +160,26 @@ class ThreadsViewModelTest {
         assertEquals(mapOf("m1" to mapOf("👍" to GroupManager.ReactionInfo(emojiUrl = null, reactors = listOf("alice")))), filtered)
         // No mutes: the raw map passes through untouched.
         assertEquals(raw, filterMutedReactions(raw, emptySet()))
+    }
+
+    @Test
+    fun `topReactionChips ranks by count, caps the list, and shows plus as thumbs`() {
+        val byEmoji = mapOf(
+            "🎯" to GroupManager.ReactionInfo(emojiUrl = null, reactors = listOf("a", "b", "c")),
+            "+" to GroupManager.ReactionInfo(emojiUrl = null, reactors = listOf("a", "b", "c", "d")),
+            "🔥" to GroupManager.ReactionInfo(emojiUrl = null, reactors = listOf("a")),
+            ":pepe:" to GroupManager.ReactionInfo(emojiUrl = "https://x/pepe.png", reactors = listOf("a", "b")),
+        )
+        val chips = topReactionChips(byEmoji, maxChips = 3)
+        assertEquals(
+            listOf(
+                ReactionChip("👍", null, 4),
+                ReactionChip("🎯", null, 3),
+                ReactionChip(":pepe:", "https://x/pepe.png", 2),
+            ),
+            chips,
+        )
+        assertTrue(topReactionChips(emptyMap()).isEmpty())
     }
 
     @Test
