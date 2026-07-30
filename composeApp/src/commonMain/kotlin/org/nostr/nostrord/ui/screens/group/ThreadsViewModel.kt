@@ -39,11 +39,14 @@ data class ThreadDetail(
 /** The `E` (root-scope) tag of a kind:1111 reply: the id of the thread it belongs to. */
 internal fun NostrGroupClient.NostrMessage.threadRootIdTag(): String? = tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1)
 
+/** Cap [this] at [max] chars, appending an ellipsis when something was cut. */
+private fun String.takeWithEllipsis(max: Int): String = if (length > max) take(max) + "..." else this
+
 /** A thread's title: its NIP-14 `subject` tag, else the first non-blank line of the content. */
 internal fun NostrGroupClient.NostrMessage.threadTitle(): String {
     val subject = tags.firstOrNull { it.size >= 2 && it[0] == "subject" }?.get(1)?.trim()
     if (!subject.isNullOrEmpty()) return subject
-    return content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(80)
+    return content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.takeWithEllipsis(80)
         ?: "Untitled thread"
 }
 
@@ -62,7 +65,7 @@ internal fun buildThreadSummaries(
         .map { root ->
             val rs = repliesByRoot[root.id] ?: emptyList()
             val preview = root.content.lineSequence().map { it.trim() }
-                .firstOrNull { it.isNotEmpty() }.orEmpty().take(140)
+                .firstOrNull { it.isNotEmpty() }.orEmpty().takeWithEllipsis(140)
             ThreadSummary(
                 rootId = root.id,
                 authorPubkey = root.pubkey,
@@ -76,6 +79,36 @@ internal fun buildThreadSummaries(
         }
         .sortedByDescending { it.lastActivity }
 }
+
+/** A compact emoji+count chip shown on a thread list card (top reactions on the root). */
+data class ReactionChip(
+    val emoji: String,
+    val emojiUrl: String?,
+    val count: Int,
+)
+
+/**
+ * The top [maxChips] reactions on a message by reactor count (ties broken alphabetically),
+ * for the thread list cards. NIP-25 "+"/"-" display as thumbs so a chip never shows a bare sign.
+ * Shared by the Compose and web cards so both rank and label identically.
+ */
+fun topReactionChips(
+    byEmoji: Map<String, GroupManager.ReactionInfo>,
+    maxChips: Int = 3,
+): List<ReactionChip> = byEmoji.entries
+    .sortedWith(
+        compareByDescending<Map.Entry<String, GroupManager.ReactionInfo>> { it.value.reactors.size }
+            .thenBy { it.key },
+    )
+    .take(maxChips)
+    .map { (emoji, info) ->
+        val display = when (emoji) {
+            "+" -> "👍"
+            "-" -> "👎"
+            else -> emoji
+        }
+        ReactionChip(display, info.emojiUrl, info.reactors.size)
+    }
 
 /**
  * Shared screen logic for the forum-style Threads pane (Discord-like): the list of kind:11 roots

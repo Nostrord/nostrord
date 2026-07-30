@@ -134,57 +134,125 @@ fun MessageContextMenu(
 ) {
     // Only render Popup when visible to avoid layout participation
     if (visible) {
-        val marginPx = with(LocalDensity.current) { 8.dp.roundToPx() }
-        // Open at the click position (web parity); fall back to the row's
-        // top-right when there's no cursor anchor (the hover More button).
-        val positionProvider =
-            remember(anchorOffsetPx, anchorWidthPx, marginPx) {
-                MessageMenuPositionProvider(anchorOffsetPx, anchorWidthPx, marginPx)
+        ContextMenuPopup(onDismiss, anchorOffsetPx, anchorWidthPx) {
+            ContextMenuContent(
+                onAction = onAction,
+                onDismiss = onDismiss,
+                isAuthor = isAuthor,
+                isAdmin = isAdmin,
+                canZap = canZap,
+            )
+        }
+    }
+}
+
+/**
+ * Compact context menu for thread messages (right-click / long-press): the quick-reactions
+ * row, copy text, and delete for the author. Shares the chat menu's chrome and action
+ * vocabulary ([MessageContextAction]) but not its chat-only items (reply, zap, pin, links).
+ */
+@Composable
+fun ThreadMessageContextMenu(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onAction: (MessageContextAction) -> Unit,
+    anchorOffsetPx: Offset? = null,
+    isAuthor: Boolean = false,
+) {
+    if (!visible) return
+    ContextMenuPopup(onDismiss, anchorOffsetPx, anchorWidthPx = 0) {
+        ContextMenuSurface {
+            QuickReactionsRow(
+                onQuickReact = { emoji ->
+                    onAction(MessageContextAction.QuickReact(emoji))
+                    onDismiss()
+                },
+                onOpenPicker = {
+                    onAction(MessageContextAction.AddReaction)
+                    onDismiss()
+                },
+            )
+
+            ContextMenuDivider()
+
+            ContextMenuItem(
+                icon = Icons.Outlined.ContentCopy,
+                label = "Copy text",
+                onClick = {
+                    onAction(MessageContextAction.CopyText)
+                    onDismiss()
+                },
+            )
+
+            if (isAuthor) {
+                ContextMenuDivider()
+
+                ContextMenuItem(
+                    icon = Icons.Outlined.Delete,
+                    label = "Delete message",
+                    onClick = {
+                        onAction(MessageContextAction.DeleteMessage)
+                        onDismiss()
+                    },
+                    isDestructive = true,
+                )
             }
-        // Grow from the cursor (top-left) when opened at a click, from the
-        // top-right when hung off the More button.
-        val transformOrigin =
-            if (anchorOffsetPx != null) TransformOrigin(0f, 0f) else TransformOrigin(1f, 0f)
-        Popup(
-            popupPositionProvider = positionProvider,
-            onDismissRequest = onDismiss,
-            properties =
-            PopupProperties(
-                // focusable = true allows clicking outside to dismiss
-                // but must be careful not to steal focus from selection
-                focusable = true,
-                // Don't dismiss on back press automatically - let onDismissRequest handle it
-                dismissOnBackPress = true,
-                dismissOnClickOutside = true,
-            ),
-        ) {
-            // DisableSelection prevents the menu itself from participating in text selection
-            DisableSelection {
-                // Animated content inside the popup
-                AnimatedVisibility(
-                    visible = true, // Always visible when popup is shown
-                    enter =
-                    fadeIn(animationSpec = tween(NostrordAnimation.popupEnter)) +
-                        scaleIn(
-                            animationSpec = tween(NostrordAnimation.popupEnter),
-                            initialScale = 0.9f,
-                            transformOrigin = transformOrigin,
-                        ),
-                    exit =
-                    fadeOut(animationSpec = tween(NostrordAnimation.popupExit)) +
-                        scaleOut(
-                            animationSpec = tween(NostrordAnimation.popupExit),
-                            transformOrigin = transformOrigin,
-                        ),
-                ) {
-                    ContextMenuContent(
-                        onAction = onAction,
-                        onDismiss = onDismiss,
-                        isAuthor = isAuthor,
-                        isAdmin = isAdmin,
-                        canZap = canZap,
-                    )
-                }
+        }
+    }
+}
+
+/** Popup chrome shared by the chat and thread menus: cursor-anchored position + scale/fade in. */
+@Composable
+private fun ContextMenuPopup(
+    onDismiss: () -> Unit,
+    anchorOffsetPx: Offset?,
+    anchorWidthPx: Int,
+    content: @Composable () -> Unit,
+) {
+    val marginPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    // Open at the click position (web parity); fall back to the row's
+    // top-right when there's no cursor anchor (the hover More button).
+    val positionProvider =
+        remember(anchorOffsetPx, anchorWidthPx, marginPx) {
+            MessageMenuPositionProvider(anchorOffsetPx, anchorWidthPx, marginPx)
+        }
+    // Grow from the cursor (top-left) when opened at a click, from the
+    // top-right when hung off the More button.
+    val transformOrigin =
+        if (anchorOffsetPx != null) TransformOrigin(0f, 0f) else TransformOrigin(1f, 0f)
+    Popup(
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismiss,
+        properties =
+        PopupProperties(
+            // focusable = true allows clicking outside to dismiss
+            // but must be careful not to steal focus from selection
+            focusable = true,
+            // Don't dismiss on back press automatically - let onDismissRequest handle it
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+    ) {
+        // DisableSelection prevents the menu itself from participating in text selection
+        DisableSelection {
+            // Animated content inside the popup
+            AnimatedVisibility(
+                visible = true, // Always visible when popup is shown
+                enter =
+                fadeIn(animationSpec = tween(NostrordAnimation.popupEnter)) +
+                    scaleIn(
+                        animationSpec = tween(NostrordAnimation.popupEnter),
+                        initialScale = 0.9f,
+                        transformOrigin = transformOrigin,
+                    ),
+                exit =
+                fadeOut(animationSpec = tween(NostrordAnimation.popupExit)) +
+                    scaleOut(
+                        animationSpec = tween(NostrordAnimation.popupExit),
+                        transformOrigin = transformOrigin,
+                    ),
+            ) {
+                content()
             }
         }
     }
@@ -230,14 +298,9 @@ internal class MessageMenuPositionProvider(
 /**
  * The actual menu content, separated for clarity.
  */
+/** The menu card chrome (width, shadow, border), shared by the chat and thread menu contents. */
 @Composable
-private fun ContextMenuContent(
-    onAction: (MessageContextAction) -> Unit,
-    onDismiss: () -> Unit,
-    isAuthor: Boolean,
-    isAdmin: Boolean,
-    canZap: Boolean,
-) {
+private fun ContextMenuSurface(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier =
         Modifier
@@ -259,7 +322,19 @@ private fun ContextMenuContent(
             .pointerInput(Unit) {
                 detectTapGestures { /* consume */ }
             },
-    ) {
+        content = content,
+    )
+}
+
+@Composable
+private fun ContextMenuContent(
+    onAction: (MessageContextAction) -> Unit,
+    onDismiss: () -> Unit,
+    isAuthor: Boolean,
+    isAdmin: Boolean,
+    canZap: Boolean,
+) {
+    ContextMenuSurface {
         // Quick reactions row (one tap to react) + an affordance to open the full picker.
         QuickReactionsRow(
             onQuickReact = { emoji ->

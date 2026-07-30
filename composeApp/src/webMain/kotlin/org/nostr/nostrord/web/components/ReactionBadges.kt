@@ -17,6 +17,13 @@ import web.cssom.ClassName
  * Pending emojis already merged into [reactions] by the optimistic update are hidden so a
  * spinner badge never shows next to its real counterpart.
  */
+/** NIP-25 "+"/"-" display as thumbs, never as a bare sign (parity with the native badges). */
+private fun displayEmoji(emoji: String): String = when (emoji) {
+    "+" -> "👍"
+    "-" -> "👎"
+    else -> emoji
+}
+
 fun ChildrenBuilder.reactionBadges(
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: Collection<String>,
@@ -41,7 +48,7 @@ fun ChildrenBuilder.reactionBadges(
                         alt = emoji
                     }
                 } else {
-                    +emoji
+                    +displayEmoji(emoji)
                 }
                 // Stacked avatars of who reacted (up to 3, overlapping), then +N overflow.
                 div {
@@ -69,7 +76,7 @@ fun ChildrenBuilder.reactionBadges(
         visiblePending.forEach { emoji ->
             div {
                 className = ClassName("reaction-badge pending")
-                +emoji
+                +displayEmoji(emoji)
                 span { className = ClassName("reaction-spinner") }
             }
         }

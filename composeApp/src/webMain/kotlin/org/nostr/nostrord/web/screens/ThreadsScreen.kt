@@ -7,10 +7,13 @@ import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.threadTitle
+import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.getDateLabel
 import org.nostr.nostrord.utils.shortNpub
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
@@ -21,6 +24,7 @@ import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.Portal
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
+import org.nostr.nostrord.web.components.copyToClipboard
 import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.messageSendStatus
 import org.nostr.nostrord.web.components.reactionBadges
@@ -33,12 +37,14 @@ import react.Props
 import react.dom.html.ReactHTML.button
 import react.dom.html.ReactHTML.div
 import react.dom.html.ReactHTML.h2
+import react.dom.html.ReactHTML.img
 import react.dom.html.ReactHTML.span
 import react.dom.html.ReactHTML.textarea
 import react.useEffect
 import react.useRef
 import react.useState
 import web.cssom.ClassName
+import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
 import kotlin.js.Date
 
@@ -58,6 +64,13 @@ private fun relativeTime(createdAtSeconds: Long): String {
         else -> "${diff / 604_800}w"
     }
 }
+
+/** Right-click target for the thread context menu: the message plus the click viewport coords. */
+private data class ThreadCtxMenu(
+    val msg: NostrGroupClient.NostrMessage,
+    val x: Double,
+    val y: Double,
+)
 
 external interface ThreadsScreenProps : Props {
     var route: GroupRoute
@@ -90,6 +103,25 @@ val ThreadsScreen =
 
         // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
         val (reactingTo, setReactingTo) = useState<Pair<String, String>?> { null }
+
+        // Context menu (right-click / long-press) over a thread message.
+        val (ctxMenu, setCtxMenu) = useState<ThreadCtxMenu?> { null }
+        val ctxMenuRef = useRef<HTMLDivElement>(null)
+
+        // Clamp the menu into the viewport once it mounts (.ctx-menu starts visibility:hidden).
+        useEffect(ctxMenu) {
+            val el = ctxMenuRef.current?.asDynamic() ?: return@useEffect
+            val m = ctxMenu ?: return@useEffect
+            val w = el.offsetWidth as Int
+            val h = el.offsetHeight as Int
+            var left = m.x
+            if (left + w > window.innerWidth - 8) left = (window.innerWidth - 8.0 - w).coerceAtLeast(8.0)
+            var top = m.y
+            if (top + h > window.innerHeight - 8) top = (m.y - h).coerceAtLeast(8.0)
+            el.style.left = "${left}px"
+            el.style.top = "${top}px"
+            el.style.visibility = "visible"
+        }
 
         // Keep the open thread synced with the URL (#/g/<relay>/<id>/threads/<rootId>).
         useEffect(route.threadRootId) { vm.openThread(route.threadRootId) }
@@ -194,7 +226,9 @@ val ThreadsScreen =
                         reactions[msg.id] ?: emptyMap(),
                         pendingFor(msg.id),
                         onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
-                        onOpenPicker = { setReactingTo(msg.id to msg.pubkey) },
+                        onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
+                        // A group ref in the body opens that group's chat page.
+                        onGroupRef = { gid, relay -> props.onNavigate(GroupRoute(relay ?: route.relayUrl, gid)) },
                         onRetry = { vm.retrySend(msg.id) },
                         onDismiss = { vm.dismissFailed(msg.id) },
                     )
@@ -354,6 +388,25 @@ val ThreadsScreen =
                                         }
                                         div {
                                             className = ClassName("thread-card-meta")
+                                            // Top reactions on the root, then author / replies / publication date.
+                                            topReactionChips(reactions[t.rootId] ?: emptyMap()).forEach { chip ->
+                                                span {
+                                                    className = ClassName("thread-card-chip")
+                                                    if (!chip.emojiUrl.isNullOrBlank()) {
+                                                        img {
+                                                            className = ClassName("reaction-emoji")
+                                                            src = chip.emojiUrl
+                                                            alt = chip.emoji
+                                                        }
+                                                    } else {
+                                                        +chip.emoji
+                                                    }
+                                                    span {
+                                                        className = ClassName("thread-card-chip-count")
+                                                        +"${chip.count}"
+                                                    }
+                                                }
+                                            }
                                             +threadDisplayName(t.authorPubkey, userMetadata[t.authorPubkey])
                                             span {
                                                 className = ClassName("thread-card-dot")
@@ -364,7 +417,7 @@ val ThreadsScreen =
                                                 className = ClassName("thread-card-dot")
                                                 +"·"
                                             }
-                                            +relativeTime(t.lastActivity)
+                                            +getDateLabel(t.createdAt)
                                         }
                                     }
                                 }
@@ -372,6 +425,61 @@ val ThreadsScreen =
                         }
                 }
             }
+            // Thread message context menu: quick reactions, copy text, delete (own message).
+            ctxMenu?.let { m ->
+                div {
+                    className = ClassName("ctx-overlay")
+                    onClick = { setCtxMenu(null) }
+                    onContextMenu = {
+                        it.preventDefault()
+                        setCtxMenu(null)
+                    }
+                }
+                div {
+                    ref = ctxMenuRef
+                    className = ClassName("ctx-menu")
+                    div {
+                        className = ClassName("ctx-reactions")
+                        for (emoji in QuickReactions) {
+                            button {
+                                className = ClassName("ctx-reaction")
+                                onClick = {
+                                    vm.sendReaction(m.msg.id, m.msg.pubkey, emoji)
+                                    setCtxMenu(null)
+                                }
+                                +emoji
+                            }
+                        }
+                        button {
+                            className = ClassName("ctx-reaction ctx-reaction-more")
+                            title = "Add reaction"
+                            onClick = {
+                                setCtxMenu(null)
+                                setReactingTo(m.msg.id to m.msg.pubkey)
+                            }
+                            icon(Ic.EmojiEmotions)
+                        }
+                    }
+                    div { className = ClassName("ctx-divider") }
+                    ctxItem(Ic.ContentCopy, "Copy text") {
+                        copyToClipboard(m.msg.content)
+                        setCtxMenu(null)
+                    }
+                    if (myPubkey != null && myPubkey == m.msg.pubkey) {
+                        div { className = ClassName("ctx-divider") }
+                        ctxItem(Ic.Delete, "Delete message", danger = true) {
+                            setCtxMenu(null)
+                            val isRoot = m.msg.id == route.threadRootId
+                            val prompt = if (isRoot) "Delete this thread? This cannot be undone." else "Delete this message? This cannot be undone."
+                            if (window.confirm(prompt)) {
+                                vm.deleteThread(m.msg.id)
+                                if (isRoot) props.onNavigate(route.copy(threadRootId = null))
+                            }
+                        }
+                    }
+                }
+            }
+
             // Full emoji picker for a reaction (opened by the add-reaction button).
             reactingTo?.let { (targetEventId, targetPubkey) ->
                 Portal {
@@ -442,12 +550,22 @@ private fun ChildrenBuilder.threadMessage(
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: List<String>,
     onReact: (String) -> Unit,
-    onOpenPicker: () -> Unit,
+    onOpenMenu: (Double, Double) -> Unit,
+    onGroupRef: (String, String?) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     div {
         className = ClassName(if (isRoot) "thread-msg thread-msg-root" else "thread-msg")
+        // Right-click (desktop) / long-press (mobile browsers) opens the thread context menu.
+        // Right-click directly on a hyperlink keeps the browser's native menu (chat parity),
+        // so "Copy link address" copies the actual URL.
+        onContextMenu = { e ->
+            if (e.target.asDynamic().closest("a") == null) {
+                e.preventDefault()
+                onOpenMenu(e.clientX, e.clientY)
+            }
+        }
         WebAvatar {
             url = userMetadata[msg.pubkey]?.picture
             seed = msg.pubkey
@@ -484,7 +602,7 @@ private fun ChildrenBuilder.threadMessage(
                     emptyMap(),
                     onUser = {},
                     onEventRef = {},
-                    onGroupRef = { _, _ -> },
+                    onGroupRef = onGroupRef,
                 )
                 // Inline send-state icon (clock/check) so no extra line shifts the list.
                 if (myPubkey != null && myPubkey == msg.pubkey) {
@@ -494,18 +612,9 @@ private fun ChildrenBuilder.threadMessage(
             if (myPubkey != null && myPubkey == msg.pubkey) {
                 messageSendStatus(status, onRetry, onDismiss)
             }
-            // Reaction badges + the always-visible add-reaction affordance (threads have no
-            // hover-action row like chat, so the button is the way in to the full picker).
-            div {
-                className = ClassName("thread-msg-react-row")
-                reactionBadges(reactions, pendingEmojis, myPubkey, userMetadata, onReact)
-                button {
-                    className = ClassName("thread-react-btn")
-                    title = "Add reaction"
-                    onClick = { onOpenPicker() }
-                    icon(Ic.EmojiEmotions)
-                }
-            }
+            // Reaction badges; adding a reaction goes through the context menu (quick row
+            // or the full picker), so there is no always-visible add button.
+            reactionBadges(reactions, pendingEmojis, myPubkey, userMetadata, onReact)
         }
     }
 }

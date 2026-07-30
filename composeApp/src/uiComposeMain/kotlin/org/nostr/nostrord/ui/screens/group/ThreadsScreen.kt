@@ -16,12 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Forum
-import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,14 +56,18 @@ import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonSize
+import org.nostr.nostrord.ui.components.chat.EmojiImage
 import org.nostr.nostrord.ui.components.chat.ImageViewerModal
 import org.nostr.nostrord.ui.components.chat.LocalAnimatedImageHidden
 import org.nostr.nostrord.ui.components.chat.LocalImageViewerUrl
 import org.nostr.nostrord.ui.components.chat.MessageComposer
 import org.nostr.nostrord.ui.components.chat.MessageContent
+import org.nostr.nostrord.ui.components.chat.MessageContextAction
 import org.nostr.nostrord.ui.components.chat.MessageStatusIndicator
 import org.nostr.nostrord.ui.components.chat.ReactionBadges
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
+import org.nostr.nostrord.ui.components.chat.ThreadMessageContextMenu
+import org.nostr.nostrord.ui.components.chat.rightClickContextMenuModifier
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.HashRoute
@@ -70,7 +75,10 @@ import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
+import org.nostr.nostrord.ui.theme.rememberEmojiFontFamily
 import org.nostr.nostrord.utils.formatTimestamp
+import org.nostr.nostrord.utils.getDateLabel
+import org.nostr.nostrord.utils.rememberClipboardWriter
 import org.nostr.nostrord.utils.shortNpub
 
 /**
@@ -110,7 +118,8 @@ fun ThreadsScreen(
     LaunchedEffect(route.threadRootId) { vm.openThread(route.threadRootId) }
 
     var showCompose by remember { mutableStateOf(false) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+    // Message pending delete confirmation (the root or any reply, from the header or the menu).
+    var deleteTarget by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
     var reply by remember { mutableStateOf(TextFieldValue("")) }
     var sending by remember { mutableStateOf(false) }
     // Shared with MessageContent via LocalImageViewerUrl: tap an inline image -> fullscreen viewer.
@@ -140,7 +149,7 @@ fun ThreadsScreen(
                 )
                 val ownRoot = openThread?.root
                 if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
-                    IconButton(onClick = { showDeleteConfirm = true }) {
+                    IconButton(onClick = { deleteTarget = ownRoot }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete thread", tint = NostrordColors.TextSecondary)
                     }
                 }
@@ -176,6 +185,11 @@ fun ThreadsScreen(
                                 resolveMetadata = { userMetadata[it] },
                                 onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                 onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
+                                onDelete = { deleteTarget = msg },
+                                // A group ref in the body opens that group's chat page.
+                                onNavigateToGroup = { gid, _, relay, _ ->
+                                    onNavigate(GroupRoute(relay ?: route.relayUrl, gid))
+                                },
                                 onRetry = { vm.retrySend(msg.id) },
                                 onDismiss = { vm.dismissFailed(msg.id) },
                             )
@@ -242,7 +256,11 @@ fun ThreadsScreen(
                 else ->
                     LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(Spacing.sm)) {
                         items(threads, key = { it.rootId }) { t ->
-                            ThreadCard(t, userMetadata) { onNavigate(route.copy(threadRootId = t.rootId)) }
+                            ThreadCard(
+                                t,
+                                userMetadata,
+                                chips = topReactionChips(reactions[t.rootId] ?: emptyMap()),
+                            ) { onNavigate(route.copy(threadRootId = t.rootId)) }
                         }
                     }
             }
@@ -256,23 +274,21 @@ fun ThreadsScreen(
         )
     }
 
-    if (showDeleteConfirm) {
-        val ownRoot = openThread?.root
+    deleteTarget?.let { target ->
+        val isRoot = target.id == openThread?.root?.id
         AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete thread?") },
+            onDismissRequest = { deleteTarget = null },
+            title = { Text(if (isRoot) "Delete thread?" else "Delete message?") },
             text = { Text("This cannot be undone.") },
             confirmButton = {
                 TextButton(onClick = {
-                    showDeleteConfirm = false
-                    if (ownRoot != null) {
-                        vm.deleteThread(ownRoot.id)
-                        onBack()
-                    }
+                    deleteTarget = null
+                    vm.deleteThread(target.id)
+                    if (isRoot) onBack()
                 }) { Text("Delete", color = NostrordColors.Error) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+                TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
             },
         )
     }
@@ -353,7 +369,12 @@ private fun ColumnScope.EmptyState(text: String) {
 }
 
 @Composable
-private fun ThreadCard(t: ThreadSummary, userMetadata: Map<String, UserMetadata>, onClick: () -> Unit) {
+private fun ThreadCard(
+    t: ThreadSummary,
+    userMetadata: Map<String, UserMetadata>,
+    chips: List<ReactionChip>,
+    onClick: () -> Unit,
+) {
     val meta = userMetadata[t.authorPubkey]
     Row(
         modifier = Modifier.fillMaxWidth().clip(NostrordShapes.shapeLarge).clickable(onClick = onClick).padding(Spacing.md),
@@ -383,16 +404,44 @@ private fun ThreadCard(t: ThreadSummary, userMetadata: Map<String, UserMetadata>
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            val replies = if (t.replyCount == 1) "1 reply" else "${t.replyCount} replies"
-            Text(
-                "${threadDisplayName(t.authorPubkey, meta)} · $replies · ${formatTimestamp(t.lastActivity)}",
-                color = NostrordColors.TextSecondary,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            // Meta row: top reactions on the root, then author / replies / publication date.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                 modifier = Modifier.padding(top = 2.dp),
-            )
+            ) {
+                chips.forEach { ReactionChipBadge(it) }
+                val replies = if (t.replyCount == 1) "1 reply" else "${t.replyCount} replies"
+                Text(
+                    "${threadDisplayName(t.authorPubkey, meta)} · $replies · ${getDateLabel(t.createdAt)}",
+                    color = NostrordColors.TextSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
+    }
+}
+
+/** Compact emoji+count chip on a thread list card (a root's top reactions, Discord-style). */
+@Composable
+private fun ReactionChipBadge(chip: ReactionChip) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        modifier =
+        Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(NostrordColors.SurfaceVariant.copy(alpha = 0.6f))
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    ) {
+        if (chip.emojiUrl != null) {
+            EmojiImage(url = chip.emojiUrl, contentDescription = chip.emoji, modifier = Modifier.size(14.dp))
+        } else {
+            Text(chip.emoji, fontSize = 12.sp, fontFamily = rememberEmojiFontFamily())
+        }
+        Text("${chip.count}", color = NostrordColors.TextSecondary, fontSize = 11.sp)
     }
 }
 
@@ -409,77 +458,98 @@ private fun ThreadMessage(
     resolveMetadata: (String) -> UserMetadata?,
     onReact: (String) -> Unit,
     onOpenReactionPicker: () -> Unit,
+    onDelete: () -> Unit,
+    onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val meta = userMetadata[msg.pubkey]
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+    val isAuthor = myPubkey != null && myPubkey == msg.pubkey
+    var menuVisible by remember { mutableStateOf(false) }
+    var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
+    val writeClipboard = rememberClipboardWriter()
+    Box(
+        modifier =
+        Modifier
+            .fillMaxWidth()
+            // Right-click (desktop) / long-press (mobile) opens the thread context menu.
+            .then(
+                rightClickContextMenuModifier { clickOffset ->
+                    menuAnchorPx = clickOffset
+                    menuVisible = true
+                },
+            ),
     ) {
-        ProfileAvatar(
-            imageUrl = meta?.picture,
-            displayName = threadDisplayName(msg.pubkey, meta),
-            pubkey = msg.pubkey,
-            size = 36.dp,
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Text(
-                    threadDisplayName(msg.pubkey, meta),
-                    color = NostrordColors.TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(formatTimestamp(msg.createdAt), color = NostrordColors.TextMuted, fontSize = 12.sp)
-            }
-            if (isRoot) {
-                Text(
-                    msg.threadTitle(),
-                    color = NostrordColors.TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = Spacing.xs),
-                )
-            }
-            Row(verticalAlignment = Alignment.Bottom) {
-                // Same rich renderer as chat: media embeds, links, mentions, custom emoji, markdown.
-                MessageContent(
-                    content = msg.content,
-                    tags = msg.tags,
-                    currentGroupId = route.groupId,
-                    currentRelayUrl = route.relayUrl,
-                    modifier = Modifier.weight(1f, fill = false).padding(top = 2.dp),
-                )
-                if (myPubkey != null && myPubkey == msg.pubkey && status != null) {
-                    SendStateIcon(status)
+        ThreadMessageContextMenu(
+            visible = menuVisible,
+            onDismiss = { menuVisible = false },
+            anchorOffsetPx = menuAnchorPx,
+            isAuthor = isAuthor,
+            onAction = { action ->
+                when (action) {
+                    is MessageContextAction.QuickReact -> onReact(action.emoji)
+                    MessageContextAction.AddReaction -> onOpenReactionPicker()
+                    MessageContextAction.CopyText -> writeClipboard(msg.content)
+                    MessageContextAction.DeleteMessage -> onDelete()
+                    else -> Unit
                 }
-            }
-            if (myPubkey != null && myPubkey == msg.pubkey && status is GroupManager.MessageStatus.Failed) {
-                MessageStatusIndicator(status, onRetry, onDismiss)
-            }
-            // Reaction badges + the always-visible add-reaction affordance (threads have no
-            // hover-action row like chat, so the button is the way in to the full picker).
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-            ) {
+            },
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            ProfileAvatar(
+                imageUrl = meta?.picture,
+                displayName = threadDisplayName(msg.pubkey, meta),
+                pubkey = msg.pubkey,
+                size = 36.dp,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    Text(
+                        threadDisplayName(msg.pubkey, meta),
+                        color = NostrordColors.TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(formatTimestamp(msg.createdAt), color = NostrordColors.TextMuted, fontSize = 12.sp)
+                }
+                if (isRoot) {
+                    Text(
+                        msg.threadTitle(),
+                        color = NostrordColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = Spacing.xs),
+                    )
+                }
+                Row(verticalAlignment = Alignment.Bottom) {
+                    // Same rich renderer as chat: media embeds, links, mentions, custom emoji, markdown.
+                    MessageContent(
+                        content = msg.content,
+                        tags = msg.tags,
+                        currentGroupId = route.groupId,
+                        currentRelayUrl = route.relayUrl,
+                        onNavigateToGroup = onNavigateToGroup,
+                        modifier = Modifier.weight(1f, fill = false).padding(top = 2.dp),
+                    )
+                    if (myPubkey != null && myPubkey == msg.pubkey && status != null) {
+                        SendStateIcon(status)
+                    }
+                }
+                if (myPubkey != null && myPubkey == msg.pubkey && status is GroupManager.MessageStatus.Failed) {
+                    MessageStatusIndicator(status, onRetry, onDismiss)
+                }
+                // Reaction badges; adding a reaction goes through the context menu (quick row
+                // or the full picker), so there is no always-visible add button.
                 ReactionBadges(
                     reactions = reactions,
                     currentUserPubkey = myPubkey,
                     resolveMetadata = resolveMetadata,
                     onReactionClick = onReact,
                     pendingEmojis = pendingEmojis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
-                IconButton(onClick = onOpenReactionPicker, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        Icons.Outlined.EmojiEmotions,
-                        contentDescription = "Add reaction",
-                        tint = NostrordColors.TextMuted,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
             }
         }
     }
