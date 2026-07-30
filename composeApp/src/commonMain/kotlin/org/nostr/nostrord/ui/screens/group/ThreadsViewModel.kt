@@ -200,13 +200,22 @@ class ThreadsViewModel(
 
     /**
      * Create a forum thread (kind:11). No-op on blank content. [shareToChat] also announces it
-     * in the group chat via [shareThreadToChat] once the root id is known.
+     * in the group chat via [shareThreadToChat] once the root id is known; [onCreated] fires
+     * with the root id so the screen can open the new thread right away.
      */
-    fun createThread(title: String, content: String, shareToChat: Boolean = false) {
+    fun createThread(
+        title: String,
+        content: String,
+        shareToChat: Boolean = false,
+        onCreated: (rootId: String) -> Unit = {},
+    ) {
         if (content.isBlank()) return
         viewModelScope.launch {
             when (val result = repo.createThread(groupId, title.trim(), content.trim())) {
-                is Result.Success -> if (shareToChat) announceThread(result.data, title.trim(), repo.getPublicKey())
+                is Result.Success -> {
+                    onCreated(result.data)
+                    if (shareToChat) announceThread(result.data, title.trim(), repo.getPublicKey())
+                }
                 is Result.Error -> Unit
             }
         }
