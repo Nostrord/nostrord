@@ -2153,11 +2153,21 @@ body {
 /* Threads pane (forum-style kind:11 root + NIP-22 kind:1111 replies). Web mirror of the
    Compose ThreadsScreen and the prototype's GroupPanels.ThreadsPanel / ThreadPanel, as a page. */
 .threads-page {
+    /* .chat-header consumes this; matches .chat-main's single-source value so the
+       threads page header sizes exactly like the chat one. */
+    --chat-header-height: 48px;
     display: flex;
     flex-direction: column;
     min-height: 0;
     height: 100%;
     background: var(--color-background);
+}
+
+/* The page header is mobile-only: on desktop the sidebar already names the group. */
+@media (min-width: 768px) {
+    .threads-page > .chat-header {
+        display: none;
+    }
 }
 
 /* The panes row under the page header. */

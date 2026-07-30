@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -169,44 +170,45 @@ fun ThreadsScreen(
     val imageViewerUrl = remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().background(NostrordColors.Background)) {
-        // Page header: group identity over the whole pane, mirroring the chat header
-        // (drawer ≡ on mobile, avatar + name).
-        val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
-        val groupMeta = groupsByRelay[route.relayUrl]?.firstOrNull { it.id == route.groupId }
-            ?: groupsByRelay.values.flatten().firstOrNull { it.id == route.groupId }
-        val groupName = groupMeta?.name?.takeIf { it.isNotBlank() } ?: "#${route.groupId.take(8)}"
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-        ) {
-            if (onOpenDrawer != null) {
+        // Page header (mobile only, chat-header metrics): group identity + the drawer ≡.
+        // Desktop skips it - the sidebar already names the group.
+        if (onOpenDrawer != null) {
+            val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
+            val groupMeta = groupsByRelay[route.relayUrl]?.firstOrNull { it.id == route.groupId }
+                ?: groupsByRelay.values.flatten().firstOrNull { it.id == route.groupId }
+            val groupName = groupMeta?.name?.takeIf { it.isNotBlank() } ?: "#${route.groupId.take(8)}"
+            Row(
+                modifier = Modifier.fillMaxWidth().height(Spacing.headerHeight).padding(horizontal = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
                 IconButton(onClick = onOpenDrawer) {
                     Icon(Icons.Default.Menu, contentDescription = "Open groups", tint = NostrordColors.TextSecondary)
                 }
+                GroupHeaderIcon(
+                    pictureUrl = groupMeta?.picture,
+                    groupId = route.groupId,
+                    displayName = groupName,
+                    size = 26.dp,
+                    cornerRadius = 8.dp,
+                )
+                Text(
+                    groupName,
+                    color = NostrordColors.TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-            GroupHeaderIcon(
-                pictureUrl = groupMeta?.picture,
-                groupId = route.groupId,
-                displayName = groupName,
-                size = 28.dp,
-                cornerRadius = 8.dp,
-            )
-            Text(
-                groupName,
-                color = NostrordColors.TextPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            HorizontalDivider(color = NostrordColors.Divider)
         }
-        HorizontalDivider(color = NostrordColors.Divider)
 
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
             // Discord-style split on large widths: the list keeps living on the left and the open
             // thread docks on the right; compact widths keep the swap (detail replaces the list).
-            val split = maxWidth >= 840.dp
+            // 768dp matches the web media query and AppFrame's own mobile boundary.
+            val split = maxWidth >= 768.dp
             val detailPane: @Composable ColumnScope.() -> Unit = {
                 // ---- Single thread (detail) ----
                 Row(
