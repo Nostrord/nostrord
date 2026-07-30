@@ -2154,10 +2154,60 @@ body {
    Compose ThreadsScreen and the prototype's GroupPanels.ThreadsPanel / ThreadPanel, as a page. */
 .threads-page {
     display: flex;
-    flex-direction: column;
     min-height: 0;
     height: 100%;
     background: var(--color-background);
+}
+
+/* Discord-style split: the list keeps living on the left, the open thread docks right. */
+.threads-list-pane,
+.thread-detail-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    height: 100%;
+}
+
+.threads-list-pane {
+    flex: 1;
+}
+
+.thread-detail-pane {
+    flex: 1.2;
+    border-left: 1px solid var(--color-divider);
+}
+
+/* Desktop: the docked thread closes via the X on the right, not the back arrow. */
+.thread-back {
+    display: none;
+}
+
+.thread-close {
+    margin-left: auto;
+}
+
+.thread-card.active {
+    background: var(--color-message-hover);
+}
+
+@media (max-width: 767px) {
+    /* Mobile keeps the swap behavior: the open thread replaces the list. */
+    .threads-page.detail-open .threads-list-pane {
+        display: none;
+    }
+
+    .thread-detail-pane {
+        border-left: none;
+    }
+
+    .thread-back {
+        display: inline-flex;
+    }
+
+    .thread-close {
+        display: none;
+    }
 }
 
 .threads-header {
