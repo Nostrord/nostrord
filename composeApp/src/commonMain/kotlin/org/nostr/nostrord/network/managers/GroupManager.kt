@@ -786,6 +786,9 @@ class GroupManager(
         // live subscription refreshes the tail.
         const val CACHE_HYDRATE_LIMIT = 300
 
+        // Threads hydration budget: one roots page + the reply batch the live subs would fetch.
+        const val THREAD_CACHE_HYDRATE_LIMIT = THREAD_PAGE_SIZE + THREAD_REPLY_BATCH
+
         // Quiet window before the periodic refresh force-re-arms a relay's mux subs
         // (see refreshLiveSubscriptions). Two timer ticks: long enough that a healthy
         // quiet relay re-proves itself at a lazy cadence, short enough that a deaf
@@ -3080,12 +3083,69 @@ class GroupManager(
     private fun threadRepliesSubId(groupId: String) = "threadrepl_$groupId"
 
     /** Route a parsed thread event into its store (kind:11 roots, kind:1111 replies), deduped. */
-    private fun applyThreadEvent(groupId: String, message: NostrGroupClient.NostrMessage) {
+    private fun applyThreadEvent(groupId: String, message: NostrGroupClient.NostrMessage, persist: Boolean = true) {
         val store = if (message.kind == 11) _threadRoots else _threadReplies
         store.update { current ->
             val list = current[groupId] ?: emptyList()
             if (list.any { it.id == message.id }) return@update current
             current + (groupId to (list + message).sortedBy { it.createdAt })
+        }
+        // Write-through OUTSIDE the in-memory dedup: the relay echo of an optimistic
+        // (relay-less) insert is deduped above, yet it is the first relay-attributed copy
+        // and the one that must reach the disk cache. Upserts are idempotent.
+        if (persist) cacheThreadEvent(groupId, message)
+    }
+
+    /**
+     * Disk-cache slot for a group's forum threads (kind:11 + 1111 together, split by kind on
+     * load) on one relay. The trailing segment keeps it disjoint from the chat history slot
+     * ("relay|groupId"); '|' cannot appear in a relay URL or group id.
+     */
+    private fun threadCacheSlot(
+        relayUrl: String,
+        groupId: String,
+    ): String = "${relayUrl.normalizeRelayUrl()}|$groupId|threads"
+
+    /**
+     * Write a thread event through to the persistent cache (fire-and-forget). Relay-less
+     * events (the optimistic insert before the relay echo) are skipped: hydration is
+     * relay-scoped and a send that never echoes must not rehydrate as a ghost.
+     */
+    private fun cacheThreadEvent(groupId: String, message: NostrGroupClient.NostrMessage) {
+        val account = currentPubkey ?: return
+        val relay = message.relayUrl ?: return
+        scope.launch {
+            try {
+                val slot = threadCacheSlot(relay, groupId)
+                cacheStore.upsertMessages(account, slot, listOf(message.toCachedMsg(slot)))
+            } catch (_: Exception) {
+            }
+        }
+        scheduleCacheEviction()
+    }
+
+    // Groups whose threads pane already hydrated from disk this session: keeps the VM's
+    // requestGroupThreads retry loop (and pane re-opens) from re-reading the store.
+    private val hydratedThreadGroups = mutableSetOf<String>()
+
+    /**
+     * Render a previously-seen threads pane instantly from the persistent cache, before any
+     * relay round-trip (stale-while-revalidate, the threads analogue of
+     * [hydrateMessagesFromCache]). The live subscriptions then refresh and dedupe by id;
+     * deletions were already evicted from the cache when their kind 5/9005 arrived.
+     */
+    private suspend fun hydrateThreadsFromCache(groupId: String) {
+        val account = currentPubkey ?: return
+        val relay = getRelayForGroup(groupId) ?: return
+        if (!hydratedThreadGroups.add(groupId)) return
+        val cached =
+            try {
+                cacheStore.loadLatest(account, threadCacheSlot(relay, groupId), THREAD_CACHE_HYDRATE_LIMIT)
+            } catch (_: Exception) {
+                return
+            }
+        for (row in cached) {
+            applyThreadEvent(groupId, row.toNostrMessage().withOriginRelay(relay), persist = false)
         }
     }
 
@@ -3100,6 +3160,10 @@ class GroupManager(
      * AUTH lands later, [resubscribeOpenThreadsAfterAuth] re-fires these.
      */
     suspend fun requestGroupThreads(groupId: String): Boolean {
+        // Show the known threads instantly from disk (stale-while-revalidate) - before the
+        // client check, so a cold or offline open still renders and the VM's retry loop
+        // (which re-enters here until the client is ready) hits the hydration guard.
+        hydrateThreadsFromCache(groupId)
         val client = clientForGroup(groupId) ?: return false
         openThreadGroups.add(groupId)
         if (client.requiresAuth() && !client.hasAuthSucceeded()) {
@@ -4989,6 +5053,7 @@ class GroupManager(
         _messages.value = emptyMap()
         _threadRoots.value = emptyMap()
         _threadReplies.value = emptyMap()
+        hydratedThreadGroups.clear()
         _threadsLoaded.value = emptySet()
         openThreadGroups.clear()
         groupMessageRecency.clear()
