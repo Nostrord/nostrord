@@ -30,3 +30,4 @@ keystore.properties
 key.properties
 signing.properties
 release.properties
+livekit-kmp/
