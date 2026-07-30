@@ -24,6 +24,7 @@ import org.nostr.nostrord.nostr.Nip68
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.navigation.GroupRoute
+import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.screens.group.GroupMembership
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.ui.screens.group.MentionableGroup
@@ -3912,6 +3913,56 @@ private val QuotedEvent =
         useEffect(replyPubkey) {
             val pk = replyPubkey
             if (pk != null && userMetadata[pk] == null) launchApp { repo.requestUserMetadata(setOf(pk)) }
+        }
+
+        // A quoted kind:11 renders as a thread card that opens the thread page - both the
+        // "Share to chat" announcement and any pasted thread nevent land here. Takes precedence
+        // over the forwarded rendering (mirrors native ThreadQuoteCard).
+        val resolvedKind = local?.kind ?: cachedEv?.kind ?: props.kind
+        if (resolvedKind == 11) {
+            val threadTitle = quotedTags.firstOrNull { it.size >= 2 && (it[0] == "subject" || it[0] == "title") }
+                ?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: content?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }?.take(80)
+            val threadSnippet = content?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
+                ?.take(140)?.takeIf { it != threadTitle }
+            val canOpen = refGroupId != null && fwdRelay != null
+            div {
+                className = ClassName(if (canOpen) "thread-quote-card" else "thread-quote-card static")
+                if (canOpen) {
+                    onClick = {
+                        pushRoute(
+                            GroupRoute(
+                                relayUrl = fwdRelay!!,
+                                groupId = refGroupId!!,
+                                view = GroupView.Threads,
+                                threadRootId = props.eventId,
+                            ),
+                        )
+                    }
+                }
+                div {
+                    className = ClassName("thread-quote-head")
+                    icon(Ic.Forum)
+                    span { +"Thread" }
+                    if (refGroupId != null && fwdGroupName.isNotBlank()) {
+                        span {
+                            className = ClassName("thread-quote-group")
+                            +"· $fwdGroupName"
+                        }
+                    }
+                }
+                div {
+                    className = ClassName("thread-quote-title")
+                    +(threadTitle ?: if (notFound) "Thread not found" else "Loading thread...")
+                }
+                threadSnippet?.let {
+                    div {
+                        className = ClassName("thread-quote-snippet")
+                        +it
+                    }
+                }
+            }
+            return@FC
         }
 
         // Clickable only when the referenced event is a local message we can scroll to; an
