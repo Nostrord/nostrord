@@ -10,14 +10,18 @@ import org.nostr.nostrord.network.NostrGroupClient
 internal object ThreadTags {
     /**
      * Tags for a kind:11 thread root: the NIP-29 group `h` tag (with a relay hint when known),
-     * the relay-wide `-` marker for the id-less `_` group, and an optional NIP-14 `subject`
-     * (the thread title; omitted when blank).
+     * the relay-wide `-` marker for the id-less `_` group, and the optional thread title as BOTH
+     * the NIP-7D `title` (what kind:11 readers like Squalk expect - issue #221) and the NIP-14
+     * `subject` (what older Nostrord releases and chat-style readers expect); omitted when blank.
      */
     fun root(groupId: String, relayHint: String?, subject: String?): List<List<String>> = buildList {
         add(listOfNotNull("h", groupId, relayHint))
         if (groupId == "_") add(listOf("-"))
         val s = subject?.trim().orEmpty()
-        if (s.isNotEmpty()) add(listOf("subject", s))
+        if (s.isNotEmpty()) {
+            add(listOf("title", s))
+            add(listOf("subject", s))
+        }
     }
 
     /**

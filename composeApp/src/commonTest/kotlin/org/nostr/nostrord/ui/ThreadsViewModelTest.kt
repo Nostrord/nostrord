@@ -82,6 +82,20 @@ class ThreadsViewModelTest {
     }
 
     @Test
+    fun `a NIP-7D title tag names the thread when there is no subject`() {
+        val msg = NostrGroupClient.NostrMessage(
+            id = "a",
+            pubkey = "p",
+            content = "body text",
+            createdAt = 1,
+            kind = 11,
+            tags = listOf(listOf("title", "From another client")),
+        )
+        val s = buildThreadSummaries(listOf(msg), emptyList()).single()
+        assertEquals("From another client", s.title)
+    }
+
+    @Test
     fun `preview and fallback title end in an ellipsis when the content is cut`() {
         val long = "x".repeat(200)
         val s = buildThreadSummaries(listOf(root("a", 1, long)), emptyList()).single()
