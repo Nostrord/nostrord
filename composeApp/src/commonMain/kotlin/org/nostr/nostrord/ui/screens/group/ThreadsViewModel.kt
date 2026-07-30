@@ -14,6 +14,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.normalizeRelayUrl
@@ -197,10 +198,37 @@ class ThreadsViewModel(
         }
     }
 
-    /** Create a forum thread (kind:11). No-op on blank content. */
-    fun createThread(title: String, content: String) {
+    /**
+     * Create a forum thread (kind:11). No-op on blank content. [shareToChat] also announces it
+     * in the group chat via [shareThreadToChat] once the root id is known.
+     */
+    fun createThread(title: String, content: String, shareToChat: Boolean = false) {
         if (content.isBlank()) return
-        viewModelScope.launch { repo.createThread(groupId, title.trim(), content.trim()) }
+        viewModelScope.launch {
+            when (val result = repo.createThread(groupId, title.trim(), content.trim())) {
+                is Result.Success -> if (shareToChat) announceThread(result.data, title.trim(), repo.getPublicKey())
+                is Result.Error -> Unit
+            }
+        }
+    }
+
+    /**
+     * Announce a thread in the group chat: a plain kind:9 with the title and the root's
+     * nostr:nevent, so every NIP-29 client renders it (ours as a tappable quoted card).
+     * Opt-in only - never fired automatically without the author asking.
+     */
+    fun shareThreadToChat(root: NostrGroupClient.NostrMessage) {
+        viewModelScope.launch { announceThread(root.id, root.threadTitle(), root.pubkey) }
+    }
+
+    private suspend fun announceThread(rootId: String, title: String, authorPubkey: String?) {
+        val nevent = try {
+            Nip19.encodeNevent(rootId, relays = listOfNotNull(hostRelay), authorHex = authorPubkey, kind = 11)
+        } catch (_: Exception) {
+            return
+        }
+        val text = if (title.isBlank()) "Started a thread" else "Started a thread: $title"
+        repo.sendMessage(groupId, "$text\nnostr:$nevent")
     }
 
     /**

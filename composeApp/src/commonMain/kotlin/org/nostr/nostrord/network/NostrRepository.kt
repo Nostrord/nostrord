@@ -3437,7 +3437,7 @@ class NostrRepository(
 
     override suspend fun fetchThread(groupId: String, rootId: String) = groupManager.fetchThread(groupId, rootId)
 
-    override suspend fun createThread(groupId: String, title: String, content: String): Result<Unit> {
+    override suspend fun createThread(groupId: String, title: String, content: String): Result<String> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
         return groupManager.createThread(

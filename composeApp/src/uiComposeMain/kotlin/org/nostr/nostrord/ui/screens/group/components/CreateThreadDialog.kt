@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,10 +45,13 @@ import org.nostr.nostrord.ui.theme.Spacing
 @Composable
 fun CreateThreadDialog(
     onDismiss: () -> Unit,
-    onCreate: (title: String, content: String) -> Unit,
+    onCreate: (title: String, content: String, shareToChat: Boolean) -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
     var body by remember { mutableStateOf("") }
+
+    // Default on: announcing the new thread in chat is the common case; one click opts out.
+    var shareToChat by remember { mutableStateOf(true) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -103,13 +107,23 @@ fun CreateThreadDialog(
                         minLines = 4,
                     )
 
-                    Spacer(Modifier.height(Spacing.lg))
+                    Spacer(Modifier.height(Spacing.sm))
+                    // Announce the new thread in the group chat (kind:9 with the root's nevent).
+                    Row(
+                        modifier = Modifier.clickable { shareToChat = !shareToChat },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = shareToChat, onCheckedChange = { shareToChat = it })
+                        Text("Share to chat", color = NostrordColors.TextSecondary, fontSize = 13.sp)
+                    }
+
+                    Spacer(Modifier.height(Spacing.md))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End)) {
                         AppButton(text = "Cancel", onClick = onDismiss, variant = AppButtonVariant.Ghost)
                         AppButton(
                             text = "Publish thread",
                             onClick = {
-                                onCreate(title, body)
+                                onCreate(title, body, shareToChat)
                                 onDismiss()
                             },
                             enabled = title.isNotBlank() && body.isNotBlank(),

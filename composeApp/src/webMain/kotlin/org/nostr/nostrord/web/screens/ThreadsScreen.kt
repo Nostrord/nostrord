@@ -345,7 +345,7 @@ val ThreadsScreen =
                     Portal {
                         CreateThreadModal {
                             onClose = { setComposing(false) }
-                            onCreate = { title, content -> vm.createThread(title, content) }
+                            onCreate = { title, content, shareToChat -> vm.createThread(title, content, shareToChat) }
                         }
                     }
                 }
@@ -575,6 +575,13 @@ val ThreadsScreen =
                         setReplyingTo(m.msg)
                         setCtxMenu(null)
                         composerInputRef.current?.focus()
+                    }
+                    // Announce the thread in the group chat (kind:9 with the root's nevent).
+                    if (m.msg.kind == 11) {
+                        ctxItem(Ic.Forum, "Share to chat") {
+                            vm.shareThreadToChat(m.msg)
+                            setCtxMenu(null)
+                        }
                     }
                     div { className = ClassName("ctx-divider") }
                     ctxItem(Ic.ContentCopy, "Copy text") {

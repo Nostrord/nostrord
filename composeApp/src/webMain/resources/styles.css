@@ -2396,6 +2396,18 @@ body {
     word-break: break-word;
 }
 
+/* "Share to chat" opt-in in the create-thread modal. */
+.thread-share-check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    margin-top: var(--space-sm);
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
 /* Compact emoji+count chip on a thread list card (top reactions on the root). */
 .thread-card-chip {
     display: inline-flex;

@@ -288,9 +288,10 @@ class FakeNostrRepository : NostrRepositoryApi {
         calls += "fetchThread:$groupId:$rootId"
     }
 
-    override suspend fun createThread(groupId: String, title: String, content: String): Result<Unit> {
+    override suspend fun createThread(groupId: String, title: String, content: String): Result<String> {
         calls += "createThread:$groupId:$title"
-        return Result.Success(Unit)
+        // A real 32-byte hex id so callers can bech32-encode it (nevent).
+        return Result.Success("ab".repeat(32))
     }
 
     override suspend fun sendThreadReply(
