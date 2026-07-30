@@ -262,7 +262,7 @@ class ThreadsViewModel(
         viewModelScope.launch {
             try {
                 when (val result = repo.sendReaction(groupId, targetEventId, targetPubkey, emoji)) {
-                    is Result.Error -> _reactionError.value = friendlyReactionError(result.error)
+                    is Result.Error -> _reactionError.value = friendlyRelayError(result.error)
                     is Result.Success -> Unit
                 }
             } finally {
@@ -271,10 +271,25 @@ class ThreadsViewModel(
         }
     }
 
-    /** Delete a thread you authored (NIP-09/NIP-29 deletion of the kind:11 root). The relay echo
-     *  removes it from the list. Runs on viewModelScope, which survives list <-> detail nav. */
+    private val _deleteError = MutableStateFlow<String?>(null)
+
+    /** The relay's rejection of a kind:5/9005 delete ("kind 5 not allowed", ...), user-facing. */
+    val deleteError: StateFlow<String?> = _deleteError
+
+    fun clearDeleteError() {
+        _deleteError.value = null
+    }
+
+    /** Delete a thread root or reply you authored (NIP-09/NIP-29 deletion). The relay echo
+     *  removes it from local state; a rejection surfaces via [deleteError]. Runs on
+     *  viewModelScope, which survives list <-> detail nav. */
     fun deleteThread(rootId: String) {
-        viewModelScope.launch { repo.deleteMessage(groupId, rootId) }
+        viewModelScope.launch {
+            when (val result = repo.deleteMessage(groupId, rootId)) {
+                is Result.Error -> _deleteError.value = friendlyRelayError(result.error)
+                is Result.Success -> Unit
+            }
+        }
     }
 
     fun retrySend(eventId: String) = repo.retrySend(eventId)

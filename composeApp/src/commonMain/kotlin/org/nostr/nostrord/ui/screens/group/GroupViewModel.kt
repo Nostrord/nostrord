@@ -695,7 +695,7 @@ class GroupViewModel(
         viewModelScope.launch {
             try {
                 when (val result = repo.sendReaction(groupId, targetEventId, targetPubkey, emoji)) {
-                    is Result.Error -> _reactionError.value = friendlyReactionError(result.error)
+                    is Result.Error -> _reactionError.value = friendlyRelayError(result.error)
                     is Result.Success -> Unit
                 }
             } finally {
@@ -865,15 +865,7 @@ class GroupViewModel(
     fun deleteMessage(messageId: String) {
         viewModelScope.launch {
             when (val result = repo.deleteMessage(groupId, messageId)) {
-                is Result.Error -> {
-                    val raw = result.error.cause?.message ?: result.error.toString()
-                    val friendly =
-                        raw
-                            .removePrefix("blocked: ")
-                            .removePrefix("error: ")
-                            .replaceFirstChar { it.uppercaseChar() }
-                    _deleteMessageError.value = friendly
-                }
+                is Result.Error -> _deleteMessageError.value = friendlyRelayError(result.error)
                 is Result.Success -> Unit
             }
         }
@@ -962,8 +954,8 @@ internal fun filterMutedReactions(
     }.toMap()
 }
 
-/** User-facing message for a failed kind:7 send, relay prefixes stripped. */
-internal fun friendlyReactionError(error: AppError): String = (error.cause?.message ?: error.toString())
+/** User-facing message for a relay-rejected publish (kind 5/7/...), relay prefixes stripped. */
+internal fun friendlyRelayError(error: AppError): String = (error.cause?.message ?: error.toString())
     .removePrefix("blocked: ")
     .removePrefix("error: ")
     .replaceFirstChar { it.uppercaseChar() }

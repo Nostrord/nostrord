@@ -414,10 +414,15 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     override fun dismissFailed(groupId: String, eventId: String) = dismissFailedAction(groupId, eventId)
 
+    var deleteMessageResult: Result<Unit> = Result.Success(Unit)
+
     override suspend fun deleteMessage(
         groupId: String,
         messageId: String,
-    ): Result<Unit> = Result.Success(Unit)
+    ): Result<Unit> {
+        calls += "deleteMessage:$groupId:$messageId"
+        return deleteMessageResult
+    }
 
     override fun getMessagesForGroup(groupId: String): List<NostrGroupClient.NostrMessage> = messages.value[groupId] ?: emptyList()
 

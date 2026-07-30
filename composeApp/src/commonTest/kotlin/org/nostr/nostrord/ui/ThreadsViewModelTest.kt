@@ -13,7 +13,7 @@ import org.nostr.nostrord.ui.screens.group.ReactionChip
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.buildThreadSummaries
 import org.nostr.nostrord.ui.screens.group.filterMutedReactions
-import org.nostr.nostrord.ui.screens.group.friendlyReactionError
+import org.nostr.nostrord.ui.screens.group.friendlyRelayError
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.topReactionChips
@@ -180,6 +180,18 @@ class ThreadsViewModelTest {
     }
 
     @Test
+    fun `deleteThread surfaces the relay rejection as a friendly error`() = runTest {
+        val fake = FakeNostrRepository()
+        fake.deleteMessageResult = Result.Error(AppError.Group.SendFailed("g1", Exception("blocked: event kind 5 not allowed")))
+        val vm = ThreadsViewModel(fake, "g1")
+        vm.deleteThread("root1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("Event kind 5 not allowed", vm.deleteError.value)
+        vm.clearDeleteError()
+        assertNull(vm.deleteError.value)
+    }
+
+    @Test
     fun `filterMutedReactions drops muted reactors and empty leftovers`() {
         val raw = mapOf(
             "m1" to mapOf(
@@ -215,8 +227,8 @@ class ThreadsViewModelTest {
     }
 
     @Test
-    fun `friendlyReactionError strips relay prefixes and capitalizes`() {
+    fun `friendlyRelayError strips relay prefixes and capitalizes`() {
         val err = AppError.Auth.SigningFailed(cause = Exception("blocked: not a member"))
-        assertEquals("Not a member", friendlyReactionError(err))
+        assertEquals("Not a member", friendlyRelayError(err))
     }
 }

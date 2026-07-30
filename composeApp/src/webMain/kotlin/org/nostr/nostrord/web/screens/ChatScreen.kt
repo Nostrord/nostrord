@@ -2675,7 +2675,7 @@ private fun ChildrenBuilder.joinErrorDialog(message: String, onDismiss: () -> Un
 
 /** Error dialog shown when the relay rejects a kind:5. Single OK button —
  *  matches the native AlertDialog at GroupScreen.kt:548-562. */
-private fun ChildrenBuilder.deleteMessageErrorDialog(message: String, onDismiss: () -> Unit) {
+internal fun ChildrenBuilder.deleteMessageErrorDialog(message: String, onDismiss: () -> Unit) {
     div {
         className = ClassName("modal-overlay")
         onClick = { onDismiss() }
