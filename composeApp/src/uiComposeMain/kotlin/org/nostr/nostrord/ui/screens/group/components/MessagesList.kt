@@ -57,15 +57,12 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrGroupClient.NostrMessage
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.ui.components.badges.UnreadBadge
 import org.nostr.nostrord.ui.components.chat.DateSeparator
 import org.nostr.nostrord.ui.components.chat.ImageViewerModal
@@ -783,28 +780,7 @@ fun MessagesList(
                                                 shareText(buildShareMessageLink(relay, groupId, item.message.id))
                                             },
                                             onCopyJson = {
-                                                val msg = item.message
-                                                val json =
-                                                    buildJsonObject {
-                                                        put("id", msg.id)
-                                                        put("pubkey", msg.pubkey)
-                                                        put("created_at", msg.createdAt)
-                                                        put("kind", msg.kind)
-                                                        put(
-                                                            "tags",
-                                                            buildJsonArray {
-                                                                msg.tags.forEach { tag ->
-                                                                    add(
-                                                                        buildJsonArray {
-                                                                            tag.forEach { add(JsonPrimitive(it)) }
-                                                                        },
-                                                                    )
-                                                                }
-                                                            },
-                                                        )
-                                                        put("content", msg.content)
-                                                    }.toString()
-                                                copyToClipboard(json)
+                                                copyToClipboard(item.message.toEventJson())
                                             },
                                         )
                                     is ChatItem.ZapEvent ->

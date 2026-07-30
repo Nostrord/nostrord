@@ -5,7 +5,6 @@ import kotlinx.browser.window
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.add
-import kotlinx.serialization.json.addJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -17,6 +16,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.GroupLoadingState
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.network.upload.UploadResult
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip57
@@ -1147,7 +1147,7 @@ val ChatScreen =
                     m.id to
                         RowMeta(
                             nevent = Nip19.encodeNevent(m.id, relays = listOf(neventRelay), authorHex = m.pubkey, kind = m.kind),
-                            eventJson = eventJsonOf(m),
+                            eventJson = m.toEventJson(),
                             link = "https://nostrord.com/open/?relay=$host&group=${group.id}&e=${m.id}",
                         )
                 }
@@ -3408,17 +3408,6 @@ private fun ChildrenBuilder.systemEventRow(
         }
     }
 }
-
-private fun eventJsonOf(message: NostrGroupClient.NostrMessage): String = buildJsonObject {
-    put("id", message.id)
-    put("pubkey", message.pubkey)
-    put("created_at", message.createdAt)
-    put("kind", message.kind)
-    put("content", message.content)
-    putJsonArray("tags") {
-        message.tags.forEach { tag -> addJsonArray { tag.forEach { add(it) } } }
-    }
-}.toString()
 
 private val URL_REGEX =
     Regex(

@@ -184,6 +184,33 @@ fun ThreadMessageContextMenu(
                 },
             )
 
+            ContextMenuItem(
+                icon = Icons.Outlined.Link,
+                label = "Copy event link",
+                onClick = {
+                    onAction(MessageContextAction.CopyMessageLink)
+                    onDismiss()
+                },
+            )
+
+            ContextMenuItem(
+                icon = Icons.Outlined.Code,
+                label = "Copy nevent",
+                onClick = {
+                    onAction(MessageContextAction.CopyNevent)
+                    onDismiss()
+                },
+            )
+
+            ContextMenuItem(
+                icon = Icons.Outlined.Code,
+                label = "Copy event JSON",
+                onClick = {
+                    onAction(MessageContextAction.CopyEventJson)
+                    onDismiss()
+                },
+            )
+
             if (isAuthor) {
                 ContextMenuDivider()
 

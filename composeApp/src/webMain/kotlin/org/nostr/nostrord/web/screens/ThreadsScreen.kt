@@ -7,9 +7,13 @@ import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.network.toEventJson
+import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.navigation.GroupRoute
+import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
+import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadTitle
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.Result
@@ -463,6 +467,19 @@ val ThreadsScreen =
                     div { className = ClassName("ctx-divider") }
                     ctxItem(Ic.ContentCopy, "Copy text") {
                         copyToClipboard(m.msg.content)
+                        setCtxMenu(null)
+                    }
+                    ctxItem(Ic.Link, "Copy event link") {
+                        // A reply links to its thread page too (the root id from the E tag).
+                        copyToClipboard(threadShareLink(route.relayUrl, route.groupId, m.msg.threadRootIdTag() ?: m.msg.id))
+                        setCtxMenu(null)
+                    }
+                    ctxItem(Ic.Code, "Copy nevent") {
+                        copyToClipboard(Nip19.encodeNevent(m.msg.id, relays = listOf(route.relayUrl), authorHex = m.msg.pubkey, kind = m.msg.kind))
+                        setCtxMenu(null)
+                    }
+                    ctxItem(Ic.Code, "Copy event JSON") {
+                        copyToClipboard(m.msg.toEventJson())
                         setCtxMenu(null)
                     }
                     if (myPubkey != null && myPubkey == m.msg.pubkey) {

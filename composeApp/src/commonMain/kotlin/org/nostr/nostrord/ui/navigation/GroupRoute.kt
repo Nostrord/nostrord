@@ -46,6 +46,14 @@ data class GroupRoute(
 enum class GroupView { Chat, Threads }
 
 /**
+ * Shareable web link for a thread: https://web.nostrord.com/#/g/<relay>/<id>/threads/<rootId>.
+ * Backs "Copy event link" in the thread context menu (the chat's nostrord.com/open ?e= form
+ * scrolls the chat, which never contains a kind:11/1111 event).
+ */
+fun threadShareLink(relayUrl: String, groupId: String, rootId: String): String = "https://web.nostrord.com/" +
+    GroupRoute(relayUrl, groupId, view = GroupView.Threads, threadRootId = rootId).toHash()
+
+/**
  * The value to persist in the last-route slot ([SecureStorage.saveLastRoute]) for [route].
  * Only groups and the home tabs are tracked for restore: a group persists its base hash
  * (no deep-link target / invite / thread pane), and the home tabs persist their hash (empty
