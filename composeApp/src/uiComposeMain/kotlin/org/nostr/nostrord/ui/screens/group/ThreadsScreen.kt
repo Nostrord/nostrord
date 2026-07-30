@@ -121,6 +121,7 @@ fun ThreadsScreen(
     val reactions by vm.reactions.collectAsState()
     val pendingReactions by vm.pendingReactions.collectAsState()
     val reactionError by vm.reactionError.collectAsState()
+    val deleteError by vm.deleteError.collectAsState()
     val myPubkey = remember { vm.getPublicKey() }
 
     // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
@@ -408,6 +409,19 @@ fun ThreadsScreen(
                 )
             }
         }
+    }
+
+    // Relay rejected the kind:5/9005 delete - show the reason instead of silently swallowing
+    // (chat parity: "Could Not Delete Message" + the relay's OK message).
+    deleteError?.let { error ->
+        ConfirmDialog(
+            title = "Could Not Delete Message",
+            message = error,
+            confirmLabel = "OK",
+            cancelLabel = null,
+            onConfirm = { vm.clearDeleteError() },
+            onDismiss = { vm.clearDeleteError() },
+        )
     }
 
     // Reaction error dialog (relay rejected the kind:7), same classification as chat.

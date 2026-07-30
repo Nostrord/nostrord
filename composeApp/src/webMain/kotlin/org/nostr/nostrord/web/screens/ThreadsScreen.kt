@@ -29,6 +29,7 @@ import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.Portal
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
+import org.nostr.nostrord.web.components.confirmDialog
 import org.nostr.nostrord.web.components.copyToClipboard
 import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.messageSendStatus
@@ -108,6 +109,7 @@ val ThreadsScreen =
         val reactions = useStateFlow(vm.reactions)
         val pendingReactions = useStateFlow(vm.pendingReactions)
         val reactionError = useStateFlow(vm.reactionError)
+        val deleteError = useStateFlow(vm.deleteError)
         val myPubkey = vm.getPublicKey()
 
         // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
@@ -134,6 +136,9 @@ val ThreadsScreen =
 
         // Message being answered by the composer (context-menu Reply); null posts top-level.
         val (replyingTo, setReplyingTo) = useState<NostrGroupClient.NostrMessage?> { null }
+
+        // Message pending delete confirmation (the root or any reply; header or menu).
+        val (deleteTarget, setDeleteTarget) = useState<NostrGroupClient.NostrMessage?> { null }
 
         // Deep-link target (?e=): scroll to and flash the message once the thread loads.
         val (highlightId, setHighlightId) = useState<String?> { null }
@@ -228,12 +233,7 @@ val ThreadsScreen =
                         button {
                             className = ClassName("icon-btn")
                             title = "Delete thread"
-                            onClick = {
-                                if (window.confirm("Delete this thread? This cannot be undone.")) {
-                                    vm.deleteThread(ownRoot.id)
-                                    props.onNavigate(route.copy(threadRootId = null))
-                                }
-                            }
+                            onClick = { setDeleteTarget(ownRoot) }
                             icon(Ic.Delete)
                         }
                     }
@@ -551,12 +551,7 @@ val ThreadsScreen =
                         div { className = ClassName("ctx-divider") }
                         ctxItem(Ic.Delete, "Delete message", danger = true) {
                             setCtxMenu(null)
-                            val isRoot = m.msg.id == route.threadRootId
-                            val prompt = if (isRoot) "Delete this thread? This cannot be undone." else "Delete this message? This cannot be undone."
-                            if (window.confirm(prompt)) {
-                                vm.deleteThread(m.msg.id)
-                                if (isRoot) props.onNavigate(route.copy(threadRootId = null))
-                            }
+                            setDeleteTarget(m.msg)
                         }
                     }
                 }
@@ -576,6 +571,27 @@ val ThreadsScreen =
                         }
                     }
                 }
+            }
+            // Delete confirm modal (chat parity: destructive confirm, no window.confirm).
+            deleteTarget?.let { target ->
+                val isRoot = target.id == route.threadRootId
+                confirmDialog(
+                    title = if (isRoot) "Delete Thread" else "Delete Message",
+                    body = "Are you sure you want to delete this ${if (isRoot) "thread" else "message"}? This action cannot be undone.",
+                    confirmLabel = "Delete",
+                    danger = true,
+                    onCancel = { setDeleteTarget(null) },
+                    onConfirm = {
+                        setDeleteTarget(null)
+                        // A relay rejection surfaces via vm.deleteError below.
+                        vm.deleteThread(target.id)
+                        if (isRoot) props.onNavigate(route.copy(threadRootId = null))
+                    },
+                )
+            }
+            // Relay rejected the kind:5/9005 - show the reason (chat parity).
+            deleteError?.let { err ->
+                deleteMessageErrorDialog(err) { vm.clearDeleteError() }
             }
             reactionError?.let { err ->
                 reactionErrorDialog(
