@@ -429,12 +429,22 @@ fun MessageContent(
                             Spacer(modifier = Modifier.height(8.dp))
                             val apostrophe = firstPart.url.indexOf('\'')
                             if (apostrophe > 0) {
-                                // NIP-29 group address: relay'groupId
-                                GroupLinkCard(
-                                    groupId = firstPart.url.substring(apostrophe + 1),
-                                    relayUrl = firstPart.url.substring(0, apostrophe),
-                                    onNavigateToGroup = onNavigateToGroup,
-                                )
+                                // NIP-29 group address relay'groupId: the full card only when the
+                                // message IS the link; mixed with text it renders as the compact
+                                // chip (web parity).
+                                if (content.trim() == firstPart.url) {
+                                    GroupLinkCard(
+                                        groupId = firstPart.url.substring(apostrophe + 1),
+                                        relayUrl = firstPart.url.substring(0, apostrophe),
+                                        onNavigateToGroup = onNavigateToGroup,
+                                    )
+                                } else {
+                                    GroupMentionChip(
+                                        groupId = firstPart.url.substring(apostrophe + 1),
+                                        relayUrl = firstPart.url.substring(0, apostrophe),
+                                        onNavigateToGroup = onNavigateToGroup,
+                                    )
+                                }
                             } else {
                                 RelayContent(
                                     url = firstPart.url,
@@ -2654,6 +2664,62 @@ private fun GroupLinkCard(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Compact chip for a group reference mixed with running text (group avatar + name); the full
+ * [GroupLinkCard] is reserved for a message that is only the group link. Mirrors the web
+ * `.msg-mention-chip` rendering of inline group refs.
+ */
+@Composable
+private fun GroupMentionChip(
+    groupId: String,
+    relayUrl: String?,
+    onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
+) {
+    val repo = AppModule.nostrRepository
+    val groups by repo.groups.collectAsState()
+    val groupsByRelay by repo.groupsByRelay.collectAsState()
+    val groupMeta =
+        groups.find { it.id == groupId }
+            ?: groupsByRelay.values.flatten().find { it.id == groupId }
+
+    LaunchedEffect(groupId, relayUrl) {
+        if (relayUrl != null && groupMeta?.name == null) {
+            repo.fetchGroupPreview(groupId, relayUrl)
+        }
+    }
+
+    val displayName = groupMeta?.name?.takeIf { it.isNotBlank() } ?: groupId
+    DisableSelection {
+        Row(
+            modifier =
+            Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(NostrordColors.PrimarySubtle)
+                .clickable { onNavigateToGroup(groupId, groupMeta?.name, relayUrl, null) }
+                .pointerHoverIcon(PointerIcon.Hand)
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            GroupHeaderIcon(
+                pictureUrl = groupMeta?.picture,
+                groupId = groupId,
+                displayName = displayName,
+                size = 16.dp,
+                cornerRadius = 4.dp,
+            )
+            Text(
+                text = displayName,
+                color = NostrordColors.Primary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
         }
     }
 }
