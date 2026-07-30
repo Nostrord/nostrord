@@ -188,8 +188,11 @@ class ThreadsViewModelTest {
             Result.Success(Unit)
         }
         val vm = ThreadsViewModel(fake, "g1")
-        vm.createThread("My title", "body", shareToChat = true)
+        var openedRootId: String? = null
+        vm.createThread("My title", "body", shareToChat = true) { openedRootId = it }
         testDispatcher.scheduler.advanceUntilIdle()
+        // The screen opens the new thread via onCreated.
+        assertEquals("ab".repeat(32), openedRootId)
         val text = announced ?: error("no chat announcement sent")
         assertTrue(text.startsWith("Started a thread: My title\nnostr:nevent1"), text)
 

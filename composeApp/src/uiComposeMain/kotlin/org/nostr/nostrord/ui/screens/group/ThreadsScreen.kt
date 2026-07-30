@@ -422,7 +422,13 @@ fun ThreadsScreen(
     if (showCompose) {
         CreateThreadDialog(
             onDismiss = { showCompose = false },
-            onCreate = { title, content, shareToChat -> vm.createThread(title, content, shareToChat) },
+            onCreate = { title, content, shareToChat ->
+                // Open the new thread right away (Discord parity; the optimistic root is
+                // already in the store, so the detail renders instantly).
+                vm.createThread(title, content, shareToChat) { rootId ->
+                    onNavigate(route.copy(threadRootId = rootId))
+                }
+            },
         )
     }
 
