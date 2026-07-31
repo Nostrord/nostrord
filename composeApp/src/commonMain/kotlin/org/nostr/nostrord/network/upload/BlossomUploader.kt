@@ -32,31 +32,22 @@ object BlossomUploader {
     private val PREFLIGHT_UNSUPPORTED = setOf(404, 405, 501)
 
     /**
-     * Ask [servers] in order to take a copy of an already-uploaded blob (BUD-04). Best
-     * effort: a server that refuses or is down is skipped, since the blob already lives at
-     * the primary. Returns the servers that accepted it.
+     * One kind:24242 token, bound to a blob hash. It carries no `server` tag, so the same
+     * signature authorizes the upload AND every mirror: the user is asked to sign once per
+     * file, not once per server.
      */
-    suspend fun mirror(
-        servers: List<String>,
-        blobUrl: String,
-        sha256Hex: String,
-        buildAuthHeader: BlossomAuthBuilder,
-    ): List<String> {
-        if (servers.isEmpty()) return emptyList()
-        val authHeader = runCatching { buildAuthHeader(sha256Hex, "upload") }.getOrNull() ?: return emptyList()
-        return servers.filter { ktorMirrorBlob(it, blobUrl, authHeader) }
-    }
+    data class Auth(
+        val header: String,
+        val sha256Hex: String,
+    )
 
-    suspend fun upload(
-        serverUrl: String,
+    /** Sign the upload token for [bytes]. One signer round-trip per file. */
+    suspend fun createUploadAuth(
         bytes: ByteArray,
-        filename: String,
-        mimeType: String,
         buildAuthHeader: BlossomAuthBuilder,
-    ): Result<UploadResult> {
+    ): Result<Auth> {
         val sha256Hex = Crypto.sha256(bytes).toHexString()
-
-        val authHeader =
+        val header =
             try {
                 buildAuthHeader(sha256Hex, "upload")
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -66,13 +57,33 @@ object BlossomUploader {
                 // the actual cause; "not authenticated" would be false and misleading.
                 return Result.Error(AppError.Unknown("Upload authorization failed: ${e.message}", e))
             } ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        return Result.Success(Auth(header, sha256Hex))
+    }
 
+    /**
+     * Ask [servers] to take a copy of an already-uploaded blob (BUD-04). Best effort: a
+     * server that refuses or is down is skipped, since the blob already lives at the
+     * primary. Returns the servers that accepted it.
+     */
+    suspend fun mirror(
+        servers: List<String>,
+        blobUrl: String,
+        auth: Auth,
+    ): List<String> = servers.filter { ktorMirrorBlob(it, blobUrl, auth.header) }
+
+    suspend fun upload(
+        serverUrl: String,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        auth: Auth,
+    ): Result<UploadResult> {
         // Blob-ref uploads can't be retried — the JS cache entry is consumed on first use
         val maxAttempts = if (isBlobRef(filename)) 1 else 3
         var lastException: Throwable? = null
         repeat(maxAttempts) { attempt ->
             try {
-                return doUpload(serverUrl, bytes, mimeType, authHeader, sha256Hex)
+                return doUpload(serverUrl, bytes, mimeType, auth.header, auth.sha256Hex)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {

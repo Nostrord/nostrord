@@ -4,7 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -12,17 +11,15 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import org.nostr.nostrord.ui.theme.NostrordColors
+import org.nostr.nostrord.ui.components.loading.shimmerEffect
 import org.nostr.nostrord.utils.decodeDataImageUri
 import org.nostr.nostrord.utils.getImageUrl
 import org.nostr.nostrord.utils.normalizeAnimatedUrl
@@ -176,14 +173,9 @@ actual fun AnimatedImage(
 
     when {
         frames == null -> {
-            // Loading
-            Box(modifier = baseModifier, contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(32.dp),
-                    color = NostrordColors.Primary,
-                    strokeWidth = 3.dp,
-                )
-            }
+            // Decoding: the same shimmer skeleton the other image paths use, so a GIF and a
+            // still in the same conversation don't load with two different affordances.
+            Box(modifier = baseModifier.shimmerEffect())
         }
         frames!!.isEmpty() -> {
             // Error — notify parent so it can show a text link fallback

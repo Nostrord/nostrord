@@ -31,6 +31,10 @@ object MediaUploader {
      * copy via BUD-04 mirror. Trying the whole list matters more than it looks: one host
      * being down or full would otherwise fail an upload the user could have completed.
      * Mirroring is best effort and never turns a successful upload into an error.
+     *
+     * The kind:24242 token is signed once here and reused for every server and every
+     * mirror. It is bound to the blob hash, not to a host, so re-signing per server would
+     * only mean extra signer prompts (or bunker round-trips) for the same permission.
      */
     private suspend fun uploadToBlossomList(
         servers: List<String>,
@@ -43,24 +47,22 @@ object MediaUploader {
             return Result.Error(AppError.Unknown("No Blossom server configured. Add one in Settings → Media."))
         }
 
+        val auth =
+            when (val signed = BlossomUploader.createUploadAuth(bytes, buildAuthHeader)) {
+                is Result.Success -> signed.data
+                is Result.Error -> return Result.Error(signed.error)
+            }
+
         var lastError: AppError? = null
         servers.forEachIndexed { index, server ->
-            when (val result = BlossomUploader.upload(server, bytes, filename, mimeType, buildAuthHeader)) {
+            when (val result = BlossomUploader.upload(server, bytes, filename, mimeType, auth)) {
                 is Result.Success -> {
                     val others = servers.filterIndexed { i, _ -> i != index }
-                    val sha256 = result.data.sha256
-                    if (others.isNotEmpty() && sha256 != null) {
-                        BlossomUploader.mirror(others, result.data.url, sha256, buildAuthHeader)
-                    }
+                    if (others.isNotEmpty()) BlossomUploader.mirror(others, result.data.url, auth)
                     return result
                 }
 
-                is Result.Error -> {
-                    // A signer failure is the user's session, not this host's fault; trying
-                    // the next server would just re-prompt for a signature that won't come.
-                    if (result.error is AppError.Auth) return result
-                    lastError = result.error
-                }
+                is Result.Error -> lastError = result.error
             }
         }
         return Result.Error(lastError ?: AppError.Unknown("Upload failed: every Blossom server refused the file."))

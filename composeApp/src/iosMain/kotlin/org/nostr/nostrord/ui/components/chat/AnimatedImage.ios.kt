@@ -14,6 +14,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import org.nostr.nostrord.ui.components.loading.shimmerEffect
 import org.nostr.nostrord.utils.decodeDataImageUri
 import org.nostr.nostrord.utils.getImageUrl
 
@@ -36,6 +37,9 @@ actual fun AnimatedImage(
 ) {
     val context = LocalPlatformContext.current
     var loadError by remember(url) { mutableStateOf(false) }
+    // Shimmers over the reserved slot until the first frame decodes, matching StaticImage
+    // and the web, where GIFs go through the same skeleton as any other image.
+    var loading by remember(url) { mutableStateOf(true) }
     // Inline base64 animation (gif/webp): decode to bytes for Coil.
     val dataBytes = remember(url) { decodeDataImageUri(url) }
 
@@ -52,11 +56,18 @@ actual fun AnimatedImage(
             .build(),
         contentDescription = "Animated GIF",
         contentScale = contentScale,
-        modifier = modifier.clickable(onClick = onClick),
+        modifier = modifier
+            .then(if (loading) Modifier.shimmerEffect() else Modifier)
+            .clickable(onClick = onClick),
         onState = { state ->
-            if (state is AsyncImagePainter.State.Error) {
-                loadError = true
-                onError()
+            when (state) {
+                is AsyncImagePainter.State.Success -> loading = false
+                is AsyncImagePainter.State.Error -> {
+                    loading = false
+                    loadError = true
+                    onError()
+                }
+                else -> {}
             }
         },
     )
