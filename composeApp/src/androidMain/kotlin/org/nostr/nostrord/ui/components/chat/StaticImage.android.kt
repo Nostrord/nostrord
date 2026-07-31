@@ -2,7 +2,6 @@ package org.nostr.nostrord.ui.components.chat
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,9 +60,7 @@ actual fun StaticImage(
             .build(),
         contentDescription = "Image",
         contentScale = contentScale,
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(modifier)
+        modifier = modifier
             .then(if (loading) Modifier.shimmerEffect() else Modifier)
             .chatImageBackdrop(backdrop)
             .clickable(onClick = onClick),
