@@ -65,12 +65,13 @@ import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.upload.FileTooLargeException
 import org.nostr.nostrord.network.upload.MAX_UPLOAD_BYTES
-import org.nostr.nostrord.network.upload.NostrBuildUploader
 import org.nostr.nostrord.network.upload.PasteMediaEffect
 import org.nostr.nostrord.network.upload.ShareMediaEffect
 import org.nostr.nostrord.network.upload.UnsupportedFileTypeException
 import org.nostr.nostrord.network.upload.UploadResult
+import org.nostr.nostrord.network.upload.mimeTypeForFilename
 import org.nostr.nostrord.network.upload.rememberClipboardImageReader
+import org.nostr.nostrord.network.upload.uploadMedia
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.components.upload.MessageUploadButton
@@ -199,13 +200,8 @@ fun MessageInput(
             return
         }
         try {
-            val mime = NostrBuildUploader.mimeTypeForFilename(filename)
-            val result = NostrBuildUploader.upload(
-                bytes,
-                filename,
-                mime,
-                AppModule.nostrRepository::buildNip98AuthHeader,
-            )
+            val mime = mimeTypeForFilename(filename)
+            val result = uploadMedia(bytes, filename, mime)
             when (result) {
                 is Result.Success -> {
                     val url = result.data.url

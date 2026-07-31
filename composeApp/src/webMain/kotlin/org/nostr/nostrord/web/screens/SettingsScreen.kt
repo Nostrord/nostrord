@@ -5,6 +5,7 @@ import org.nostr.nostrord.auth.logoutConfirmBody
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
+import org.nostr.nostrord.network.upload.MediaServerProtocol
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.notifications.NotificationPermission
 import org.nostr.nostrord.notifications.playNotificationSound
@@ -973,6 +974,115 @@ private val MediaPanel =
                 "Automatically load images and videos in chat. When off, each one shows a tap-to-load placeholder so you choose what to fetch.",
                 autoLoad,
             ) { media.setAutoLoadMedia(!autoLoad) }
+        }
+        MediaServerSection()
+    }
+
+/**
+ * Upload destination picker. Mirrors the native MediaServerPanelContent and shares
+ * MediaServerSettings, so the list, validation and persistence live in commonMain.
+ */
+private val MediaServerSection =
+    FC<Props> {
+        val settings = AppModule.mediaServerSettings
+        val servers = useStateFlow(settings.servers)
+        val selected = useStateFlow(settings.selected)
+        val (newUrl, setNewUrl) = useState { "" }
+        val (addError, setAddError) = useState<String?> { null }
+
+        fun addServer() {
+            when (val result = settings.addCustomServer(newUrl)) {
+                is Result.Success -> {
+                    settings.select(result.data)
+                    setNewUrl("")
+                    setAddError(null)
+                }
+
+                is Result.Error -> setAddError(result.error.message)
+            }
+        }
+
+        div {
+            className = ClassName("settings-card")
+            div {
+                className = ClassName("settings-section-head")
+                +"UPLOAD SERVER"
+            }
+            div {
+                className = ClassName("settings-info-text")
+                +(
+                    "Where images, video and audio you send are stored. Blossom servers address " +
+                        "files by their hash, so the same file can be mirrored anywhere."
+                    )
+            }
+            servers.forEach { server ->
+                div {
+                    key = server.url
+                    className = ClassName("media-server-row" + if (server.url == selected.url) " selected" else "")
+                    onClick = { settings.select(server) }
+                    span { className = ClassName("media-server-radio") }
+                    span {
+                        className = ClassName("media-server-info")
+                        span {
+                            className = ClassName("media-server-name")
+                            +server.name
+                        }
+                        span {
+                            className = ClassName("media-server-url")
+                            +(
+                                server.url.removePrefix("https://") +
+                                    if (server.protocol == MediaServerProtocol.Blossom) "  ·  Blossom" else ""
+                                )
+                        }
+                    }
+                    if (!server.builtIn) {
+                        button {
+                            className = ClassName("relay-row-remove")
+                            onClick = { event ->
+                                event.stopPropagation()
+                                settings.removeCustomServer(server)
+                            }
+                            icon(Ic.Close)
+                        }
+                    }
+                }
+            }
+
+            div {
+                className = ClassName("settings-section-head relay-add-head")
+                +"ADD BLOSSOM SERVER"
+            }
+            input {
+                className = ClassName("modal-input")
+                placeholder = "blossom.example.com"
+                value = newUrl
+                onChange = { event ->
+                    setNewUrl(event.currentTarget.value)
+                    setAddError(null)
+                }
+                onKeyDown = { event ->
+                    if (event.key == "Enter") {
+                        event.preventDefault()
+                        addServer()
+                    }
+                }
+            }
+            addError?.let {
+                div {
+                    className = ClassName("relay-warn")
+                    +it
+                }
+            }
+            div {
+                className = ClassName("relay-add-row")
+                button {
+                    className = ClassName("relay-add-btn")
+                    disabled = newUrl.isBlank()
+                    onClick = { addServer() }
+                    icon(Ic.Add)
+                    +"Add"
+                }
+            }
         }
     }
 

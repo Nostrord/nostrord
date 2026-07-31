@@ -1269,6 +1269,8 @@ private fun MediaPanelContent(
                 onCheckedChange = onToggleAutoLoad,
             )
         }
+
+        MediaServerPanelContent()
     }
 }
 

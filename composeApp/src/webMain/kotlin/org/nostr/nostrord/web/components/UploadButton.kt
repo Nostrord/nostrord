@@ -4,12 +4,12 @@ import kotlinx.coroutines.awaitCancellation
 import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Int8Array
 import org.khronos.webgl.get
-import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.upload.MAX_UPLOAD_BYTES
-import org.nostr.nostrord.network.upload.NostrBuildUploader
 import org.nostr.nostrord.network.upload.SUPPORTED_FORMATS_MESSAGE
 import org.nostr.nostrord.network.upload.UploadResult
 import org.nostr.nostrord.network.upload.isSupportedUploadMime
+import org.nostr.nostrord.network.upload.mimeTypeForFilename
+import org.nostr.nostrord.network.upload.uploadMedia
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.web.bridge.launchApp
@@ -159,7 +159,7 @@ suspend fun uploadBlob(file: dynamic, imagesOnly: Boolean = false): Result<Uploa
     }
     // Prefer the extension-derived mime (parity with native); fall back to the
     // browser-provided type for pasted blobs that arrive without a real filename.
-    val byName = NostrBuildUploader.mimeTypeForFilename(name)
+    val byName = mimeTypeForFilename(name)
     val mime =
         if (byName != "application/octet-stream") {
             byName
@@ -180,12 +180,7 @@ suspend fun uploadBlob(file: dynamic, imagesOnly: Boolean = false): Result<Uploa
     }
     val bytes = readFileBytes(file)
     if (bytes.isEmpty()) return Result.Error(AppError.Unknown("Could not read the selected file."))
-    return NostrBuildUploader.upload(
-        bytes,
-        name,
-        mime,
-        AppModule.nostrRepository::buildNip98AuthHeader,
-    )
+    return uploadMedia(bytes, name, mime)
 }
 
 /** Read a picked file's bytes via the Blob arrayBuffer() promise. */

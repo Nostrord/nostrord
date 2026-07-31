@@ -52,7 +52,7 @@ actual class ClipboardImageReader {
                         clipboard.getData(DataFlavor.javaFileListFlavor) as? List<java.io.File>
                     }.getOrNull()
                 val file = files?.firstOrNull() ?: return@withContext null
-                val mime = NostrBuildUploader.mimeTypeForFilename(file.name)
+                val mime = mimeTypeForFilename(file.name)
                 if (!isSupportedMediaMime(mime)) throw UnsupportedFileTypeException(file.extension)
                 if (file.length() > MAX_UPLOAD_BYTES) throw FileTooLargeException()
                 file.readBytes() to file.name

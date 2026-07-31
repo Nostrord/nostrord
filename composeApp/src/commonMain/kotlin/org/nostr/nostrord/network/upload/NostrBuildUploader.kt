@@ -6,8 +6,6 @@ import org.nostr.nostrord.network.createHttpClient
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 
-private const val UPLOAD_URL = "https://nostr.build/api/v2/upload/files"
-
 const val MAX_UPLOAD_BYTES: Long = 20L * 1024 * 1024
 
 const val SUPPORTED_FORMATS_MESSAGE =
@@ -81,22 +79,26 @@ data class UploadResult(
 object NostrBuildUploader {
     internal val client by lazy { createHttpClient() }
 
+    fun uploadUrl(serverUrl: String) = serverUrl.trimEnd('/') + "/api/v2/upload/files"
+
     /**
-     * Upload a file to nostr.build with NIP-98 auth.
+     * Upload a file to a nostr.build-compatible host with NIP-98 auth.
      * Returns [UploadResult] with URL and NIP-68 metadata (dimensions, hash, etc.).
      * [buildAuthHeader] receives (url, method) and must return "Nostr <base64>" or null.
      */
     suspend fun upload(
+        serverUrl: String,
         bytes: ByteArray,
         filename: String,
         mimeType: String,
-        buildAuthHeader: suspend (url: String, method: String) -> String?,
+        buildAuthHeader: Nip98AuthBuilder,
     ): Result<UploadResult> {
         val isCached = isBlobRef(filename)
+        val uploadUrl = uploadUrl(serverUrl)
 
         val authHeader =
             try {
-                buildAuthHeader(UPLOAD_URL, "POST")
+                buildAuthHeader(uploadUrl, "POST")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -110,7 +112,9 @@ object NostrBuildUploader {
         var lastException: Throwable? = null
         repeat(maxAttempts) { attempt ->
             try {
-                return doUpload(bytes, filename, mimeType, authHeader)
+                return doUpload(uploadUrl, bytes, filename, mimeType, authHeader)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 lastException = e
                 if (attempt < maxAttempts - 1) delay(500)
@@ -122,12 +126,13 @@ object NostrBuildUploader {
     // Throws on IO/connection errors so the caller can retry.
     // Returns Result.Error for server-side errors (no retry needed).
     private suspend fun doUpload(
+        uploadUrl: String,
         bytes: ByteArray,
         filename: String,
         mimeType: String,
         authHeader: String,
     ): Result<UploadResult> {
-        val (statusCode, text) = executeUpload(UPLOAD_URL, bytes, filename, mimeType, authHeader)
+        val (statusCode, text) = executeUpload(uploadUrl, bytes, filename, mimeType, authHeader)
 
         if (statusCode !in 200..299) {
             val msg =
@@ -197,27 +202,5 @@ object NostrBuildUploader {
                     ?: entry["thumb"]?.jsonPrimitive?.contentOrNull,
             ),
         )
-    }
-
-    fun mimeTypeForFilename(filename: String): String {
-        if (isBlobRef(filename)) return filename.split("|").getOrNull(1) ?: "application/octet-stream"
-        return when (filename.substringAfterLast('.').lowercase()) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            "gif" -> "image/gif"
-            "webp" -> "image/webp"
-            "mp4" -> "video/mp4"
-            "mov" -> "video/quicktime"
-            "webm" -> "video/webm"
-            "mp3" -> "audio/mpeg"
-            "ogg" -> "audio/ogg"
-            "wav" -> "audio/wav"
-            "flac" -> "audio/flac"
-            "m4a" -> "audio/mp4"
-            "aac" -> "audio/aac"
-            "opus" -> "audio/opus"
-            "avif" -> "image/avif"
-            else -> "application/octet-stream"
-        }
     }
 }
