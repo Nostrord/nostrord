@@ -36,6 +36,9 @@ val ChatImage =
         // render drops crossOrigin so the image still shows. We then skip sampling (the plain
         // image would taint the canvas anyway).
         val (corsBlocked, setCorsBlocked) = useState { false }
+        // Drives the shimmer skeleton: the reserved slot animates until the bitmap paints,
+        // so a slow image reads as loading instead of as an empty box that pops.
+        val (loaded, setLoaded) = useState { false }
         // Settings → Media: when auto-load is off we show a "Tap to load" placeholder
         // and fetch nothing until the user reveals this image. data: URIs are already
         // embedded in the event (no network), so they're never gated.
@@ -47,7 +50,9 @@ val ChatImage =
         }
 
         img {
-            className = ClassName("msg-image" + (backdrop?.let { " $it" } ?: ""))
+            className = ClassName(
+                "msg-image " + (if (loaded) "is-loaded" else "is-loading") + (backdrop?.let { " $it" } ?: ""),
+            )
             // With an imeta dim hint, reserve the exact box before load so the row keeps its
             // height (no reflow under the reader) and drop the placeholder floor that would
             // distort a small image. Without a hint, the CSS min-height floor stays and the
@@ -65,6 +70,7 @@ val ChatImage =
             alt = ""
             onClick = { ImageViewer.show(props.imageUrl, backdrop) }
             onLoad = { event ->
+                setLoaded(true)
                 if (!corsBlocked) setBackdrop(analyzeBackdrop(event.currentTarget))
                 // Re-pinning the feed on media load is handled by the list's ResizeObserver
                 // (and, for imeta media, by the reserved box), so nothing is needed here.
@@ -72,8 +78,9 @@ val ChatImage =
             }
             onError = {
                 // First failure is most likely the CORS preflight on a no-CORS host; retry
-                // without crossOrigin so the image still displays.
-                if (!corsBlocked) setCorsBlocked(true)
+                // without crossOrigin so the image still displays. The retry keeps the
+                // skeleton up; a second failure stops it so a dead URL doesn't shimmer forever.
+                if (!corsBlocked) setCorsBlocked(true) else setLoaded(true)
                 Unit
             }
         }

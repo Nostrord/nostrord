@@ -6183,6 +6183,46 @@ body {
     border-radius: 8px;
     object-fit: cover;
 }
+
+/* Skeleton for the reserved slot: it sweeps while the bitmap is still decoding, then the
+   image fades in over it. The later .on-light / .on-dark rules keep their backdrop. */
+.msg-image.is-loading {
+    background-image: linear-gradient(
+        100deg,
+        var(--color-input) 32%,
+        var(--color-surface-variant) 50%,
+        var(--color-input) 68%
+    );
+    background-size: 220% 100%;
+    animation: msg-media-shimmer 1.2s linear infinite;
+}
+.msg-image.is-loaded {
+    background: transparent;
+    animation: msg-media-fade-in 200ms ease-out;
+}
+@keyframes msg-media-shimmer {
+    from {
+        background-position: 180% 0;
+    }
+    to {
+        background-position: -80% 0;
+    }
+}
+@keyframes msg-media-fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg-image.is-loading,
+    .msg-image.is-loaded {
+        animation: none;
+    }
+}
+
 .msg-video {
     display: block;
     /* Sits inside selectable message/quote text, which otherwise bleeds the I-beam

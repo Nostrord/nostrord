@@ -1235,9 +1235,12 @@ private fun ChatImage(
                 .heightIn(max = 300.dp)
                 .aspectRatio(ratio, matchHeightConstraintsFirst = ratio < 1f)
         } else {
+            // No imeta hint: floor the slot at the web's 120dp so the loading skeleton is
+            // visible and the row doesn't grow from nothing when the bitmap resolves.
             Modifier
                 .widthIn(max = 360.dp)
                 .heightIn(max = 300.dp)
+                .defaultMinSize(minWidth = 120.dp, minHeight = 120.dp)
         }
 
     if (isAnimatedImageUrl(imageUrl)) {
