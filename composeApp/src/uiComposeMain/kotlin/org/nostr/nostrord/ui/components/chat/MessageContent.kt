@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,6 +67,7 @@ import org.nostr.nostrord.isAndroid
 import org.nostr.nostrord.isLinuxDesktop
 import org.nostr.nostrord.network.CachedEvent
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip84
 import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.components.media.AudioPlayerContent
 import org.nostr.nostrord.ui.components.media.PlatformVideoPlayer
@@ -1774,8 +1776,13 @@ private fun QuotedEvent(
     // Track if event was not found after timeout
     var eventNotFound by remember { mutableStateOf(false) }
 
-    LaunchedEffect(eventId, relayHints, author) {
+    // Bumped by the not-found card's Retry button to re-run the fetch effect: the relay the event
+    // lives on is often connected only after the card first rendered.
+    var retryTick by remember { mutableStateOf(0) }
+
+    LaunchedEffect(eventId, relayHints, author, retryTick) {
         if (!cachedEvents.containsKey(eventId)) {
+            eventNotFound = false
             AppModule.nostrRepository.requestEventById(eventId, relayHints, author)
             // Poll every 500ms up to 5s — yields the coroutine instead of blocking 5s solid
             repeat(10) {
@@ -1914,6 +1921,7 @@ private fun QuotedEvent(
                         color = NostrordColors.TextMuted,
                         style = NostrordTypography.Caption,
                     )
+                    RetryChip(onClick = { retryTick++ })
                 }
                 // Show full parsed content
                 if (kind != null) {
@@ -2109,7 +2117,120 @@ private fun QuotedEvent(
                 }
             }
             Spacer(modifier = Modifier.height(Spacing.sm))
-            QuotedEventContent(content = event.content, tags = event.tags, onMentionClick = onMentionClick)
+            // A NIP-84 highlight is comment + quoted excerpt + source, not one body of text.
+            if (Nip84.isHighlight(event.kind)) {
+                HighlightBody(
+                    highlight = remember(event.id) { Nip84.parse(event.content, event.tags) },
+                    tags = event.tags,
+                    onMentionClick = onMentionClick,
+                )
+            } else {
+                QuotedEventContent(content = event.content, tags = event.tags, onMentionClick = onMentionClick)
+            }
+        }
+    }
+}
+
+/**
+ * NIP-84 highlight body: the highlighter's comment, the excerpt as a quote block, and a link to
+ * the source it was taken from.
+ */
+@Composable
+private fun HighlightBody(
+    highlight: Nip84.Highlight,
+    tags: List<List<String>>,
+    onMentionClick: (String) -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    val copyToClipboard = rememberClipboardWriter()
+
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        highlight.comment?.let { comment ->
+            QuotedEventContent(content = comment, tags = tags, onMentionClick = onMentionClick)
+        }
+        if (highlight.excerpt.isNotEmpty()) {
+            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                Box(
+                    modifier =
+                    Modifier
+                        .width(3.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(NostrordShapes.radiusSmall))
+                        .background(NostrordColors.Primary),
+                )
+                Spacer(modifier = Modifier.width(Spacing.sm))
+                Text(
+                    text = highlight.excerpt,
+                    color = NostrordColors.TextPrimary,
+                    style = NostrordTypography.MessageBody,
+                    fontStyle = FontStyle.Italic,
+                )
+            }
+        }
+        val label = highlight.sourceLabel
+        val url = highlight.sourceUrl
+        if (label != null && url != null) {
+            DisableSelection {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "From ",
+                        color = NostrordColors.TextMuted,
+                        style = NostrordTypography.Caption,
+                    )
+                    Text(
+                        text = label,
+                        color = NostrordColors.Primary,
+                        style = NostrordTypography.Caption,
+                        textDecoration = TextDecoration.Underline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier =
+                        Modifier
+                            .clickable {
+                                // Linux desktop can't raise the browser reliably, same as the card's open action.
+                                if (isLinuxDesktop) {
+                                    copyToClipboard(url)
+                                    AppModule.postSystemMessage("Link copied")
+                                } else {
+                                    try {
+                                        uriHandler.openUri(url)
+                                    } catch (_: Exception) {
+                                    }
+                                }
+                            }
+                            .pointerHoverIcon(PointerIcon.Hand),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Retry affordance on a reference card whose event never resolved. */
+@Composable
+private fun RetryChip(onClick: () -> Unit) {
+    DisableSelection {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
+            modifier =
+            Modifier
+                .clip(RoundedCornerShape(NostrordShapes.radiusSmall))
+                .clickable { onClick() }
+                .padding(horizontal = Spacing.xs, vertical = Spacing.xxs)
+                .pointerHoverIcon(PointerIcon.Hand),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Refresh,
+                contentDescription = "Retry",
+                tint = NostrordColors.Primary,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = "Retry",
+                color = NostrordColors.Primary,
+                style = NostrordTypography.Caption,
+            )
         }
     }
 }
@@ -2863,9 +2984,13 @@ private fun AddressableEvent(
     // Track if event was not found after timeout
     var eventNotFound by remember { mutableStateOf(false) }
 
+    // Bumped by the not-found card's Retry button to re-run the fetch effect.
+    var retryTick by remember { mutableStateOf(0) }
+
     // Request the addressable event
-    LaunchedEffect(addressKey, relayHints) {
+    LaunchedEffect(addressKey, relayHints, retryTick) {
         if (!cachedEvents.containsKey(addressKey)) {
+            eventNotFound = false
             AppModule.nostrRepository.requestAddressableEvent(
                 kind = kind,
                 pubkey = pubkey,
@@ -2927,6 +3052,7 @@ private fun AddressableEvent(
                         color = NostrordColors.TextMuted,
                         style = NostrordTypography.Caption,
                     )
+                    RetryChip(onClick = { retryTick++ })
                 }
                 // Show full parsed naddr content
                 Text(

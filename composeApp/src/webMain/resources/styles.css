@@ -6400,6 +6400,49 @@ body {
 .quoted-event-notfound-label {
     flex: 1;
 }
+/* Retry on a reference card whose event never resolved: its relay is often connected only
+   after the card first rendered. */
+.quoted-event-retry {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: none;
+    background: transparent;
+    color: var(--color-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.quoted-event-retry:hover {
+    background: var(--color-surface-variant);
+}
+.quoted-event-retry svg {
+    width: 14px;
+    height: 14px;
+}
+/* NIP-84 highlight (kind 9802): the excerpt reads as a quote block under the highlighter's own
+   comment, attributed to the page it was taken from. */
+.highlight-excerpt {
+    margin: 6px 0;
+    padding-left: 10px;
+    border-left: 3px solid var(--color-primary);
+    color: var(--color-text-primary);
+    font-style: italic;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.highlight-source {
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+.highlight-source a {
+    color: var(--color-primary);
+    overflow-wrap: anywhere;
+}
 /* Kebab menu on the not-found card: a single "Copy Parsed JSON" action (the event JSON is
    unavailable, so the parsed reference is what's copyable). Mirrors the native card's menu. */
 .quoted-event-menu {
