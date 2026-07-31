@@ -2,6 +2,7 @@ package org.nostr.nostrord.web.components
 
 import js.objects.unsafeJso
 import kotlinx.browser.document
+import org.nostr.nostrord.ui.media.reservedWidthPx
 import react.FC
 import react.Props
 import react.dom.html.ReactHTML.img
@@ -55,11 +56,16 @@ val ChatImage =
             )
             // With an imeta dim hint, reserve the exact box before load so the row keeps its
             // height (no reflow under the reader) and drop the placeholder floor that would
-            // distort a small image. Without a hint, the CSS min-height floor stays and the
-            // list's ResizeObserver re-pins as the image grows.
+            // distort a small image. The width must be explicit: an <img> with alt="" has no
+            // intrinsic size until it decodes, and `aspect-ratio` alone then resolves against
+            // a zero width, collapsing the slot to 0x0 (nothing to reserve, nothing to
+            // shimmer). Without a hint, the CSS min-height floor stays and the list's
+            // ResizeObserver re-pins as the image grows.
             props.dimensions?.let { (w, h) ->
+                val displayWidth = reservedWidthPx(w, h)
                 style = unsafeJso {
                     asDynamic().aspectRatio = "$w / $h"
+                    asDynamic().width = "${displayWidth}px"
                     asDynamic().minHeight = "auto"
                     asDynamic().minWidth = "auto"
                 }
