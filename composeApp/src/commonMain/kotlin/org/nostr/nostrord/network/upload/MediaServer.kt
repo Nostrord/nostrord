@@ -1,43 +1,42 @@
 package org.nostr.nostrord.network.upload
 
-import kotlinx.serialization.Serializable
+/**
+ * Where uploads go, picked in Settings → Media.
+ *
+ * [Blossom] is a list rather than a single host: the blob is uploaded to the first server
+ * that accepts it and mirrored to the rest, so one host going away doesn't take the media
+ * with it. [Nip96] is a single host that owns the file.
+ */
+sealed interface MediaUploadService {
+    data object Blossom : MediaUploadService
 
-/** Upload API a media server speaks. */
-enum class MediaServerProtocol {
-    /** nostr.build's v2 multipart API, NIP-98 auth. */
-    NostrBuild,
-
-    /** Blossom (BUD-02): `PUT /upload` with a raw body, kind:24242 auth. */
-    Blossom,
+    data class Nip96(val url: String) : MediaUploadService
 }
 
-/**
- * A media host the user can upload to. [url] is the origin (no trailing slash) and is
- * also the identity of the entry — selection and custom-server dedup key off it.
- */
-@Serializable
-data class MediaServer(
-    val url: String,
-    val name: String,
-    val protocol: MediaServerProtocol,
-    /** Shipped with the app: cannot be removed, and its name follows app updates. */
-    val builtIn: Boolean = false,
-)
-
-/**
- * Servers offered out of the box. nostr.build stays first so the default upload path is
- * unchanged for existing users; the rest are free Blossom hosts.
- */
-val BUILT_IN_MEDIA_SERVERS: List<MediaServer> =
+/** NIP-96 hosts offered in the picker. The first is the default for a fresh install. */
+val NIP96_SERVICES: List<String> =
     listOf(
-        MediaServer("https://nostr.build", "nostr.build", MediaServerProtocol.NostrBuild, builtIn = true),
-        MediaServer("https://blossom.band", "blossom.band", MediaServerProtocol.Blossom, builtIn = true),
-        MediaServer("https://blossom.primal.net", "Primal", MediaServerProtocol.Blossom, builtIn = true),
-        MediaServer("https://blossom.nostr.build", "nostr.build (Blossom)", MediaServerProtocol.Blossom, builtIn = true),
-        MediaServer("https://nostr.download", "nostr.download", MediaServerProtocol.Blossom, builtIn = true),
+        "https://nostr.build",
+        "https://mockingyou.com",
+        "https://nostpic.com",
+        "https://nostrcheck.me",
+        "https://nostrmedia.com",
+        "https://files.sovbit.host",
     )
 
-val DEFAULT_MEDIA_SERVER: MediaServer = BUILT_IN_MEDIA_SERVERS.first()
+val DEFAULT_NIP96_SERVICE: String = NIP96_SERVICES.first()
+
+/** Free Blossom servers offered as one-tap additions, and the list a new user starts with. */
+val RECOMMENDED_BLOSSOM_SERVERS: List<String> =
+    listOf(
+        "https://blossom.band",
+        "https://blossom.primal.net",
+        "https://nostr.media",
+        "https://blossom.nostr.build",
+        "https://nostr.download",
+    )
+
+val DEFAULT_BLOSSOM_SERVERS: List<String> = RECOMMENDED_BLOSSOM_SERVERS.take(3)
 
 /**
  * Normalize a user-typed server address to a comparable origin: adds `https://` when the
@@ -49,7 +48,7 @@ fun normalizeMediaServerUrl(input: String): String? {
     if (trimmed.isEmpty()) return null
     val withScheme =
         when {
-            trimmed.startsWith("https://", ignoreCase = true) -> "https://" + trimmed.removePrefix("https://").removePrefix("HTTPS://")
+            trimmed.startsWith("https://", ignoreCase = true) -> "https://" + trimmed.substring("https://".length)
             trimmed.startsWith("http://", ignoreCase = true) -> return null // uploads must be over TLS
             trimmed.contains("://") -> return null // ws://, ftp://, … are not media servers
             else -> "https://$trimmed"
@@ -65,5 +64,5 @@ fun normalizeMediaServerUrl(input: String): String? {
     return "https://" + authority.lowercase()
 }
 
-/** Display label for a custom server: its host, which is what the user recognizes. */
-fun mediaServerDisplayName(url: String): String = url.removePrefix("https://").substringBefore('/')
+/** Display label for a server: its host, which is what the user recognizes. */
+fun mediaServerDisplayName(url: String): String = url.removePrefix("https://").trimEnd('/').substringBefore('/')

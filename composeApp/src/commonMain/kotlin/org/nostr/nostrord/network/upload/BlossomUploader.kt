@@ -25,6 +25,28 @@ object BlossomUploader {
 
     fun uploadUrl(serverUrl: String) = serverUrl.trimEnd('/') + "/upload"
 
+    /**
+     * Statuses from the BUD-06 pre-flight that mean the server doesn't implement the check,
+     * not that it refuses this blob. Anything else is a real rejection worth failing on.
+     */
+    private val PREFLIGHT_UNSUPPORTED = setOf(404, 405, 501)
+
+    /**
+     * Ask [servers] in order to take a copy of an already-uploaded blob (BUD-04). Best
+     * effort: a server that refuses or is down is skipped, since the blob already lives at
+     * the primary. Returns the servers that accepted it.
+     */
+    suspend fun mirror(
+        servers: List<String>,
+        blobUrl: String,
+        sha256Hex: String,
+        buildAuthHeader: BlossomAuthBuilder,
+    ): List<String> {
+        if (servers.isEmpty()) return emptyList()
+        val authHeader = runCatching { buildAuthHeader(sha256Hex, "upload") }.getOrNull() ?: return emptyList()
+        return servers.filter { ktorMirrorBlob(it, blobUrl, authHeader) }
+    }
+
     suspend fun upload(
         serverUrl: String,
         bytes: ByteArray,
@@ -70,7 +92,16 @@ object BlossomUploader {
         authHeader: String,
         sha256Hex: String,
     ): Result<UploadResult> {
-        val (statusCode, text) = executePutUpload(uploadUrl(serverUrl), bytes, mimeType, authHeader, sha256Hex)
+        val uploadUrl = uploadUrl(serverUrl)
+
+        // Pre-flight first: a server that won't take this blob (too large, wrong type, out
+        // of quota) says so before we push the whole body over a phone connection.
+        val preflight = ktorPreflightUpload(uploadUrl, bytes.size.toLong(), mimeType, authHeader, sha256Hex)
+        if (preflight != null && preflight !in 200..299 && preflight !in PREFLIGHT_UNSUPPORTED) {
+            return Result.Error(AppError.Unknown("Upload failed: ${errorMessage(preflight, "")}"))
+        }
+
+        val (statusCode, text) = executePutUpload(uploadUrl, bytes, mimeType, authHeader, sha256Hex)
 
         if (statusCode !in 200..299) {
             return Result.Error(AppError.Unknown("Upload failed: ${errorMessage(statusCode, text)}"))

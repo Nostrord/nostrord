@@ -28,27 +28,25 @@ class MediaServerTest {
     }
 
     @Test
-    fun uploadUrlsMatchEachProtocol() {
+    fun blossomUploadUrlIsTheServerOrigin() {
         assertEquals("https://blossom.band/upload", BlossomUploader.uploadUrl("https://blossom.band"))
         assertEquals("https://blossom.band/upload", BlossomUploader.uploadUrl("https://blossom.band/"))
-        assertEquals(
-            "https://nostr.build/api/v2/upload/files",
-            NostrBuildUploader.uploadUrl("https://nostr.build"),
-        )
     }
 
     @Test
-    fun builtInsAreUniqueAndDefaultIsNostrBuild() {
-        assertEquals(BUILT_IN_MEDIA_SERVERS.size, BUILT_IN_MEDIA_SERVERS.map { it.url }.toSet().size)
-        assertTrue(BUILT_IN_MEDIA_SERVERS.all { it.builtIn })
-        // Every built-in URL is already normalized, so a user retyping one collides with it.
-        assertTrue(BUILT_IN_MEDIA_SERVERS.all { normalizeMediaServerUrl(it.url) == it.url })
-        assertEquals(MediaServerProtocol.NostrBuild, DEFAULT_MEDIA_SERVER.protocol)
+    fun presetsAreNormalizedAndUnique() {
+        val presets = NIP96_SERVICES + RECOMMENDED_BLOSSOM_SERVERS
+        assertEquals(presets.size, presets.toSet().size)
+        // Every preset is already normalized, so a user retyping one collides with it.
+        assertTrue(presets.all { normalizeMediaServerUrl(it) == it })
+        assertTrue(DEFAULT_BLOSSOM_SERVERS.all { it in RECOMMENDED_BLOSSOM_SERVERS })
+        assertTrue(DEFAULT_NIP96_SERVICE in NIP96_SERVICES)
     }
 
     @Test
     fun displayNameIsTheHost() {
         assertEquals("blossom.band", mediaServerDisplayName("https://blossom.band"))
+        assertEquals("nostr.build", mediaServerDisplayName("https://nostr.build/"))
     }
 
     @Test

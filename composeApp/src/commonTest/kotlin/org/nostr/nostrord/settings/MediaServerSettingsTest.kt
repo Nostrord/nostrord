@@ -1,12 +1,14 @@
 package org.nostr.nostrord.settings
 
-import org.nostr.nostrord.network.upload.BUILT_IN_MEDIA_SERVERS
-import org.nostr.nostrord.network.upload.DEFAULT_MEDIA_SERVER
-import org.nostr.nostrord.network.upload.MediaServerProtocol
+import org.nostr.nostrord.network.upload.DEFAULT_BLOSSOM_SERVERS
+import org.nostr.nostrord.network.upload.DEFAULT_NIP96_SERVICE
+import org.nostr.nostrord.network.upload.MediaUploadService
+import org.nostr.nostrord.network.upload.RECOMMENDED_BLOSSOM_SERVERS
 import org.nostr.nostrord.utils.Result
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MediaServerSettingsTest {
@@ -14,56 +16,72 @@ class MediaServerSettingsTest {
 
     @AfterTest
     fun reset() {
-        settings.customServers.value.forEach { settings.removeCustomServer(it) }
-        settings.select(DEFAULT_MEDIA_SERVER)
+        settings.useNip96(DEFAULT_NIP96_SERVICE)
+        settings.blossomServers.value.forEach { settings.removeBlossomServer(it) }
+        DEFAULT_BLOSSOM_SERVERS.forEach { settings.addBlossomServer(it) }
     }
 
     @Test
-    fun defaultsToNostrBuildWithOnlyBuiltIns() {
-        assertEquals(DEFAULT_MEDIA_SERVER, settings.selected.value)
-        assertEquals(BUILT_IN_MEDIA_SERVERS, settings.servers.value)
+    fun defaultsToTheDefaultNip96HostAndTheRecommendedBlossomList() {
+        assertEquals(MediaUploadService.Nip96(DEFAULT_NIP96_SERVICE), settings.service.value)
+        assertEquals(DEFAULT_BLOSSOM_SERVERS, settings.blossomServers.value)
     }
 
     @Test
-    fun selectSwitchesToABuiltInBlossomServer() {
-        val blossom = BUILT_IN_MEDIA_SERVERS.first { it.protocol == MediaServerProtocol.Blossom }
-        settings.select(blossom)
-        assertEquals(blossom, settings.selected.value)
-        // A fresh instance reads the same persisted choice.
-        assertEquals(blossom, MediaServerSettings().selected.value)
+    fun serviceChoicePersistsBothWays() {
+        settings.useBlossom()
+        assertEquals(MediaUploadService.Blossom, settings.service.value)
+        assertEquals(MediaUploadService.Blossom, MediaServerSettings().service.value)
+
+        val host = "https://nostrcheck.me"
+        settings.useNip96(host)
+        assertEquals(MediaUploadService.Nip96(host), settings.service.value)
+        assertEquals(MediaUploadService.Nip96(host), MediaServerSettings().service.value)
     }
 
     @Test
-    fun addCustomServerNormalizesAndPersists() {
-        val added = settings.addCustomServer("  Blossom.Example.com/ ")
+    fun addBlossomServerNormalizesAppendsAndPersists() {
+        val added = settings.addBlossomServer("  Blossom.Example.com/ ")
         assertTrue(added is Result.Success)
-        assertEquals("https://blossom.example.com", added.data.url)
-        assertEquals(MediaServerProtocol.Blossom, added.data.protocol)
-        assertTrue(settings.servers.value.contains(added.data))
-        assertTrue(MediaServerSettings().servers.value.any { it.url == added.data.url && !it.builtIn })
+        assertEquals("https://blossom.example.com", added.data)
+        // Appended, not promoted: the existing preferred server keeps its place.
+        assertEquals(added.data, settings.blossomServers.value.last())
+        assertTrue(MediaServerSettings().blossomServers.value.contains(added.data))
     }
 
     @Test
-    fun addCustomServerRejectsInvalidAndDuplicates() {
-        assertTrue(settings.addCustomServer("not a host") is Result.Error)
-        assertTrue(settings.addCustomServer(BUILT_IN_MEDIA_SERVERS[1].url) is Result.Error)
-        settings.addCustomServer("blossom.example.com")
-        assertTrue(settings.addCustomServer("https://blossom.example.com/") is Result.Error)
+    fun addBlossomServerRejectsInvalidAndDuplicates() {
+        assertTrue(settings.addBlossomServer("not a host") is Result.Error)
+        assertTrue(settings.addBlossomServer(settings.blossomServers.value.first()) is Result.Error)
     }
 
     @Test
-    fun removingTheSelectedCustomServerFallsBackToDefault() {
-        val added = settings.addCustomServer("blossom.example.com")
-        assertTrue(added is Result.Success)
-        settings.select(added.data)
-        settings.removeCustomServer(added.data)
-        assertEquals(DEFAULT_MEDIA_SERVER, settings.selected.value)
-        assertTrue(settings.servers.value.none { it.url == added.data.url })
+    fun moveReordersAndClampsAtTheEnds() {
+        val original = settings.blossomServers.value
+        val second = original[1]
+        settings.moveBlossomServer(second, up = true)
+        assertEquals(second, settings.blossomServers.value.first())
+
+        // Already first: moving up again is a no-op rather than an error or a wrap-around.
+        settings.moveBlossomServer(second, up = true)
+        assertEquals(second, settings.blossomServers.value.first())
+
+        val last = settings.blossomServers.value.last()
+        settings.moveBlossomServer(last, up = false)
+        assertEquals(last, settings.blossomServers.value.last())
     }
 
     @Test
-    fun builtInServersCannotBeRemoved() {
-        settings.removeCustomServer(BUILT_IN_MEDIA_SERVERS.first())
-        assertEquals(BUILT_IN_MEDIA_SERVERS, settings.servers.value)
+    fun removeDropsTheServerAndItReappearsAsRecommended() {
+        val target = RECOMMENDED_BLOSSOM_SERVERS.first { it in settings.blossomServers.value }
+        settings.removeBlossomServer(target)
+        assertFalse(settings.blossomServers.value.contains(target))
+        assertTrue(settings.recommendedNotAdded().contains(target))
+    }
+
+    @Test
+    fun recommendedExcludesWhatIsAlreadyListed() {
+        val listed = settings.blossomServers.value.toSet()
+        assertTrue(settings.recommendedNotAdded().none { it in listed })
     }
 }

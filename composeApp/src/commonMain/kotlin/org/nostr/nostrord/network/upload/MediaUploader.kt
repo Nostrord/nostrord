@@ -1,49 +1,92 @@
 package org.nostr.nostrord.network.upload
 
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 
-/** Signs a NIP-98 authorization for (url, method). Returns null when signed out. */
-typealias Nip98AuthBuilder = suspend (url: String, method: String) -> String?
-
 /**
- * Routes an upload to whichever media server the user picked, hiding the protocol
- * difference (nostr.build's multipart v2 API vs Blossom's `PUT /upload`) from every
- * call site. Both paths return the same [UploadResult] so imeta tags are built once.
+ * Routes an upload to the configured service, hiding the protocol difference (NIP-96's
+ * multipart POST vs Blossom's `PUT /upload`) from every call site. Both paths return the
+ * same [UploadResult] so imeta tags are built once.
  */
 object MediaUploader {
     suspend fun upload(
-        server: MediaServer,
+        service: MediaUploadService,
+        blossomServers: List<String>,
         bytes: ByteArray,
         filename: String,
         mimeType: String,
         buildNip98AuthHeader: Nip98AuthBuilder,
         buildBlossomAuthHeader: BlossomAuthBuilder,
-    ): Result<UploadResult> = when (server.protocol) {
-        MediaServerProtocol.NostrBuild ->
-            NostrBuildUploader.upload(server.url, bytes, filename, mimeType, buildNip98AuthHeader)
+    ): Result<UploadResult> = when (service) {
+        is MediaUploadService.Nip96 ->
+            Nip96Uploader.upload(service.url, bytes, filename, mimeType, buildNip98AuthHeader)
 
-        MediaServerProtocol.Blossom ->
-            BlossomUploader.upload(server.url, bytes, filename, mimeType, buildBlossomAuthHeader)
+        MediaUploadService.Blossom ->
+            uploadToBlossomList(blossomServers, bytes, filename, mimeType, buildBlossomAuthHeader)
+    }
+
+    /**
+     * Upload to the first server in [servers] that accepts the blob, then hand the rest a
+     * copy via BUD-04 mirror. Trying the whole list matters more than it looks: one host
+     * being down or full would otherwise fail an upload the user could have completed.
+     * Mirroring is best effort and never turns a successful upload into an error.
+     */
+    private suspend fun uploadToBlossomList(
+        servers: List<String>,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        buildAuthHeader: BlossomAuthBuilder,
+    ): Result<UploadResult> {
+        if (servers.isEmpty()) {
+            return Result.Error(AppError.Unknown("No Blossom server configured. Add one in Settings → Media."))
+        }
+
+        var lastError: AppError? = null
+        servers.forEachIndexed { index, server ->
+            when (val result = BlossomUploader.upload(server, bytes, filename, mimeType, buildAuthHeader)) {
+                is Result.Success -> {
+                    val others = servers.filterIndexed { i, _ -> i != index }
+                    val sha256 = result.data.sha256
+                    if (others.isNotEmpty() && sha256 != null) {
+                        BlossomUploader.mirror(others, result.data.url, sha256, buildAuthHeader)
+                    }
+                    return result
+                }
+
+                is Result.Error -> {
+                    // A signer failure is the user's session, not this host's fault; trying
+                    // the next server would just re-prompt for a signature that won't come.
+                    if (result.error is AppError.Auth) return result
+                    lastError = result.error
+                }
+            }
+        }
+        return Result.Error(lastError ?: AppError.Unknown("Upload failed: every Blossom server refused the file."))
     }
 }
 
 /**
- * Upload to the media server selected in Settings → Media. The single entry point for UI
- * code on every platform; it wires the signer and the selection so call sites stay one line.
+ * Upload using the service selected in Settings → Media. The single entry point for UI code
+ * on every platform; it wires the signer and the configuration so call sites stay one line.
  */
 suspend fun uploadMedia(
     bytes: ByteArray,
     filename: String,
     mimeType: String,
-): Result<UploadResult> = MediaUploader.upload(
-    server = AppModule.mediaServerSettings.selected.value,
-    bytes = bytes,
-    filename = filename,
-    mimeType = mimeType,
-    buildNip98AuthHeader = AppModule.nostrRepository::buildNip98AuthHeader,
-    buildBlossomAuthHeader = AppModule.nostrRepository::buildBlossomAuthHeader,
-)
+): Result<UploadResult> {
+    val settings = AppModule.mediaServerSettings
+    return MediaUploader.upload(
+        service = settings.service.value,
+        blossomServers = settings.blossomServers.value,
+        bytes = bytes,
+        filename = filename,
+        mimeType = mimeType,
+        buildNip98AuthHeader = AppModule.nostrRepository::buildNip98AuthHeader,
+        buildBlossomAuthHeader = AppModule.nostrRepository::buildBlossomAuthHeader,
+    )
+}
 
 /**
  * Mime type for an upload, derived from the filename extension. Blob refs

@@ -4,89 +4,110 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
-import org.nostr.nostrord.network.upload.BUILT_IN_MEDIA_SERVERS
-import org.nostr.nostrord.network.upload.DEFAULT_MEDIA_SERVER
-import org.nostr.nostrord.network.upload.MediaServer
-import org.nostr.nostrord.network.upload.MediaServerProtocol
-import org.nostr.nostrord.network.upload.mediaServerDisplayName
+import org.nostr.nostrord.network.upload.DEFAULT_BLOSSOM_SERVERS
+import org.nostr.nostrord.network.upload.DEFAULT_NIP96_SERVICE
+import org.nostr.nostrord.network.upload.MediaUploadService
+import org.nostr.nostrord.network.upload.NIP96_SERVICES
+import org.nostr.nostrord.network.upload.RECOMMENDED_BLOSSOM_SERVERS
 import org.nostr.nostrord.network.upload.normalizeMediaServerUrl
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 
 /**
- * Which media host uploads go to — picked from Settings → Media.
+ * Where uploads go — set from Settings → Media.
  *
- * [servers] is the built-in list plus any Blossom server the user added; [selected] is the
- * one every upload uses. A stored selection that no longer exists (custom server removed,
- * built-in retired) falls back to the default so uploads never break.
+ * [service] is either Blossom or one NIP-96 host. Under Blossom, [blossomServers] is an
+ * ordered list: the first server that accepts the file owns the URL and the others receive
+ * a mirror, so the order is a preference, not just presentation.
  */
 class MediaServerSettings {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val _customServers = MutableStateFlow(loadCustomServers())
-    val customServers: StateFlow<List<MediaServer>> = _customServers.asStateFlow()
+    private val _service = MutableStateFlow(loadService())
+    val service: StateFlow<MediaUploadService> = _service.asStateFlow()
 
-    private val _servers = MutableStateFlow(BUILT_IN_MEDIA_SERVERS + _customServers.value)
-    val servers: StateFlow<List<MediaServer>> = _servers.asStateFlow()
+    private val _blossomServers = MutableStateFlow(loadBlossomServers())
+    val blossomServers: StateFlow<List<String>> = _blossomServers.asStateFlow()
 
-    private val _selected =
-        MutableStateFlow(
-            resolve(SecureStorage.getStringPref(KEY_SELECTED, ""), _servers.value),
-        )
-    val selected: StateFlow<MediaServer> = _selected.asStateFlow()
+    /** NIP-96 hosts offered in the picker. */
+    val nip96Services: List<String> = NIP96_SERVICES
 
-    fun select(server: MediaServer) {
-        if (_servers.value.none { it.url == server.url }) return
-        _selected.value = server
-        SecureStorage.saveStringPref(KEY_SELECTED, server.url)
+    /** Recommended servers the user hasn't added yet, offered as one-tap additions. */
+    fun recommendedNotAdded(): List<String> = RECOMMENDED_BLOSSOM_SERVERS - _blossomServers.value.toSet()
+
+    fun useBlossom() {
+        _service.value = MediaUploadService.Blossom
+        SecureStorage.saveStringPref(KEY_SERVICE, BLOSSOM_MARKER)
+    }
+
+    fun useNip96(url: String) {
+        val normalized = normalizeMediaServerUrl(url) ?: return
+        _service.value = MediaUploadService.Nip96(normalized)
+        SecureStorage.saveStringPref(KEY_SERVICE, normalized)
     }
 
     /**
-     * Add a user-supplied Blossom server. The address is normalized to an https origin, so
+     * Add a Blossom server. The address is normalized to an https origin, so
      * "blossom.example.com/" and "https://Blossom.Example.com" are the same entry.
      */
-    fun addCustomServer(input: String): Result<MediaServer> {
+    fun addBlossomServer(input: String): Result<String> {
         val url =
             normalizeMediaServerUrl(input)
                 ?: return Result.Error(AppError.Unknown("Enter a valid server address, for example blossom.example.com"))
-        if (_servers.value.any { it.url == url }) {
+        if (_blossomServers.value.contains(url)) {
             return Result.Error(AppError.Unknown("That server is already in the list."))
         }
-        val server = MediaServer(url, mediaServerDisplayName(url), MediaServerProtocol.Blossom)
-        _customServers.value = _customServers.value + server
-        persistCustom()
-        return Result.Success(server)
+        setBlossomServers(_blossomServers.value + url)
+        return Result.Success(url)
     }
 
-    fun removeCustomServer(server: MediaServer) {
-        if (server.builtIn) return
-        _customServers.value = _customServers.value.filterNot { it.url == server.url }
-        persistCustom()
-        // Removing the server in use would strand uploads on a host that is gone.
-        if (_selected.value.url == server.url) select(DEFAULT_MEDIA_SERVER)
+    fun removeBlossomServer(url: String) {
+        setBlossomServers(_blossomServers.value - url)
     }
 
-    private fun persistCustom() {
-        _servers.value = BUILT_IN_MEDIA_SERVERS + _customServers.value
-        SecureStorage.saveStringPref(KEY_CUSTOM, json.encodeToString(_customServers.value))
-    }
-
-    private fun loadCustomServers(): List<MediaServer> {
-        val raw = SecureStorage.getStringPref(KEY_CUSTOM, "")
-        if (raw.isBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<MediaServer>>(raw) }
-            .getOrDefault(emptyList())
-            .filterNot { it.builtIn }
-    }
-
-    private fun resolve(
+    /** Move a server one place up (toward preferred) or down in the upload order. */
+    fun moveBlossomServer(
         url: String,
-        available: List<MediaServer>,
-    ): MediaServer = available.firstOrNull { it.url == url } ?: DEFAULT_MEDIA_SERVER
+        up: Boolean,
+    ) {
+        val current = _blossomServers.value
+        val index = current.indexOf(url).takeIf { it >= 0 } ?: return
+        val target = if (up) index - 1 else index + 1
+        if (target !in current.indices) return
+        val reordered = current.toMutableList()
+        reordered[index] = reordered[target]
+        reordered[target] = url
+        setBlossomServers(reordered)
+    }
+
+    private fun setBlossomServers(servers: List<String>) {
+        _blossomServers.value = servers
+        SecureStorage.saveStringPref(KEY_BLOSSOM_SERVERS, json.encodeToString(servers))
+    }
+
+    private fun loadService(): MediaUploadService {
+        val stored = SecureStorage.getStringPref(KEY_SERVICE, "")
+        return when {
+            stored == BLOSSOM_MARKER -> MediaUploadService.Blossom
+            stored.isNotBlank() -> MediaUploadService.Nip96(stored)
+            else -> MediaUploadService.Nip96(DEFAULT_NIP96_SERVICE)
+        }
+    }
+
+    private fun loadBlossomServers(): List<String> {
+        val raw = SecureStorage.getStringPref(KEY_BLOSSOM_SERVERS, "")
+        if (raw.isBlank()) return DEFAULT_BLOSSOM_SERVERS
+        // An empty stored list is a real choice (the user removed every server), so it is
+        // kept as-is; only a missing/corrupt entry falls back to the defaults.
+        return runCatching { json.decodeFromString<List<String>>(raw) }.getOrDefault(DEFAULT_BLOSSOM_SERVERS)
+    }
 
     private companion object {
-        const val KEY_SELECTED = "media_upload_server"
-        const val KEY_CUSTOM = "media_upload_servers_custom"
+        const val KEY_SERVICE = "media_upload_service"
+        const val KEY_BLOSSOM_SERVERS = "media_upload_blossom_servers"
+
+        /** Stored in the same slot as a NIP-96 URL; not a valid URL, so the two can't collide. */
+        const val BLOSSOM_MARKER = "blossom"
     }
 }
