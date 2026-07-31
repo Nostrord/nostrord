@@ -21,6 +21,7 @@ import org.nostr.nostrord.network.upload.UploadResult
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.nostr.Nip68
+import org.nostr.nostrord.nostr.Nip84
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.navigation.GroupRoute
@@ -3831,14 +3832,18 @@ private val QuotedEvent =
         val (notFound, setNotFound) = useState { false }
         val (menuOpen, setMenuOpen) = useState { false }
 
-        useEffect(props.eventId) {
+        // Bumped by the not-found card's Retry button to re-run the fetch: the relay the event
+        // lives on is often connected only after the card first rendered.
+        val (retryTick, setRetryTick) = useState { 0 }
+
+        useEffect(props.eventId, retryTick) {
             setNotFound(false)
             if (props.eventId !in cached && local == null) {
                 launchApp { repo.requestEventById(props.eventId, props.relays, props.author) }
             }
         }
         // Give up after 5s of no resolution. Re-runs when content arrives (cancels the timer).
-        useEffect(content, props.eventId) {
+        useEffect(content, props.eventId, retryTick) {
             if (content != null) return@useEffect
             val timer = window.setTimeout({ setNotFound(true) }, 5000)
             try {
@@ -4079,17 +4084,57 @@ private val QuotedEvent =
                         }
                     }
                 }
-                div {
-                    className = ClassName("quoted-event-content")
-                    renderMessageContent(
-                        content.trim(),
-                        quotedTags,
-                        userMetadata,
-                        props.localById,
-                        props.onUser,
-                        props.onScrollTo,
-                        props.onGroupRef,
-                    )
+                // A NIP-84 highlight is comment + quoted excerpt + source, not one body of text.
+                val highlight = if (Nip84.isHighlight(resolvedKind)) Nip84.parse(content, quotedTags) else null
+                if (highlight != null) {
+                    highlight.comment?.let { comment ->
+                        div {
+                            className = ClassName("quoted-event-content")
+                            renderMessageContent(
+                                comment,
+                                quotedTags,
+                                userMetadata,
+                                props.localById,
+                                props.onUser,
+                                props.onScrollTo,
+                                props.onGroupRef,
+                            )
+                        }
+                    }
+                    if (highlight.excerpt.isNotEmpty()) {
+                        div {
+                            className = ClassName("highlight-excerpt")
+                            +highlight.excerpt
+                        }
+                    }
+                    val sourceUrl = highlight.sourceUrl
+                    val sourceLabel = highlight.sourceLabel
+                    if (sourceUrl != null && sourceLabel != null) {
+                        div {
+                            className = ClassName("highlight-source")
+                            +"From "
+                            a {
+                                href = sourceUrl
+                                asDynamic().target = "_blank"
+                                rel = "noopener noreferrer"
+                                onClick = { it.stopPropagation() }
+                                +sourceLabel
+                            }
+                        }
+                    }
+                } else {
+                    div {
+                        className = ClassName("quoted-event-content")
+                        renderMessageContent(
+                            content.trim(),
+                            quotedTags,
+                            userMetadata,
+                            props.localById,
+                            props.onUser,
+                            props.onScrollTo,
+                            props.onGroupRef,
+                        )
+                    }
                 }
             } else if (notFound) {
                 div {
@@ -4100,6 +4145,16 @@ private val QuotedEvent =
                         span {
                             className = ClassName("quoted-event-notfound-label")
                             +"Event not found"
+                        }
+                        button {
+                            className = ClassName("quoted-event-retry")
+                            title = "Try loading this event again"
+                            onClick = { ev ->
+                                ev.stopPropagation()
+                                setRetryTick(retryTick + 1)
+                            }
+                            icon(Ic.Refresh)
+                            span { +"Retry" }
                         }
                         div {
                             className = ClassName("quoted-event-menu")
