@@ -5,6 +5,8 @@ import org.nostr.nostrord.auth.logoutConfirmBody
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
+import org.nostr.nostrord.network.upload.MediaUploadService
+import org.nostr.nostrord.network.upload.mediaServerDisplayName
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.notifications.NotificationPermission
 import org.nostr.nostrord.notifications.playNotificationSound
@@ -38,6 +40,8 @@ import react.dom.html.ReactHTML.button
 import react.dom.html.ReactHTML.div
 import react.dom.html.ReactHTML.input
 import react.dom.html.ReactHTML.label
+import react.dom.html.ReactHTML.option
+import react.dom.html.ReactHTML.select
 import react.dom.html.ReactHTML.span
 import react.dom.html.ReactHTML.textarea
 import react.useEffect
@@ -973,6 +977,199 @@ private val MediaPanel =
                 "Automatically load images and videos in chat. When off, each one shows a tap-to-load placeholder so you choose what to fetch.",
                 autoLoad,
             ) { media.setAutoLoadMedia(!autoLoad) }
+        }
+        MediaServerSection()
+    }
+
+/**
+ * Upload destination: the service picker plus, under Blossom, the ordered server list.
+ * Mirrors the native MediaServerPanelContent and shares MediaServerSettings, so ordering,
+ * validation and persistence live in commonMain.
+ */
+private val MediaServerSection =
+    FC<Props> {
+        val settings = AppModule.mediaServerSettings
+        val service = useStateFlow(settings.service)
+
+        div {
+            className = ClassName("settings-card")
+            div {
+                className = ClassName("settings-section-head")
+                +"MEDIA UPLOAD"
+            }
+            div {
+                className = ClassName("media-service-row")
+                span {
+                    className = ClassName("media-service-label")
+                    span {
+                        className = ClassName("media-server-name")
+                        +"Media upload service"
+                    }
+                    span {
+                        className = ClassName("media-server-url")
+                        +"Blossom spreads your media across several servers. A NIP-96 host keeps it in one place."
+                    }
+                }
+                select {
+                    className = ClassName("modal-select media-service-select")
+                    value = when (service) {
+                        is MediaUploadService.Blossom -> BLOSSOM_OPTION
+                        is MediaUploadService.Nip96 -> service.url
+                    }
+                    onChange = { event ->
+                        val picked = event.currentTarget.value
+                        if (picked == BLOSSOM_OPTION) settings.useBlossom() else settings.useNip96(picked)
+                    }
+                    option {
+                        value = BLOSSOM_OPTION
+                        +"Blossom"
+                    }
+                    settings.nip96Services.forEach { url ->
+                        option {
+                            key = url
+                            value = url
+                            +mediaServerDisplayName(url)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (service is MediaUploadService.Blossom) BlossomServerList()
+    }
+
+private const val BLOSSOM_OPTION = "blossom"
+
+private val BlossomServerList =
+    FC<Props> {
+        val settings = AppModule.mediaServerSettings
+        val servers = useStateFlow(settings.blossomServers)
+        val (newUrl, setNewUrl) = useState { "" }
+        val (addError, setAddError) = useState<String?> { null }
+
+        fun addServer(input: String) {
+            when (val result = settings.addBlossomServer(input)) {
+                is Result.Success -> {
+                    setNewUrl("")
+                    setAddError(null)
+                }
+
+                is Result.Error -> setAddError(result.error.message)
+            }
+        }
+
+        div {
+            className = ClassName("settings-card")
+            div {
+                className = ClassName("settings-section-head")
+                +"BLOSSOM SERVERS"
+            }
+            if (servers.isEmpty()) {
+                div {
+                    className = ClassName("relay-warn")
+                    +"No servers. Add one below, or uploads will fail."
+                }
+            }
+            servers.forEachIndexed { index, url ->
+                div {
+                    key = url
+                    className = ClassName("media-server-row")
+                    span {
+                        className = ClassName("media-server-info")
+                        span {
+                            className = ClassName("media-server-name")
+                            +mediaServerDisplayName(url)
+                        }
+                        if (index == 0) {
+                            span {
+                                className = ClassName("media-server-preferred")
+                                +"Preferred"
+                            }
+                        }
+                    }
+                    button {
+                        className = ClassName("relay-row-remove")
+                        disabled = index == 0
+                        title = "Move up"
+                        onClick = { settings.moveBlossomServer(url, true) }
+                        icon(Ic.ExpandLess)
+                    }
+                    button {
+                        className = ClassName("relay-row-remove")
+                        disabled = index == servers.lastIndex
+                        title = "Move down"
+                        onClick = { settings.moveBlossomServer(url, false) }
+                        icon(Ic.ExpandMore)
+                    }
+                    button {
+                        className = ClassName("relay-row-remove")
+                        title = "Remove"
+                        onClick = { settings.removeBlossomServer(url) }
+                        icon(Ic.Close)
+                    }
+                }
+            }
+
+            div {
+                className = ClassName("settings-section-head relay-add-head")
+                +"ADD BLOSSOM SERVER"
+            }
+            input {
+                className = ClassName("modal-input")
+                placeholder = "blossom.example.com"
+                value = newUrl
+                onChange = { event ->
+                    setNewUrl(event.currentTarget.value)
+                    setAddError(null)
+                }
+                onKeyDown = { event ->
+                    if (event.key == "Enter") {
+                        event.preventDefault()
+                        addServer(newUrl)
+                    }
+                }
+            }
+            addError?.let {
+                div {
+                    className = ClassName("relay-warn")
+                    +it
+                }
+            }
+            div {
+                className = ClassName("relay-add-row")
+                button {
+                    className = ClassName("relay-add-btn")
+                    disabled = newUrl.isBlank()
+                    onClick = { addServer(newUrl) }
+                    icon(Ic.Add)
+                    +"Add"
+                }
+            }
+
+            val recommended = settings.recommendedNotAdded()
+            if (recommended.isNotEmpty()) {
+                div {
+                    className = ClassName("media-server-hint")
+                    +"Recommended servers"
+                }
+                div {
+                    className = ClassName("media-server-chips")
+                    recommended.forEach { url ->
+                        button {
+                            key = url
+                            className = ClassName("media-server-chip")
+                            onClick = { addServer(url) }
+                            icon(Ic.Add)
+                            +mediaServerDisplayName(url)
+                        }
+                    }
+                }
+            }
+
+            div {
+                className = ClassName("media-server-hint")
+                +"Media is uploaded to the preferred server and mirrored to the others."
+            }
         }
     }
 

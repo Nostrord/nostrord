@@ -15,11 +15,11 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.upload.MediaAccept
-import org.nostr.nostrord.network.upload.NostrBuildUploader
 import org.nostr.nostrord.network.upload.UploadResult
+import org.nostr.nostrord.network.upload.mimeTypeForFilename
 import org.nostr.nostrord.network.upload.rememberMediaPickerLauncher
+import org.nostr.nostrord.network.upload.uploadMedia
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.utils.Result
@@ -56,14 +56,9 @@ fun MessageUploadButton(
         ) { bytes, filename ->
             scope.launch {
                 try {
-                    val mime = NostrBuildUploader.mimeTypeForFilename(filename)
+                    val mime = mimeTypeForFilename(filename)
                     val result =
-                        NostrBuildUploader.upload(
-                            bytes,
-                            filename,
-                            mime,
-                            AppModule.nostrRepository::buildNip98AuthHeader,
-                        )
+                        uploadMedia(bytes, filename, mime)
                     when (result) {
                         is Result.Success -> onUploadComplete(result.data)
                         is Result.Error -> uploadError = result.error.message

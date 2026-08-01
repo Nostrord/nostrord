@@ -72,6 +72,9 @@ import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.components.media.AudioPlayerContent
 import org.nostr.nostrord.ui.components.media.PlatformVideoPlayer
 import org.nostr.nostrord.ui.components.media.YouTubeLinkCard
+import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_HEIGHT
+import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_WIDTH
+import org.nostr.nostrord.ui.media.INLINE_MEDIA_MIN_SIDE
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.navigation.LocalFrameNavigator
@@ -1231,13 +1234,16 @@ private fun ChatImage(
             val (w, h) = dimensions
             val ratio = w.toFloat() / h.toFloat()
             Modifier
-                .widthIn(max = 360.dp)
-                .heightIn(max = 300.dp)
+                .widthIn(max = INLINE_MEDIA_MAX_WIDTH.dp)
+                .heightIn(max = INLINE_MEDIA_MAX_HEIGHT.dp)
                 .aspectRatio(ratio, matchHeightConstraintsFirst = ratio < 1f)
         } else {
+            // No imeta hint: floor the slot so the loading skeleton is visible and the row
+            // doesn't grow from nothing when the bitmap resolves.
             Modifier
-                .widthIn(max = 360.dp)
-                .heightIn(max = 300.dp)
+                .widthIn(max = INLINE_MEDIA_MAX_WIDTH.dp)
+                .heightIn(max = INLINE_MEDIA_MAX_HEIGHT.dp)
+                .defaultMinSize(minWidth = INLINE_MEDIA_MIN_SIDE.dp, minHeight = INLINE_MEDIA_MIN_SIDE.dp)
         }
 
     if (isAnimatedImageUrl(imageUrl)) {

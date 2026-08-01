@@ -40,13 +40,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.launch
-import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.upload.FileTooLargeException
 import org.nostr.nostrord.network.upload.MAX_UPLOAD_BYTES
-import org.nostr.nostrord.network.upload.NostrBuildUploader
 import org.nostr.nostrord.network.upload.PasteMediaEffect
 import org.nostr.nostrord.network.upload.UnsupportedFileTypeException
+import org.nostr.nostrord.network.upload.mimeTypeForFilename
 import org.nostr.nostrord.network.upload.rememberClipboardImageReader
+import org.nostr.nostrord.network.upload.uploadMedia
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.components.upload.MessageUploadButton
@@ -93,8 +93,8 @@ fun MessageComposer(
             return
         }
         try {
-            val mime = NostrBuildUploader.mimeTypeForFilename(filename)
-            when (val result = NostrBuildUploader.upload(bytes, filename, mime, AppModule.nostrRepository::buildNip98AuthHeader)) {
+            val mime = mimeTypeForFilename(filename)
+            when (val result = uploadMedia(bytes, filename, mime)) {
                 is Result.Success -> appendUploadedUrl(result.data.url)
                 is Result.Error -> pasteError = result.error.message
             }

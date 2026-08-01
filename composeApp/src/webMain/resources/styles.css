@@ -6183,6 +6183,46 @@ body {
     border-radius: 8px;
     object-fit: cover;
 }
+
+/* Skeleton for the reserved slot: it sweeps while the bitmap is still decoding, then the
+   image fades in over it. The later .on-light / .on-dark rules keep their backdrop. */
+.msg-image.is-loading {
+    background-image: linear-gradient(
+        100deg,
+        var(--color-input) 32%,
+        var(--color-surface-variant) 50%,
+        var(--color-input) 68%
+    );
+    background-size: 220% 100%;
+    animation: msg-media-shimmer 1.2s linear infinite;
+}
+.msg-image.is-loaded {
+    background: transparent;
+    animation: msg-media-fade-in 200ms ease-out;
+}
+@keyframes msg-media-shimmer {
+    from {
+        background-position: 180% 0;
+    }
+    to {
+        background-position: -80% 0;
+    }
+}
+@keyframes msg-media-fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg-image.is-loading,
+    .msg-image.is-loaded {
+        animation: none;
+    }
+}
+
 .msg-video {
     display: block;
     /* Sits inside selectable message/quote text, which otherwise bleeds the I-beam
@@ -7874,6 +7914,90 @@ body {
     width: 18px;
     height: 18px;
 }
+/* Upload destination (Settings → Media): service picker + ordered Blossom server rows */
+.media-server-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--color-divider);
+}
+.media-service-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 4px;
+}
+.media-service-label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.media-service-select {
+    flex-shrink: 0;
+    width: auto;
+    min-width: 150px;
+}
+.media-server-preferred {
+    font-size: 11px;
+    color: var(--color-primary);
+}
+.media-server-hint {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+.media-server-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+}
+.media-server-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    background: var(--color-surface-variant);
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.media-server-chip:hover {
+    color: var(--color-text-primary);
+    background: var(--color-hover);
+}
+.media-server-chip .ico {
+    width: 14px;
+    height: 14px;
+}
+.relay-row-remove:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+.media-server-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.media-server-name {
+    font-size: 14px;
+    color: var(--color-text-primary);
+}
+.media-server-url {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .relay-warn {
     margin-top: 8px;
     font-size: 13px;

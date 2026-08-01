@@ -2,7 +2,6 @@ package org.nostr.nostrord.ui.components.chat
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,6 +17,7 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Size
+import org.nostr.nostrord.ui.components.loading.shimmerEffect
 import org.nostr.nostrord.ui.image.ImageBackdrop
 import org.nostr.nostrord.ui.image.decideImageBackdrop
 import org.nostr.nostrord.utils.decodeDataImageUri
@@ -44,6 +44,9 @@ actual fun StaticImage(
     val model: Any = dataBytes ?: if (useOriginal) url else optimizedUrl
 
     var backdrop by remember(url) { mutableStateOf<ImageBackdrop?>(null) }
+    // Shimmers over the reserved slot until Coil resolves, so a pending image reads as
+    // loading instead of as blank space that pops in.
+    var loading by remember(url) { mutableStateOf(true) }
 
     AsyncImage(
         model =
@@ -57,16 +60,22 @@ actual fun StaticImage(
             .build(),
         contentDescription = "Image",
         contentScale = contentScale,
-        modifier = Modifier.fillMaxWidth().then(modifier).chatImageBackdrop(backdrop).clickable(onClick = onClick),
+        modifier = modifier
+            .then(if (loading) Modifier.shimmerEffect() else Modifier)
+            .chatImageBackdrop(backdrop)
+            .clickable(onClick = onClick),
         onState = { state ->
             when (state) {
-                is AsyncImagePainter.State.Success ->
+                is AsyncImagePainter.State.Success -> {
+                    loading = false
                     backdrop = sampleImageArgb(state.result.image)?.let(::decideImageBackdrop)
+                }
                 is AsyncImagePainter.State.Error -> {
                     // If proxy URL failed and it differs from original, retry with original
                     if (!useOriginal && optimizedUrl != url) {
                         useOriginal = true
                     } else {
+                        loading = false
                         onError()
                     }
                 }

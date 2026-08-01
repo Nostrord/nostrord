@@ -86,6 +86,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `StepProgress` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/onboarding/OnboardingPieces.kt | Onboarding building blocks — Compose counterpart of the web's `.onb-*` / |
 | `SystemEventItem` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/SystemEventItem.kt | Enhanced system event item with avatars and grouping support. |
 | `TagBadge` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/GroupTypeBadges.kt | Tone-tinted access pill (Public/Private, Open/Closed, Joined). 10sp semibold, |
+| `ThreadMessageContextMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageContextMenu.kt | Compact context menu for thread messages (right-click / long-press): the quick-reactions |
 | `UnreadBadge` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/badges/UnreadBadge.kt | Unread message count badge. |
 | `UploadImageField` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/upload/UploadImageField.kt | URL text field with an upload-to-nostr.build button. |
 | `UserGradientAvatar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/avatars/GradientAvatar.kt | Deterministic gradient fallback for user avatars (prototype gradientAvatar): a |

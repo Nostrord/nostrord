@@ -4173,6 +4173,37 @@ class NostrRepository(
     }
 
     /**
+     * Build a Blossom (BUD-11) Authorization header value: a kind:24242 event bound to the
+     * blob hash and the verb ("upload", "delete", …). Returns "Nostr <base64>", or null only
+     * when no account is signed in; a signer failure propagates, as with NIP-98.
+     */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    suspend fun buildBlossomAuthHeader(
+        sha256Hex: String,
+        verb: String,
+    ): String? {
+        val pubKey = sessionManager.getPublicKey() ?: return null
+        val now = org.nostr.nostrord.utils.epochMillis() / 1000
+        val event = org.nostr.nostrord.nostr.Event(
+            pubkey = pubKey,
+            createdAt = now,
+            kind = 24242,
+            tags = listOf(
+                listOf("t", verb),
+                listOf("x", sha256Hex),
+                // Short-lived: the token authorizes exactly this blob, and a long window
+                // would let a leaked header be replayed.
+                listOf("expiration", (now + org.nostr.nostrord.network.upload.BLOSSOM_AUTH_TTL_SECONDS).toString()),
+            ),
+            content = "Upload Blob",
+        )
+        val signed = sessionManager.signEvent(event)
+        val json = signed.toJsonObject().toString()
+        val encoded = kotlin.io.encoding.Base64.encode(json.encodeToByteArray())
+        return "Nostr $encoded"
+    }
+
+    /**
      * Update the current user's profile metadata (kind 0 event).
      */
     override suspend fun updateProfileMetadata(
