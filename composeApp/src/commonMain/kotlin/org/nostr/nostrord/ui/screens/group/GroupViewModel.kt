@@ -65,6 +65,29 @@ fun buildFriendCandidates(
         )
     }.sortedWith(compareBy({ it.name == null }, { it.name?.lowercase() ?: it.pubkey }))
 
+/** Value under [hostRelay]'s key, tolerating maps keyed by non-normalized URLs. */
+internal fun <T> Map<String, T>.atRelay(hostRelay: String?): T? = hostRelay?.let { hr -> this[hr] ?: entries.firstOrNull { it.key.normalizeRelayUrl() == hr }?.value }
+
+/**
+ * The host relay's own mirror of a per-relay map, laid over the flat (bare-id) one.
+ *
+ * The flat map is last-writer-wins across relays, so for [groupId] it is trustworthy only
+ * while no OTHER relay has served that id: once one has, inheriting it reports another
+ * group's members and admins as ours — which handed out the admin UI, and its join-request
+ * list, on a group we do not administer. In that case the entry reads absent until this
+ * relay answers. Other groups' entries pass through untouched.
+ */
+internal fun <T> Map<String, Map<String, T>>.scopedOverFlat(
+    flat: Map<String, T>,
+    groupId: String,
+    hostRelay: String?,
+): Map<String, T> {
+    val mine = atRelay(hostRelay).orEmpty()
+    if (groupId in mine) return flat + mine
+    val servedElsewhere = entries.any { it.key.normalizeRelayUrl() != hostRelay && groupId in it.value }
+    return if (servedElsewhere) (flat - groupId) + mine else flat + mine
+}
+
 /** Relay hosting [groupId] (the relay whose group list carries it), else [fallbackRelay]. */
 fun groupHostRelay(
     groupId: String,
@@ -173,23 +196,9 @@ class GroupViewModel(
     }
 
     /** Value under [hostRelay]'s key, tolerating maps keyed by non-normalized URLs. */
-    private fun <T> Map<String, T>.atHostRelay(): T? = hostRelay?.let { hr -> this[hr] ?: entries.firstOrNull { it.key.normalizeRelayUrl() == hr }?.value }
+    private fun <T> Map<String, T>.atHostRelay(): T? = atRelay(hostRelay)
 
-    /**
-     * The host relay's own mirror of a per-relay map, laid over the flat (bare-id) one.
-     *
-     * The flat map is last-writer-wins across relays, so for [groupId] it is trustworthy only
-     * while no OTHER relay has served that id: once one has, inheriting it reports another
-     * group's members and admins as ours — which handed out the admin UI, and its join-request
-     * list, on a group we do not administer. In that case the entry reads absent until this
-     * relay answers. Other groups' entries pass through untouched.
-     */
-    private fun <T> Map<String, Map<String, T>>.scopedOverFlat(flat: Map<String, T>): Map<String, T> {
-        val mine = atHostRelay().orEmpty()
-        if (groupId in mine) return flat + mine
-        val servedElsewhere = entries.any { it.key.normalizeRelayUrl() != hostRelay && groupId in it.value }
-        return if (servedElsewhere) (flat - groupId) + mine else flat + mine
-    }
+    private fun <T> Map<String, Map<String, T>>.scopedOverFlat(flat: Map<String, T>): Map<String, T> = scopedOverFlat(flat, groupId, hostRelay)
 
     /**
      * Chat messages with NIP-51 muted authors filtered out. The raw repo cache stays

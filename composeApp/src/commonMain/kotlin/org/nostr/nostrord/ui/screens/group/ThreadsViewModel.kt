@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -122,6 +123,34 @@ fun topReactionChips(
         }
         ReactionChip(display, info.emojiUrl, info.reactors.size)
     }
+
+/**
+ * Who may delete a thread root or reply: its author (NIP-09 kind:5) and the group's admins
+ * (NIP-29 kind:9005 moderation). Shared by both thread UIs so the header button and the
+ * context menu offer the action under the same rule chat already uses.
+ */
+fun canDeleteThreadMessage(
+    authorPubkey: String,
+    myPubkey: String?,
+    isAdmin: Boolean,
+): Boolean = myPubkey != null && (authorPubkey == myPubkey || isAdmin)
+
+/**
+ * Body of the delete confirmation for a thread root or reply. Pass [authorName] only when the
+ * content is someone else's: an admin sees the delete action on every message, so moderating
+ * has to read as moderating (named author, group-wide effect) and not as retracting your own.
+ */
+fun deleteThreadConfirmBody(
+    isRoot: Boolean,
+    authorName: String?,
+): String {
+    val what = if (isRoot) "thread" else "message"
+    return if (authorName == null) {
+        "Are you sure you want to delete this $what? This cannot be undone."
+    } else {
+        "Delete this $what by $authorName? Everyone in the group stops seeing it, and this cannot be undone."
+    }
+}
 
 /**
  * Shared screen logic for the forum-style Threads pane (Discord-like): the list of kind:11 roots
@@ -308,6 +337,25 @@ class ThreadsViewModel(
         }
     }
 
+    /**
+     * Whether the signed-in account administers this group, host-relay scoped like
+     * [GroupViewModel.groupAdmins]: a same-id group on another relay must not hand out
+     * moderation rights here. Drives the admin delete affordances on threads.
+     */
+    val isAdmin: StateFlow<Boolean> =
+        (
+            if (hostRelay == null) {
+                repo.groupAdmins
+            } else {
+                combine(repo.groupAdmins, repo.groupAdminsByRelay) { flat, byRelay ->
+                    byRelay.scopedOverFlat(flat, groupId, hostRelay)
+                }
+            }
+            ).map { admins ->
+            val me = repo.getPublicKey()
+            me != null && me in admins[groupId].orEmpty()
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     private val _deleteError = MutableStateFlow<String?>(null)
 
     /** The relay's rejection of a kind:5/9005 delete ("kind 5 not allowed", ...), user-facing. */
@@ -317,9 +365,10 @@ class ThreadsViewModel(
         _deleteError.value = null
     }
 
-    /** Delete a thread root or reply you authored (NIP-09/NIP-29 deletion). The relay echo
-     *  removes it from local state; a rejection surfaces via [deleteError]. Runs on
-     *  viewModelScope, which survives list <-> detail nav. */
+    /** Delete a thread root or reply (NIP-09 kind:5 as its author, NIP-29 kind:9005 as an admin;
+     *  [GroupManager.deleteMessage] picks the kind). The relay echo removes it from local state;
+     *  a rejection surfaces via [deleteError]. Runs on viewModelScope, which survives
+     *  list <-> detail nav. */
     fun deleteThread(rootId: String) {
         viewModelScope.launch {
             when (val result = repo.deleteMessage(groupId, rootId)) {
