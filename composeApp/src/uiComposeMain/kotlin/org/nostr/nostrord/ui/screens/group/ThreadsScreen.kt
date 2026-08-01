@@ -26,10 +26,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -48,12 +51,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -131,6 +136,11 @@ fun ThreadsScreen(
     val reactionError by vm.reactionError.collectAsState()
     val deleteError by vm.deleteError.collectAsState()
     val isAdmin by vm.isAdmin.collectAsState()
+    val isRestricted by vm.isRestricted.collectAsState()
+    val isPendingApproval by vm.isPendingApproval.collectAsState()
+    val membership by vm.membershipState.collectAsState()
+    val groupAccess by vm.groupAccess.collectAsState()
+    val joinError by vm.joinError.collectAsState()
     val myPubkey = remember { vm.getPublicKey() }
 
     // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
@@ -141,6 +151,14 @@ fun ThreadsScreen(
 
     // Message being answered by the composer (context-menu Reply); null posts top-level.
     var replyingTo by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
+
+    // Picking Reply puts the caret in the composer, ready to type (chat/web parity). Bumped per
+    // pick so replying twice to the same message re-focuses.
+    val composerFocus = remember { FocusRequester() }
+    var replyFocusNonce by remember { mutableStateOf(0) }
+    LaunchedEffect(replyingTo?.id, replyFocusNonce) {
+        if (replyingTo != null) runCatching { composerFocus.requestFocus() }
+    }
 
     // Deep-link target (?e=): the message to scroll to and flash once the thread loads.
     var highlightId by remember { mutableStateOf<String?>(null) }
@@ -153,9 +171,21 @@ fun ThreadsScreen(
             highlightId = null
         }
     }
+    // In-thread jump (tapping a quoted parent). Shares the deep link's scroll + flash, so only
+    // one target is ever pending; the tap wins while it lasts.
+    var jumpTargetId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(jumpTargetId) {
+        val target = jumpTargetId ?: return@LaunchedEffect
+        highlightId = target
+        delay(HIGHLIGHT_FLASH_MS)
+        highlightId = null
+        jumpTargetId = null
+    }
+    val scrollTargetId = jumpTargetId ?: route.messageId
+
     val threadScroll = rememberScrollState()
     // Scroll target: the flashed message's y inside the scrolled column, reported on layout.
-    var highlightTargetY by remember(route.messageId) { mutableStateOf<Int?>(null) }
+    var highlightTargetY by remember(scrollTargetId) { mutableStateOf<Int?>(null) }
     LaunchedEffect(highlightTargetY) {
         highlightTargetY?.let { threadScroll.animateScrollTo((it - HIGHLIGHT_SCROLL_MARGIN_PX).coerceAtLeast(0)) }
     }
@@ -282,12 +312,18 @@ fun ThreadsScreen(
                                         .map { it.substringAfter('|') }
                                         .toSet(),
                                     parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
+                                    onJumpToParent = msg.threadParentIdTag()
+                                        ?.takeIf { messagesById.containsKey(it) }
+                                        ?.let { parentId -> { jumpTargetId = parentId } },
                                     highlighted = msg.id == highlightId,
-                                    onPositioned = if (msg.id == route.messageId) ({ y -> highlightTargetY = y }) else null,
+                                    onPositioned = if (msg.id == scrollTargetId) ({ y -> highlightTargetY = y }) else null,
                                     resolveMetadata = { userMetadata[it] },
                                     onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                     onOpenReactionPicker = { reactingTo = msg.id to msg.pubkey },
-                                    onReply = { replyingTo = msg },
+                                    onReply = {
+                                        replyingTo = msg
+                                        replyFocusNonce++
+                                    },
                                     onShareToChat = { vm.shareThreadToChat(msg) },
                                     onUserClick = { selectedUserPubkey = it },
                                     onDelete = { deleteTarget = msg },
@@ -363,6 +399,7 @@ fun ThreadsScreen(
                         },
                         placeholder = "Write a reply...",
                         isSending = sending,
+                        focusRequester = composerFocus,
                         modifier = Modifier.padding(Spacing.md),
                     )
                 }
@@ -374,6 +411,14 @@ fun ThreadsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
+                    // Same glyph the sidebar's Threads row uses, so the pane is identifiable
+                    // on mobile where that row is off screen.
+                    Icon(
+                        Icons.Default.Forum,
+                        contentDescription = null,
+                        tint = NostrordColors.TextPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
                     Text(
                         "Threads",
                         color = NostrordColors.TextPrimary,
@@ -381,19 +426,48 @@ fun ThreadsScreen(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f),
                     )
-                    AppButton(
-                        text = "New thread",
-                        onClick = { showCompose = true },
-                        icon = Icons.Filled.Forum,
-                        size = AppButtonSize.Small,
-                    )
+                    when {
+                        // Outsiders get the same join affordance as the chat header instead of a
+                        // composer the relay would reject.
+                        membership.status == GroupMembership.NONE ->
+                            AppButton(
+                                text = if (groupAccess.isOpen) "Join" else "Request to Join",
+                                onClick = { vm.joinGroup() },
+                                icon = Icons.Default.PersonAdd,
+                                size = AppButtonSize.Small,
+                            )
+                        membership.status == GroupMembership.PENDING ->
+                            Text(
+                                "Request pending",
+                                color = NostrordColors.TextMuted,
+                                fontSize = 13.sp,
+                            )
+                        // No composer while the relay withholds the group: the kind:11 would be rejected.
+                        !isRestricted ->
+                            AppButton(
+                                text = "New thread",
+                                onClick = { showCompose = true },
+                                icon = Icons.Filled.Add,
+                                size = AppButtonSize.Small,
+                            )
+                    }
                 }
                 HorizontalDivider(color = NostrordColors.Divider)
 
-                when {
-                    isLoading && threads.isEmpty() -> EmptyState("Loading threads...")
-                    threads.isEmpty() -> EmptyState("No threads yet. Start the first one.")
-                    else ->
+                when (threadsPlaceholder(threads.isNotEmpty(), isLoading, isPendingApproval, isRestricted)) {
+                    ThreadsPlaceholder.LOADING -> EmptyState("Loading threads...")
+                    ThreadsPlaceholder.PENDING_APPROVAL ->
+                        LockedState(
+                            title = "Awaiting admin approval",
+                            body = "Threads will appear once an admin approves your request.",
+                        )
+                    ThreadsPlaceholder.PRIVATE ->
+                        LockedState(
+                            title = "Private group",
+                            body = "You need an invite code or admin approval to see threads.",
+                        )
+                    ThreadsPlaceholder.EMPTY -> EmptyState("No threads yet. Start the first one.")
+                    null ->
                         LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(Spacing.sm)) {
                             items(threads, key = { it.rootId }) { t ->
                                 ThreadCard(
@@ -507,6 +581,17 @@ fun ThreadsScreen(
 
     // Relay rejected the kind:5/9005 delete - show the reason instead of silently swallowing
     // (chat parity: "Could Not Delete Message" + the relay's OK message).
+    joinError?.let { error ->
+        ConfirmDialog(
+            title = "Could Not Join",
+            message = error,
+            confirmLabel = "OK",
+            cancelLabel = null,
+            onConfirm = { vm.clearJoinError() },
+            onDismiss = { vm.clearJoinError() },
+        )
+    }
+
     deleteError?.let { error ->
         ConfirmDialog(
             title = "Could Not Delete Message",
@@ -554,6 +639,22 @@ private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = met
 private fun ColumnScope.EmptyState(text: String) {
     Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
         Text(text, color = NostrordColors.TextMuted, fontSize = 14.sp)
+    }
+}
+
+/** Lock panel for a group the relay withholds; same wording tier as the chat gate. */
+@Composable
+private fun ColumnScope.LockedState(title: String, body: String) {
+    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(Spacing.xl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Icon(Icons.Default.Lock, contentDescription = null, tint = NostrordColors.TextMuted, modifier = Modifier.size(40.dp))
+            Text(title, color = NostrordColors.TextSecondary, fontSize = 16.sp, textAlign = TextAlign.Center)
+            Text(body, color = NostrordColors.TextMuted, fontSize = 14.sp, textAlign = TextAlign.Center)
+        }
     }
 }
 
@@ -650,6 +751,8 @@ private fun ThreadMessage(
     reactions: Map<String, GroupManager.ReactionInfo>,
     pendingEmojis: Set<String>,
     parentMsg: NostrGroupClient.NostrMessage?,
+    // Scrolls to the quoted parent; null when it is not in this thread (quote stays decoration).
+    onJumpToParent: (() -> Unit)?,
     highlighted: Boolean,
     onPositioned: ((Int) -> Unit)?,
     resolveMetadata: (String) -> UserMetadata?,
@@ -674,7 +777,9 @@ private fun ThreadMessage(
     val rowBackground by animateColorAsState(
         when {
             highlighted -> NostrordColors.Primary.copy(alpha = 0.18f)
-            isHovered -> NostrordColors.MessageHover
+            // The open menu keeps its target tinted, so it is obvious which message the
+            // actions apply to (chat parity: .msg.menu-open).
+            menuVisible || isHovered -> NostrordColors.MessageHover
             else -> Color.Transparent
         },
     )
@@ -769,6 +874,10 @@ private fun ThreadMessage(
                         parentMessage = parentMsg,
                         parentMetadata = parentMsg?.let { resolveMetadata(it.pubkey) },
                         resolveMetadata = resolveMetadata,
+                        onReplyClick = onJumpToParent,
+                        // Without this the tappable quote would swallow the long-press and the
+                        // row's context menu would be unreachable from inside it.
+                        onReplyLongClick = onJumpToParent?.let { { menuVisible = true } },
                     )
                 }
                 Row(verticalAlignment = Alignment.Bottom) {

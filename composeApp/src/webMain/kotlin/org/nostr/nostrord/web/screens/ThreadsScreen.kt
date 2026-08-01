@@ -12,16 +12,20 @@ import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
+import org.nostr.nostrord.ui.screens.group.GroupMembership
+import org.nostr.nostrord.ui.screens.group.ThreadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.canDeleteThreadMessage
 import org.nostr.nostrord.ui.screens.group.deleteThreadConfirmBody
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadTitle
+import org.nostr.nostrord.ui.screens.group.threadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.getDateLabel
 import org.nostr.nostrord.utils.shortNpub
+import org.nostr.nostrord.web.bridge.VirtualKeyboard
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
@@ -57,6 +61,22 @@ import web.dom.ElementId
 import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
 import kotlin.js.Date
+
+/** Lock panel for a group the relay withholds; same chrome as the chat gate. */
+private fun ChildrenBuilder.threadsLockedState(title: String, body: String) {
+    div {
+        className = ClassName("chat-restricted")
+        icon(Ic.Lock, "chat-restricted-icon")
+        div {
+            className = ClassName("chat-restricted-title")
+            +title
+        }
+        div {
+            className = ClassName("chat-restricted-body")
+            +body
+        }
+    }
+}
 
 // Mirrors ChatScreen.displayName (private there): profile name, else a short npub.
 private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = meta?.displayName?.takeIf { it.isNotBlank() }
@@ -117,6 +137,11 @@ val ThreadsScreen =
         val reactionError = useStateFlow(vm.reactionError)
         val deleteError = useStateFlow(vm.deleteError)
         val isAdmin = useStateFlow(vm.isAdmin)
+        val isRestricted = useStateFlow(vm.isRestricted)
+        val isPendingApproval = useStateFlow(vm.isPendingApproval)
+        val membership = useStateFlow(vm.membershipState)
+        val groupAccess = useStateFlow(vm.groupAccess)
+        val joinError = useStateFlow(vm.joinError)
         val myPubkey = vm.getPublicKey()
 
         // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
@@ -164,6 +189,14 @@ val ThreadsScreen =
             }
         }
 
+        /** Scroll to a message inside the open thread and flash it (quote tap, chat parity). */
+        fun jumpToMessage(id: String) {
+            val el = document.getElementById("thread-msg-$id") ?: return
+            setHighlightId(id)
+            el.asDynamic().scrollIntoView(js("{ block: 'center', behavior: 'smooth' }"))
+            window.setTimeout({ setHighlightId(null) }, HIGHLIGHT_FLASH_MS)
+        }
+
         // Keep the open thread synced with the URL (#/g/<relay>/<id>/threads/<rootId>).
         useEffect(route.threadRootId) {
             vm.openThread(route.threadRootId)
@@ -177,6 +210,20 @@ val ThreadsScreen =
         val (uploadCount, setUploadCount) = useState { 0 }
         val (uploadError, setUploadError) = useState<String?> { null }
         val composerInputRef = useRef<HTMLTextAreaElement>(null)
+
+        // Picking Reply should leave the caret in the composer, ready to type (chat parity).
+        // Bumped per pick so replying twice to the same message re-focuses.
+        val (replyFocusNonce, setReplyFocusNonce) = useState { 0 }
+        useEffect(replyingTo?.id, replyFocusNonce) {
+            if (replyingTo == null) return@useEffect
+            val ta = composerInputRef.current ?: return@useEffect
+            // Re-focusing an already-focused field does not re-open a keyboard the user
+            // dismissed, so blur first in exactly that case (mirrors ChatScreen).
+            if (!VirtualKeyboard.isOpen && document.asDynamic().activeElement === ta.asDynamic()) {
+                ta.blur()
+            }
+            ta.focus()
+        }
 
         fun isMediaMime(type: String?): Boolean = type != null && (type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/"))
 
@@ -260,28 +307,59 @@ val ThreadsScreen =
                         className = ClassName("threads-header")
                         span {
                             className = ClassName("threads-title")
-                            +"Threads"
+                            // Same glyph the sidebar's Threads row uses, so the pane is
+                            // identifiable on mobile where that row is off screen.
+                            icon(Ic.Forum, "threads-title-icon")
+                            span { +"Threads" }
                         }
-                        button {
-                            className = ClassName("btn-primary thread-new-btn")
-                            onClick = { setComposing(true) }
-                            icon(Ic.Forum)
-                            span { +"New thread" }
+                        when {
+                            // Outsiders get the same join affordance as the chat header instead of
+                            // a composer the relay would reject.
+                            membership.status == GroupMembership.NONE ->
+                                button {
+                                    className = ClassName("chat-join-btn")
+                                    onClick = { vm.joinGroup() }
+                                    icon(Ic.PersonAdd)
+                                    span { +(if (groupAccess.isOpen) "Join" else "Request to Join") }
+                                }
+                            membership.status == GroupMembership.PENDING ->
+                                span {
+                                    className = ClassName("chat-pending")
+                                    +"Request pending"
+                                }
+                            // No composer while the relay withholds the group: the kind:11 would be rejected.
+                            !isRestricted ->
+                                button {
+                                    className = ClassName("btn-primary thread-new-btn")
+                                    onClick = { setComposing(true) }
+                                    icon(Ic.Add)
+                                    span { +"New thread" }
+                                }
                         }
                     }
 
-                    when {
-                        isLoading && threads.isEmpty() ->
+                    when (threadsPlaceholder(threads.isNotEmpty(), isLoading, isPendingApproval, isRestricted)) {
+                        ThreadsPlaceholder.LOADING ->
                             div {
                                 className = ClassName("threads-empty")
                                 +"Loading threads..."
                             }
-                        threads.isEmpty() ->
+                        ThreadsPlaceholder.PENDING_APPROVAL ->
+                            threadsLockedState(
+                                "Awaiting admin approval",
+                                "Threads will appear once an admin approves your request.",
+                            )
+                        ThreadsPlaceholder.PRIVATE ->
+                            threadsLockedState(
+                                "Private group",
+                                "You need an invite code or admin approval to see threads.",
+                            )
+                        ThreadsPlaceholder.EMPTY ->
                             div {
                                 className = ClassName("threads-empty")
                                 +"No threads yet. Start the first one."
                             }
-                        else ->
+                        null ->
                             div {
                                 className = ClassName("thread-list")
                                 threads.forEach { t ->
@@ -420,9 +498,14 @@ val ThreadsScreen =
                                 pendingFor(msg.id),
                                 parentMsg = msg.threadParentIdTag()?.let { messagesById[it] },
                                 highlighted = msg.id == highlightId,
+                                menuOpen = ctxMenu?.msg?.id == msg.id,
                                 onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
                                 onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
+                                onCloseMenu = { setCtxMenu(null) },
                                 onUser = { setProfilePubkey(it) },
+                                onJumpToParent = msg.threadParentIdTag()
+                                    ?.takeIf { messagesById.containsKey(it) }
+                                    ?.let { parentId -> { jumpToMessage(parentId) } },
                                 // A group ref in the body opens that group's chat page.
                                 onGroupRef = { gid, relay -> props.onNavigate(GroupRoute(relay ?: route.relayUrl, gid)) },
                                 onRetry = { vm.retrySend(msg.id) },
@@ -554,10 +637,9 @@ val ThreadsScreen =
                 div {
                     className = ClassName("ctx-overlay")
                     onClick = { setCtxMenu(null) }
-                    onContextMenu = {
-                        it.preventDefault()
-                        setCtxMenu(null)
-                    }
+                    // No preventDefault: closing is enough, and swallowing it would deny the
+                    // browser menu a right-click outside the row is entitled to (chat parity).
+                    onContextMenu = { setCtxMenu(null) }
                 }
                 div {
                     ref = ctxMenuRef
@@ -588,7 +670,9 @@ val ThreadsScreen =
                     ctxItem(Ic.Reply, "Reply") {
                         setReplyingTo(m.msg)
                         setCtxMenu(null)
-                        composerInputRef.current?.focus()
+                        // Focus rides the effect above, not a call here: this runs before React
+                        // re-renders, so the composer it would focus is the pre-reply one.
+                        setReplyFocusNonce { it + 1 }
                     }
                     // Announce the thread in the group chat (kind:9 with the root's nevent).
                     if (m.msg.kind == 11) {
@@ -668,6 +752,11 @@ val ThreadsScreen =
                     },
                 )
             }
+            // Relay refused the kind:9021 (or the invite code): same acknowledge-only shape as
+            // the delete failure, since there is nothing to retry from here.
+            joinError?.let { err ->
+                errorDialog("Could Not Join", err) { vm.clearJoinError() }
+            }
             // Relay rejected the kind:5/9005 - show the reason (chat parity).
             deleteError?.let { err ->
                 deleteMessageErrorDialog(err) { vm.clearDeleteError() }
@@ -728,9 +817,15 @@ private fun ChildrenBuilder.threadMessage(
     pendingEmojis: List<String>,
     parentMsg: NostrGroupClient.NostrMessage?,
     highlighted: Boolean,
+    // Keeps this row tinted while its context menu is open, so the target of the actions is
+    // unambiguous (chat parity: .msg.menu-open).
+    menuOpen: Boolean,
     onReact: (String) -> Unit,
     onOpenMenu: (Double, Double) -> Unit,
+    onCloseMenu: () -> Unit,
     onUser: (String) -> Unit,
+    // Tapping the quoted parent scrolls to it; null when the parent is not in this thread.
+    onJumpToParent: (() -> Unit)?,
     onGroupRef: (String, String?) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
@@ -739,15 +834,24 @@ private fun ChildrenBuilder.threadMessage(
         id = ElementId("thread-msg-${msg.id}")
         className = ClassName(
             (if (isRoot) "thread-msg thread-msg-root" else "thread-msg") +
-                (if (highlighted) " highlight" else ""),
+                (if (highlighted) " highlight" else "") +
+                (if (menuOpen) " menu-open" else ""),
         )
         // Right-click (desktop) / long-press (mobile browsers) opens the thread context menu.
         // Right-click directly on a hyperlink keeps the browser's native menu (chat parity),
         // so "Copy link address" copies the actual URL.
         onContextMenu = { e ->
-            if (e.target.asDynamic().closest("a") == null) {
-                e.preventDefault()
-                onOpenMenu(e.clientX, e.clientY)
+            when {
+                // On a hyperlink the browser menu wins, so "Copy link address" copies the URL.
+                e.target.asDynamic().closest("a") != null -> onCloseMenu()
+                // First right-click: ours at the cursor, native suppressed.
+                !menuOpen -> {
+                    e.preventDefault()
+                    onOpenMenu(e.clientX, e.clientY)
+                }
+                // Second right-click: the row sits above the overlay, so the event lands here.
+                // Close ours and let the native menu through (no preventDefault).
+                else -> onCloseMenu()
             }
         }
         // Avatar and author name open the user profile modal (chat parity).
@@ -786,7 +890,10 @@ private fun ChildrenBuilder.threadMessage(
             // parent has not loaded), like chat's reply preview.
             if (!isRoot && (parentMsg != null || msg.threadParentIdTag() != null)) {
                 div {
-                    className = ClassName("msg-reply")
+                    // Tappable only when the parent is in this thread; otherwise it is decoration
+                    // and must not swallow the long-press that opens the context menu.
+                    className = ClassName(if (onJumpToParent != null) "msg-reply tappable" else "msg-reply")
+                    if (onJumpToParent != null) onClick = { onJumpToParent() }
                     div { className = ClassName("msg-reply-bar") }
                     div {
                         className = ClassName("msg-reply-content")

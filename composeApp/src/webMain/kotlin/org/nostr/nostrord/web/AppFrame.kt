@@ -648,9 +648,7 @@ val AppFrame =
                         NotificationsPage {
                             this.vm = notifVm
                             onOpenDrawer = { setDrawerOpen(true) }
-                            onOpen = { relay, gid, mid ->
-                                pushRoute(GroupRoute(relay, gid, messageId = mid))
-                            }
+                            onOpenRoute = { pushRoute(it) }
                         }
                     r is UserRoute ->
                         ProfilePage {

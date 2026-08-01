@@ -12,11 +12,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.ui.screens.withMinDuration
+import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
@@ -135,6 +138,63 @@ fun canDeleteThreadMessage(
     isAdmin: Boolean,
 ): Boolean = myPubkey != null && (authorPubkey == myPubkey || isAdmin)
 
+/** What the threads list shows when it has no cards to render. */
+enum class ThreadsPlaceholder {
+    /** Still fetching: roots may yet arrive. */
+    LOADING,
+
+    /** Join request sent, no admin answer yet. */
+    PENDING_APPROVAL,
+
+    /** The relay withholds this group's events from you (NIP-29 private group). */
+    PRIVATE,
+
+    /** Readable and genuinely empty: invite the first thread. */
+    EMPTY,
+}
+
+/**
+ * Placeholder for an empty threads list, or null when there are threads to render.
+ *
+ * A private group reads as empty because the relay withholds the events, not because nobody
+ * posted: prompting to "start the first one" there invites a post the relay will reject.
+ * Restriction outranks loading, since the withheld read never settles on its own.
+ * Mirrors the chat gate in MessagesList / the web ChatScreen.
+ */
+fun threadsPlaceholder(
+    hasThreads: Boolean,
+    isLoading: Boolean,
+    isPendingApproval: Boolean,
+    isRestricted: Boolean,
+): ThreadsPlaceholder? = when {
+    hasThreads -> null
+    isPendingApproval -> ThreadsPlaceholder.PENDING_APPROVAL
+    isRestricted -> ThreadsPlaceholder.PRIVATE
+    isLoading -> ThreadsPlaceholder.LOADING
+    else -> ThreadsPlaceholder.EMPTY
+}
+
+/**
+ * Chat messages announcing [rootId] ("Started a thread: ..." carrying its nevent), matched by
+ * decoding the nostr: URIs rather than by string compare - the same root encodes to different
+ * nevents depending on the relay and author hints carried.
+ *
+ * Deleting the thread leaves these pointing at nothing, so they go with it.
+ */
+fun threadAnnouncementsFor(
+    rootId: String,
+    messages: List<NostrGroupClient.NostrMessage>,
+): List<NostrGroupClient.NostrMessage> = messages.filter { msg ->
+    msg.kind == 9 &&
+        Nip27.findReferences(msg.content).any { ref ->
+            when (val entity = ref.entity) {
+                is Nip19.Entity.Nevent -> entity.eventId == rootId
+                is Nip19.Entity.Note -> entity.eventId == rootId
+                else -> false
+            }
+        }
+}
+
 /**
  * Body of the delete confirmation for a thread root or reply. Pass [authorName] only when the
  * content is someone else's: an admin sees the delete action on every message, so moderating
@@ -223,6 +283,9 @@ class ThreadsViewModel(
     fun openThread(rootId: String?) {
         _openRootId.value = rootId
         if (rootId != null) {
+            // Reaching the thread is what clears its notifications: reading the group's chat
+            // never shows a kind:11/1111, so markReadForGroup deliberately skips them.
+            AppModule.notificationHistoryStore.markReadForThread(rootId)
             viewModelScope.launch { repo.fetchThread(groupId, rootId) }
         }
     }
@@ -321,13 +384,16 @@ class ThreadsViewModel(
         targetEventId: String,
         targetPubkey: String,
         emoji: String,
+        /** The thread the target belongs to; defaults to the open one, else the target itself
+         *  (list cards react to the root). Rides along so the reaction's readers can open it. */
+        threadRootId: String? = _openRootId.value ?: targetEventId,
     ) {
         val key = "$targetEventId|$emoji"
         if (key in _pendingReactions.value) return
         _pendingReactions.value = _pendingReactions.value + key
         viewModelScope.launch {
             try {
-                when (val result = repo.sendReaction(groupId, targetEventId, targetPubkey, emoji)) {
+                when (val result = repo.sendReaction(groupId, targetEventId, targetPubkey, emoji, threadRootId)) {
                     is Result.Error -> _reactionError.value = friendlyRelayError(result.error)
                     is Result.Success -> Unit
                 }
@@ -337,24 +403,54 @@ class ThreadsViewModel(
         }
     }
 
-    /**
-     * Whether the signed-in account administers this group, host-relay scoped like
-     * [GroupViewModel.groupAdmins]: a same-id group on another relay must not hand out
-     * moderation rights here. Drives the admin delete affordances on threads.
-     */
-    val isAdmin: StateFlow<Boolean> =
-        (
-            if (hostRelay == null) {
-                repo.groupAdmins
-            } else {
-                combine(repo.groupAdmins, repo.groupAdminsByRelay) { flat, byRelay ->
-                    byRelay.scopedOverFlat(flat, groupId, hostRelay)
-                }
+    /** The relay withholds this group's events until you are a member (NIP-29 private group). */
+    val isRestricted: StateFlow<Boolean> =
+        repo.restrictedGroups
+            .map { groupId in it }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), groupId in repo.restrictedGroups.value)
+
+    /** A join request is in flight and no admin has answered yet. */
+    val isPendingApproval: StateFlow<Boolean> =
+        repo.pendingApprovalSince
+            .map { groupId in it }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), groupId in repo.pendingApprovalSince.value)
+
+    private val membershipModel = GroupMembershipModel(repo, groupId, hostRelay, viewModelScope)
+
+    /** Admin of this group (host-relay scoped): drives the moderation delete affordances. */
+    val isAdmin: StateFlow<Boolean> = membershipModel.isAdmin
+
+    /** Standing in this group, same verdict the chat header uses for its join affordance. */
+    val membershipState: StateFlow<GroupMembershipState> = membershipModel.membershipState
+
+    /** Access shape, for the Join vs Request-to-Join label. */
+    val groupAccess: StateFlow<GroupAccess> = membershipModel.access
+
+    private val _joinError = MutableStateFlow<String?>(null)
+
+    /** Relay refusal of a kind:9021 join (or of the invite code), user-facing. */
+    val joinError: StateFlow<String?> = _joinError
+
+    fun clearJoinError() {
+        _joinError.value = null
+    }
+
+    /** Join (or request to join) without leaving the threads pane. Mirrors GroupViewModel.joinGroup. */
+    fun joinGroup(inviteCode: String? = null) {
+        _joinError.value = null
+        viewModelScope.launch {
+            val result = repo.joinGroup(groupId, inviteCode)
+            if (result is Result.Error) {
+                val reason = (result.error as? AppError.Group.JoinFailed)?.cause?.message
+                _joinError.value =
+                    if (reason.isNullOrBlank()) {
+                        "Could not join the group. Please try again."
+                    } else {
+                        "Could not join: $reason"
+                    }
             }
-            ).map { admins ->
-            val me = repo.getPublicKey()
-            me != null && me in admins[groupId].orEmpty()
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        }
+    }
 
     private val _deleteError = MutableStateFlow<String?>(null)
 
@@ -372,9 +468,21 @@ class ThreadsViewModel(
     fun deleteThread(rootId: String) {
         viewModelScope.launch {
             when (val result = repo.deleteMessage(groupId, rootId)) {
-                is Result.Error -> _deleteError.value = friendlyRelayError(result.error)
+                is Result.Error -> {
+                    _deleteError.value = friendlyRelayError(result.error)
+                    return@launch
+                }
                 is Result.Success -> Unit
             }
+            // The chat announcement outlives its thread and renders as a dead reference card, so
+            // it goes too - when this account may delete it (its author, or an admin). Failures
+            // stay silent: the thread itself is gone, which is what was asked, and a second error
+            // dialog over a successful delete only confuses.
+            val me = repo.getPublicKey()
+            val admin = isAdmin.value
+            threadAnnouncementsFor(rootId, scoped(repo.messages.value[groupId].orEmpty()))
+                .filter { canDeleteThreadMessage(it.pubkey, me, admin) }
+                .forEach { repo.deleteMessage(groupId, it.id) }
         }
     }
 

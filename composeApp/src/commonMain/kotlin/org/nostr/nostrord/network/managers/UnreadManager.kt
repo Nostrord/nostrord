@@ -30,6 +30,9 @@ class UnreadManager(
     private val onReplyNotify: ((groupId: String, message: NostrGroupClient.NostrMessage) -> Unit)? = null,
     private val onMentionNotify: ((groupId: String, message: NostrGroupClient.NostrMessage) -> Unit)? = null,
     private val onReactionNotify: ((groupId: String, reaction: NostrGroupClient.NostrReaction) -> Unit)? = null,
+    // A kind:1111 reply under a thread event of ours. Fired instead of [onReplyNotify] so the
+    // entry can deep-link into the threads pane rather than the chat.
+    private val onThreadReplyNotify: ((groupId: String, reply: NostrGroupClient.NostrMessage) -> Unit)? = null,
     // Called when a group is marked read so the notification feed can drop the
     // group's entries in lockstep with the unread badge (issue #67).
     private val onGroupRead: ((groupId: String) -> Unit)? = null,
@@ -231,6 +234,38 @@ class UnreadManager(
         }
     }
 
+    /**
+     * A forum thread event (kind:11 root or kind:1111 reply) arrived from a relay.
+     *
+     * Only replies under something of ours notify: a reply to your thread root or to one of your
+     * replies, or one that p-tags you. New roots by others are group activity, not an interaction,
+     * and would turn every thread into a push.
+     *
+     * The group's unread badge and high-water are deliberately untouched. Those count chat
+     * messages and are cleared by reading the chat; letting a thread reply bump them would leave
+     * a badge that opening the chat cannot clear.
+     *
+     * No lastRead/high-water anchor either, unlike chat: those track chat reading, so a group
+     * whose chat was just opened would silently swallow every thread reply that follows within
+     * the same second. Re-announcing is handled where it belongs - the feed dedupes by event id,
+     * and AppModule gates sound and popup on the event being realtime.
+     */
+    fun onThreadEventReceived(groupId: String, event: NostrGroupClient.NostrMessage) {
+        val pubkey = currentPubkey
+        val verdict = when {
+            pubkey == null -> "no-session"
+            event.kind != 1111 -> "not-a-reply(${event.kind})"
+            event.pubkey == pubkey -> "own-reply"
+            isMutedAuthor(event.pubkey) -> "muted-author"
+            !isJoined(groupId) -> "not-joined"
+            !threadReplyTargetsMe(event.tags, pubkey, findMessageAuthor) -> "not-for-me"
+            !shouldNotify(groupId, true) -> "group-muted"
+            else -> null
+        }
+        if (verdict != null) return
+        onThreadReplyNotify?.invoke(groupId, event)
+    }
+
     fun onReactionReceived(groupId: String, reaction: NostrGroupClient.NostrReaction) {
         val pubkey = currentPubkey ?: return
         if (reaction.pubkey == pubkey) return
@@ -293,4 +328,25 @@ class UnreadManager(
         }
         SecureStorage.saveUnreadEntries(pubkey, entries)
     }
+}
+
+/**
+ * Whether a kind:1111 reply is a reply to [pubkey], read from the reply's own NIP-22 tags.
+ *
+ * The tags are authoritative and need no local state: uppercase `P` is the thread root's author
+ * and `E`/`e` carry theirs in the 4th element. That matters because a top-level reply carries no
+ * lowercase `p` (the parent IS the root, and duplicating the triple trips relays that cap
+ * indexable tags), and the root itself is usually not in memory on a device that never opened
+ * the pane. [findMessageAuthor] stays as the last resort for clients that send a leaner tag set.
+ */
+internal fun threadReplyTargetsMe(
+    tags: List<List<String>>,
+    pubkey: String,
+    findMessageAuthor: (String) -> String?,
+): Boolean {
+    val pTagsMe = tags.any { it.size >= 2 && (it[0] == "p" || it[0] == "P") && it[1] == pubkey }
+    if (pTagsMe) return true
+    val scopeAuthorIsMe = tags.any { it.size >= 4 && (it[0] == "E" || it[0] == "e") && it[3] == pubkey }
+    if (scopeAuthorIsMe) return true
+    return tags.any { it.size >= 2 && (it[0] == "E" || it[0] == "e") && findMessageAuthor(it[1]) == pubkey }
 }

@@ -31,6 +31,12 @@ import org.nostr.nostrord.utils.LruCache
 import org.nostr.nostrord.utils.epochMillis
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
+/** How long a by-id fetch waits for a gated relay's NIP-42 to land before giving up on it. */
+private const val EVENT_FETCH_AUTH_TIMEOUT_MS = 8_000L
+
+/** How long a by-id fetch blocks an identical one. Must stay under the UI's give-up window. */
+private const val EVENT_FETCH_RETRY_AFTER_MS = 4_000L
+
 class MetadataManager(
     private val connectionManager: ConnectionManager,
     private val outboxManager: OutboxManager,
@@ -438,12 +444,31 @@ class MetadataManager(
             // it while another connected relay actually has it. This is how native effectively
             // resolves these — it has those relays connected. (Includes the focused + author
             // outbox relays already in the pool.)
-            connectionManager.getAllConnectedClients().forEach { client ->
+            val connected = connectionManager.getAllConnectedClients()
+            connected.forEach { client ->
                 try {
                     client.requestEventById(eventId)
                 } catch (_: Exception) {
                 }
             }
+
+            // An auth-gating relay withholds its group events until NIP-42 completes, and answers
+            // the REQ above with CLOSED "auth-required" — which is why a quoted kind:11 in a private
+            // group resolved only when the socket happened to be authed already (the card read as removed
+            // otherwise). Re-ask each gated relay once AUTH lands. Launched per client so a slow
+            // (bunker) signer on one relay does not hold up the others.
+            connected
+                .filter { it.requiresAuth() && !it.hasAuthSucceeded() }
+                .forEach { client ->
+                    scope.launch {
+                        if (client.awaitAuthOrTimeout(EVENT_FETCH_AUTH_TIMEOUT_MS) && !_cachedEvents.value.containsKey(eventId)) {
+                            try {
+                                client.requestEventById(eventId)
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
+                }
 
             // Plus any relay hint we are NOT connected to: connect on demand and REQ there, so a
             // correct hint to a relay outside the pool (an event whose group relay we never joined)
@@ -462,10 +487,10 @@ class MetadataManager(
                     }
                 }
         } finally {
-            // Remove after a delay to allow the response to arrive and be cached.
-            // If not cached after 10s, subsequent requests can try again.
+            // Release the in-flight guard sooner than the reference card gives up (5s), or the
+            // card's Retry button lands inside the guard and no-ops silently.
             scope.launch {
-                delay(10_000)
+                delay(EVENT_FETCH_RETRY_AFTER_MS)
                 inFlightEventsMutex.withLock { inFlightEvents.remove(eventId) }
             }
         }
