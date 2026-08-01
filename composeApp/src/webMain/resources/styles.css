@@ -2237,10 +2237,22 @@ body {
 }
 
 .threads-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
     flex: 1;
     font-size: 17px;
     font-weight: 700;
     color: var(--color-text-primary);
+}
+
+/* Custom icon classes replace `.ico` (the helper's cls arg is not additive), so they must
+   set fill themselves — `color` alone leaves the SVG on the default black. */
+.threads-title-icon {
+    width: 18px;
+    height: 18px;
+    fill: var(--color-text-primary);
+    flex-shrink: 0;
 }
 
 .thread-new-btn {
@@ -6946,6 +6958,22 @@ body {
     border-radius: 4px;
     cursor: pointer;
 }
+/* Above .ctx-overlay (z-index 50) like .msg.menu-open, so a SECOND right-click lands on the
+   row instead of the overlay - that is what lets the browser's native menu through. */
+.thread-msg.menu-open {
+    position: relative;
+    z-index: 60;
+    background: var(--color-message-hover);
+}
+
+.msg-reply.tappable {
+    cursor: pointer;
+}
+
+.msg-reply.tappable:hover {
+    background: var(--color-hover);
+}
+
 [data-theme="light"] .msg-reply {
     /* Light keeps the floating surface (the contrast fix). */
     background: var(--color-floating);

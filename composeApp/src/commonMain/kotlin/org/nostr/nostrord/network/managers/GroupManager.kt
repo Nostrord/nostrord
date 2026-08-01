@@ -88,6 +88,10 @@ class GroupManager(
     private val adaptiveConfig: AdaptiveConfig? = null,
     private val cacheStore: CacheStore = InMemoryCacheStore(),
     private val onNewMessagesFlushed: ((groupId: String, newMessages: List<NostrGroupClient.NostrMessage>) -> Unit)? = null,
+    // Forum thread events (kind:11 / 1111) as they land from a relay. Separate from
+    // [onNewMessagesFlushed]: threads live in their own stores and never enter the chat
+    // batch, so notifications would otherwise never see a thread reply.
+    private val onThreadEventReceived: ((groupId: String, event: NostrGroupClient.NostrMessage) -> Unit)? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val eventDeduplicator = EventDeduplicator()
@@ -3086,14 +3090,81 @@ class GroupManager(
 
     private fun threadRepliesSubId(groupId: String) = "threadrepl_$groupId"
 
+    /**
+     * Ids the current threads REQ delivered, per group. Its EOSE compares them against what we
+     * hold to tell "the relay no longer serves this" from "we never asked": a thread deleted on
+     * another device is simply absent from the answer, and the kind:5/9005 that removed it is
+     * never replayed to this one, so the disk cache would rehydrate it forever.
+     *
+     * A StateFlow (not a plain map) because the ingest path writes it off the relay socket while
+     * the pane's REQ resets it: `update` is atomic, a shared MutableMap would race.
+     */
+    private val threadSubSeenIds = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+
+    /** Start a fresh answer window for [groupId]; called every time the threads REQ is issued. */
+    private fun resetThreadSubSeen(groupId: String) {
+        threadSubSeenIds.update { it + (groupId to emptySet()) }
+    }
+
+    /** Record an id the relay served for [groupId]'s threads REQ (before dedup drops replays). */
+    private fun noteThreadSubSeen(groupId: String, eventId: String) {
+        threadSubSeenIds.update { current ->
+            val seen = current[groupId] ?: return@update current
+            if (eventId in seen) current else current + (groupId to (seen + eventId))
+        }
+    }
+
+    /**
+     * Drop stored thread events the relay's answer did not include: they were deleted elsewhere.
+     *
+     * Bounded by the answer's own window. The REQ is limit-capped, so anything older than the
+     * oldest event served is simply outside what the relay was asked for and must be kept -
+     * without that guard, a group with more threads than [THREAD_PAGE_SIZE] would lose its
+     * history on every EOSE. Entries from another relay and un-echoed optimistic sends (no
+     * relayUrl) are never touched. Removals are evicted from the disk cache too, otherwise the
+     * next cold open rehydrates exactly what was just reconciled away.
+     */
+    private fun reconcileThreadsAtEose(groupId: String, relayUrl: String, kind: Int) {
+        val seen = threadSubSeenIds.value[groupId] ?: return
+        val relay = relayUrl.normalizeRelayUrl()
+        val store = if (kind == 11) _threadRoots else _threadReplies
+        val removed = mutableSetOf<String>()
+        store.update { current ->
+            val list = current[groupId] ?: return@update current
+            val stale = staleThreadEventIds(list.filter { it.kind == kind && it.relayUrl?.normalizeRelayUrl() == relay }, seen)
+            if (stale.isEmpty()) return@update current
+            removed += stale
+            current + (groupId to list.filterNot { it.id in stale })
+        }
+        if (removed.isEmpty()) return
+        val account = currentPubkey ?: return
+        scope.launch {
+            try {
+                cacheStore.deleteByIds(account, removed)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Reconcile roots against the relay's answer; called on the threads_ sub's EOSE. */
+    fun reconcileThreadRootsAtEose(groupId: String, relayUrl: String) = reconcileThreadsAtEose(groupId, relayUrl, kind = 11)
+
+    /** Reconcile replies against the relay's answer; called on the threadrepl_ sub's EOSE. */
+    fun reconcileThreadRepliesAtEose(groupId: String, relayUrl: String) = reconcileThreadsAtEose(groupId, relayUrl, kind = 1111)
+
     /** Route a parsed thread event into its store (kind:11 roots, kind:1111 replies), deduped. */
     private fun applyThreadEvent(groupId: String, message: NostrGroupClient.NostrMessage, persist: Boolean = true) {
         val store = if (message.kind == 11) _threadRoots else _threadReplies
+        var inserted = false
         store.update { current ->
             val list = current[groupId] ?: emptyList()
             if (list.any { it.id == message.id }) return@update current
+            inserted = true
             current + (groupId to (list + message).sortedBy { it.createdAt })
         }
+        // Notify only on a real insert of a relay-delivered event: a disk hydration is not news,
+        // and an un-echoed optimistic send is our own.
+        if (inserted && persist && message.relayUrl != null) onThreadEventReceived?.invoke(groupId, message)
         // Write-through OUTSIDE the in-memory dedup: the relay echo of an optimistic
         // (relay-less) insert is deduped above, yet it is the first relay-attributed copy
         // and the one that must reach the disk cache. Upserts are idempotent.
@@ -3115,6 +3186,54 @@ class GroupManager(
      * events (the optimistic insert before the relay echo) are skipped: hydration is
      * relay-scoped and a send that never echoes must not rehydrate as a ghost.
      */
+    /**
+     * Persist a reaction that targets a thread event into that thread's cache slot, so reopening
+     * the pane shows its chips from disk instead of a bare card until the relay answers. Chat
+     * reactions are not cached (their slot is the chat history and nothing rehydrates them).
+     *
+     * The tags are rebuilt from the parsed reaction rather than kept raw: only e/p/h/E/emoji
+     * matter to [toNostrReaction], and this keeps the row the same shape a thread event has.
+     */
+    private fun cacheThreadReaction(reaction: NostrGroupClient.NostrReaction, relayUrl: String) {
+        val account = currentPubkey ?: return
+        val groupId = reaction.groupId ?: return
+        val rootId = reaction.threadRootId ?: threadRootForEvent(reaction.targetEventId) ?: return
+        val slot = threadCacheSlot(relayUrl, groupId)
+        val tags = threadReactionCacheTags(reaction, groupId, rootId)
+        scope.launch {
+            try {
+                cacheStore.upsertMessages(
+                    account,
+                    slot,
+                    listOf(
+                        CachedMsg(
+                            id = reaction.id,
+                            groupId = slot,
+                            pubkey = reaction.pubkey,
+                            createdAt = reaction.createdAt,
+                            kind = 7,
+                            content = reaction.emoji,
+                            tagsJson = json.encodeToString(tagsSerializer, tags),
+                        ),
+                    ),
+                )
+            } catch (_: Exception) {
+            }
+        }
+        scheduleCacheEviction()
+    }
+
+    /** Rebuild a reaction from its cached row; null when the row is not a usable kind:7. */
+    private fun CachedMsg.toNostrReaction(): NostrGroupClient.NostrReaction? {
+        if (kind != 7) return null
+        val tags = try {
+            json.decodeFromString(tagsSerializer, tagsJson)
+        } catch (_: Exception) {
+            return null
+        }
+        return reactionFromCacheRow(id, pubkey, createdAt, content, tags)
+    }
+
     private fun cacheThreadEvent(groupId: String, message: NostrGroupClient.NostrMessage) {
         val account = currentPubkey ?: return
         val relay = message.relayUrl ?: return
@@ -3149,7 +3268,13 @@ class GroupManager(
                 return
             }
         for (row in cached) {
-            applyThreadEvent(groupId, row.toNostrMessage().withOriginRelay(relay), persist = false)
+            // The slot holds the thread's reactions alongside its events; a kind:7 must rebuild
+            // a reaction, not be filed as a reply.
+            if (row.kind == 7) {
+                row.toNostrReaction()?.let { handleReaction(it) }
+            } else {
+                applyThreadEvent(groupId, row.toNostrMessage().withOriginRelay(relay), persist = false)
+            }
         }
     }
 
@@ -3174,6 +3299,7 @@ class GroupManager(
             client.awaitAuthOrTimeout(INITIAL_READ_AUTH_TIMEOUT_MS)
         }
         return try {
+            resetThreadSubSeen(groupId)
             client.requestGroupThreadRoots(
                 groupId,
                 limit = THREAD_PAGE_SIZE,
@@ -3202,6 +3328,7 @@ class GroupManager(
             if (getRelayForGroup(groupId)?.normalizeRelayUrl() != normalized) continue
             val client = clientForGroup(groupId) ?: continue
             runCatching {
+                resetThreadSubSeen(groupId)
                 client.requestGroupThreadRoots(groupId, limit = THREAD_PAGE_SIZE, subscriptionId = threadRootsSubId(groupId))
                 client.requestThreadReplies(groupId, rootId = null, limit = THREAD_REPLY_BATCH, subscriptionId = threadRepliesSubId(groupId))
             }
@@ -3344,6 +3471,9 @@ class GroupManager(
         emoji: String,
         pubKey: String,
         signEvent: suspend (Event) -> Event,
+        // Set when reacting inside a thread: carries the root so the target's readers can open
+        // the thread without having the reacted-to event loaded.
+        threadRootId: String? = null,
     ): Result<Unit> {
         val currentClient = clientForGroup(groupId)
             ?: return Result.Error(AppError.Network.Disconnected(""))
@@ -3354,6 +3484,7 @@ class GroupManager(
                 add(listOf("h", groupId, groupRelayUrl))
                 add(listOf("e", targetEventId, "", "", targetPubkey))
                 add(listOf("p", targetPubkey))
+                if (threadRootId != null) add(listOf("E", threadRootId))
                 // Include emoji tag for custom emojis (NIP-30) so other clients can resolve the URL
                 val shortcode = emoji.trim(':')
                 if (emoji.startsWith(":") && emoji.endsWith(":") && shortcode.isNotEmpty()) {
@@ -4500,9 +4631,13 @@ class GroupManager(
         // buffer). Returning the author pubkey still backfills their profile metadata.
         if (message.kind in threadKinds) {
             if (message.id.isBlank()) return null
-            if (!eventDeduplicator.tryAddSync(message.id)) return null
             val groupId = extractGroupIdFromMessage(rawMsg) ?: return null
             if (isRecentlyLeft(groupId)) return null
+            // Ahead of the dedup: a resubscribe replays the same roots, and those replays are
+            // exactly what proves the relay still serves them. Deduping first would leave the
+            // answer window looking empty and the EOSE would reconcile live threads away.
+            noteThreadSubSeen(groupId, message.id)
+            if (!eventDeduplicator.tryAddSync(message.id)) return null
             applyThreadEvent(groupId, message.withOriginRelay(relayUrl))
             return message.pubkey
         }
@@ -4862,10 +4997,35 @@ class GroupManager(
      */
     fun getMessagesForGroup(groupId: String): List<NostrGroupClient.NostrMessage> = _messages.value[groupId] ?: emptyList()
 
+    /**
+     * The thread root to open for [eventId] when it is a forum event: the root itself for a
+     * kind:11, its uppercase-E scope for a kind:1111. Null for chat events, which open the chat.
+     * Lets a notification about a thread event deep-link into the threads pane.
+     */
+    fun threadRootForEvent(eventId: String): String? {
+        _threadRoots.value.values.forEach { roots ->
+            if (roots.any { it.id == eventId }) return eventId
+        }
+        _threadReplies.value.values.forEach { replies ->
+            val reply = replies.firstOrNull { it.id == eventId }
+            if (reply != null) return reply.tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1)
+        }
+        return null
+    }
+
     fun findMessageByIdAcrossGroups(messageId: String): Pair<String, NostrGroupClient.NostrMessage>? {
         for ((groupId, msgs) in _messages.value) {
             val msg = msgs.firstOrNull { it.id == messageId } ?: continue
             return groupId to msg
+        }
+        // Thread roots and replies live outside _messages; without them a reaction to a thread
+        // event whose sender omitted the NIP-25 `p` tag resolves to no author and never counts
+        // as an interaction with us.
+        for (store in listOf(_threadRoots.value, _threadReplies.value)) {
+            for ((groupId, events) in store) {
+                val event = events.firstOrNull { it.id == messageId } ?: continue
+                return groupId to event
+            }
         }
         return null
     }
@@ -4889,6 +5049,9 @@ class GroupManager(
     fun handleReaction(
         reaction: NostrGroupClient.NostrReaction,
         immediate: Boolean = false,
+        // Origin relay, for the disk cache slot. Null skips persistence (optimistic local
+        // reactions, which the relay echo re-caches with its relay attributed).
+        relayUrl: String? = null,
     ): String? {
         val messageId = reaction.targetEventId
         if (messageId.isBlank()) return null
@@ -4897,6 +5060,8 @@ class GroupManager(
         if (!eventDeduplicator.tryAddSync(reaction.id)) {
             return null
         }
+
+        if (relayUrl != null) cacheThreadReaction(reaction, relayUrl)
 
         // Check pending (staged) reactions first, then committed state.
         val currentReactions = _pendingReactions[messageId]
@@ -5335,6 +5500,66 @@ class GroupManager(
         val pubkey = currentPubkey ?: return
         SecureStorage.clearMessagesForGroup(pubkey, groupId)
     }
+}
+
+/**
+ * Which of [stored] a limit-capped REQ answer ([seen]) proves are gone, i.e. deleted on another
+ * device: this one never receives that kind:5/9005, so absence from the answer is the only signal.
+ *
+ * Only the answer's own window counts. The REQ is limit-capped, so events older than the oldest
+ * one served were never asked for and stay - otherwise a group with more threads than the page
+ * size would lose its history on every EOSE. An empty answer is authoritative (callers reconcile
+ * only a settled, authenticated sub), so it clears the whole window.
+ *
+ * [stored] must already be narrowed to one kind on the answering relay; un-echoed optimistic
+ * sends (no relay) never reach here.
+ */
+internal fun staleThreadEventIds(
+    stored: List<NostrGroupClient.NostrMessage>,
+    seen: Set<String>,
+): Set<String> {
+    if (stored.isEmpty()) return emptySet()
+    val windowStart = stored.filter { it.id in seen }.minOfOrNull { it.createdAt } ?: Long.MIN_VALUE
+    return stored.filter { it.id !in seen && it.createdAt >= windowStart }.map { it.id }.toSet()
+}
+
+/**
+ * Tags a cached thread reaction keeps. Only what [reactionFromCacheRow] needs to rebuild it:
+ * the target (`e`), its author (`p`), the group (`h`), the thread root (`E`) and the custom
+ * emoji URL. Written instead of the raw event tags so the row shape stays stable.
+ */
+internal fun threadReactionCacheTags(
+    reaction: NostrGroupClient.NostrReaction,
+    groupId: String,
+    rootId: String,
+): List<List<String>> = buildList {
+    add(listOf("e", reaction.targetEventId))
+    reaction.targetAuthorPubkey?.let { add(listOf("p", it)) }
+    add(listOf("h", groupId))
+    add(listOf("E", rootId))
+    reaction.emojiUrl?.let { add(listOf("emoji", reaction.emoji.trim(':'), it)) }
+}
+
+/** Inverse of [threadReactionCacheTags]; null when the row carries no target to react to. */
+internal fun reactionFromCacheRow(
+    id: String,
+    pubkey: String,
+    createdAt: Long,
+    emoji: String,
+    tags: List<List<String>>,
+): NostrGroupClient.NostrReaction? {
+    val target = tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1) ?: return null
+    return NostrGroupClient.NostrReaction(
+        id = id,
+        pubkey = pubkey,
+        emoji = emoji,
+        emojiUrl = tags.firstOrNull { it.size >= 3 && it[0] == "emoji" }?.get(2),
+        targetEventId = target,
+        createdAt = createdAt,
+        targetAuthorPubkey = tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1),
+        groupId = tags.firstOrNull { it.size >= 2 && it[0] == "h" }?.get(1),
+        threadRootId = tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1),
+    )
 }
 
 /** NIP-29 delete-event: the admin moderation action that removes any member's event. */

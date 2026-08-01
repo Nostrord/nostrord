@@ -777,7 +777,7 @@ private fun FrameContent(
             is NotificationsRoute ->
                 NotificationsPage(
                     vm = notifVm,
-                    onOpenGroupAtRelay = { gid, _, relay, mid -> onNavigate(GroupRoute(relay, gid, messageId = mid)) },
+                    onOpenRoute = { onNavigate(it) },
                     onOpenDrawer = onOpenDrawer,
                 )
             is SettingsRoute -> {}

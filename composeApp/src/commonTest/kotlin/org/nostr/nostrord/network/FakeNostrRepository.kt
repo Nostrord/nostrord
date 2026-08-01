@@ -628,6 +628,7 @@ class FakeNostrRepository : NostrRepositoryApi {
         targetEventId: String,
         targetPubkey: String,
         emoji: String,
+        threadRootId: String?,
     ): Result<Unit> {
         calls += "sendReaction:$groupId:$targetEventId:$emoji"
         return sendReactionResult

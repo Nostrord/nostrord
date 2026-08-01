@@ -254,6 +254,9 @@ object AppModule {
             onNewMessagesFlushed = { groupId, newMessages ->
                 unreadManager.onMessagesFlushed(groupId, newMessages)
             },
+            onThreadEventReceived = { groupId, event ->
+                unreadManager.onThreadEventReceived(groupId, event)
+            },
         ).also { gm ->
             // Feed + popup for "an admin added you to a group" (kind:9000, live or catch-up).
             // Fires when the add lands as a PENDING invite; the group itself is only adopted
@@ -487,6 +490,52 @@ object AppModule {
                     )
                 }
             },
+            onThreadReplyNotify = { groupId, reply ->
+                val relayUrl = reply.relayUrl
+                    ?: groupManager.getRelayForGroup(groupId) ?: ""
+                val preview = resolveMentionsForNotification(reply.content).take(120)
+                val groupName = groupDisplayName(groupId)
+                val relayName = relayDisplayName(relayUrl)
+                // The E tag is the thread root; without it the entry would open the chat, where a
+                // kind:1111 does not exist. Falls back to the reply itself so the pane still opens.
+                val rootId = reply.tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1) ?: reply.id
+                notificationHistoryStore.add(
+                    NotificationEntry(
+                        id = reply.id,
+                        type = NotificationType.REPLY,
+                        groupId = groupId,
+                        relayUrl = relayUrl,
+                        actorPubkey = reply.pubkey,
+                        createdAt = reply.createdAt,
+                        preview = preview,
+                        messageId = reply.id,
+                        threadRootId = rootId,
+                        groupName = groupName,
+                        relayName = relayName,
+                    ),
+                )
+                val realtime = isRealtime(reply.createdAt)
+                if (realtime && notificationSettings.soundEnabled.value) {
+                    playNotificationSound()
+                }
+                if (realtime &&
+                    notificationSettings.systemNotificationsEnabled.value &&
+                    notificationService.isSupported() &&
+                    notificationService.permission.value == NotificationPermission.Granted
+                ) {
+                    val authorName = displayLabelFor(reply.pubkey, prefixAt = false)
+                        ?: (reply.pubkey.take(8) + "…")
+                    notificationService.notify(
+                        NotificationRequest(
+                            relayUrl = relayUrl,
+                            groupId = groupId,
+                            title = groupName,
+                            body = "$authorName replied in a thread: $preview",
+                            messageId = reply.id,
+                        ),
+                    )
+                }
+            },
             onMentionNotify = { groupId, message ->
                 val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
                     ?: groupManager.getRelayForGroup(groupId) ?: ""
@@ -547,6 +596,12 @@ object AppModule {
                             createdAt = reaction.createdAt,
                             preview = emoji,
                             messageId = reaction.targetEventId,
+                            // A reaction to a thread root/reply must open the threads pane; the
+                            // target does not exist in the chat. The reaction's own E tag is
+                            // authoritative and works even when the target was never loaded here;
+                            // the local scan covers reactors that omit it.
+                            threadRootId = reaction.threadRootId
+                                ?: groupManager.threadRootForEvent(reaction.targetEventId),
                             emoji = emoji,
                             groupName = groupName,
                             relayName = relayName,

@@ -9,15 +9,19 @@ import kotlinx.coroutines.test.setMain
 import org.nostr.nostrord.network.FakeNostrRepository
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.screens.group.ReactionChip
+import org.nostr.nostrord.ui.screens.group.ThreadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.buildThreadSummaries
 import org.nostr.nostrord.ui.screens.group.canDeleteThreadMessage
 import org.nostr.nostrord.ui.screens.group.deleteThreadConfirmBody
 import org.nostr.nostrord.ui.screens.group.filterMutedReactions
 import org.nostr.nostrord.ui.screens.group.friendlyRelayError
+import org.nostr.nostrord.ui.screens.group.threadAnnouncementsFor
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
+import org.nostr.nostrord.ui.screens.group.threadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
@@ -264,6 +268,56 @@ class ThreadsViewModelTest {
         // A plain member gets no delete on someone else's thread, and logged out none at all.
         assertFalse(canDeleteThreadMessage(other, me, isAdmin = false))
         assertFalse(canDeleteThreadMessage(other, null, isAdmin = true))
+    }
+
+    @Test
+    fun `threadsPlaceholder gates a private group instead of inviting the first thread`() {
+        // Withheld reads look identical to an empty group, so restriction wins over both the
+        // loading spinner (it never settles) and the "start the first one" prompt.
+        assertEquals(
+            ThreadsPlaceholder.PRIVATE,
+            threadsPlaceholder(hasThreads = false, isLoading = true, isPendingApproval = false, isRestricted = true),
+        )
+        assertEquals(
+            ThreadsPlaceholder.PENDING_APPROVAL,
+            threadsPlaceholder(hasThreads = false, isLoading = false, isPendingApproval = true, isRestricted = true),
+        )
+        assertEquals(
+            ThreadsPlaceholder.LOADING,
+            threadsPlaceholder(hasThreads = false, isLoading = true, isPendingApproval = false, isRestricted = false),
+        )
+        assertEquals(
+            ThreadsPlaceholder.EMPTY,
+            threadsPlaceholder(hasThreads = false, isLoading = false, isPendingApproval = false, isRestricted = false),
+        )
+        // Threads already on screen keep rendering even if a restriction marker lands late.
+        assertNull(threadsPlaceholder(hasThreads = true, isLoading = false, isPendingApproval = false, isRestricted = true))
+    }
+
+    @Test
+    fun `threadAnnouncementsFor matches the announcement by decoded nevent`() {
+        val rootId = "a".repeat(64)
+        val otherId = "b".repeat(64)
+        // Hints differ from the ones the announcement was built with: a string compare on the
+        // nevent would miss this, decoding does not.
+        val announcement = NostrGroupClient.NostrMessage(
+            id = "ann1",
+            pubkey = "author",
+            content = "Started a thread: Bla\nnostr:${Nip19.encodeNevent(rootId, relays = listOf("wss://a.example"), kind = 11)}",
+            createdAt = 10,
+            kind = 9,
+            tags = emptyList(),
+        )
+        val unrelated = announcement.copy(
+            id = "ann2",
+            content = "Started a thread: Other\nnostr:${Nip19.encodeNevent(otherId, kind = 11)}",
+        )
+        val plainChat = announcement.copy(id = "chat", content = "just talking")
+        // The root itself is kind:11, never an announcement.
+        val theRoot = announcement.copy(id = rootId, kind = 11)
+
+        val found = threadAnnouncementsFor(rootId, listOf(announcement, unrelated, plainChat, theRoot))
+        assertEquals(listOf("ann1"), found.map { it.id })
     }
 
     @Test

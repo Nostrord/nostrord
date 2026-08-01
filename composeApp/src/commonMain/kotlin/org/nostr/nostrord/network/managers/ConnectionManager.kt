@@ -709,6 +709,34 @@ class ConnectionManager(
     }
 
     /**
+     * Drop every socket that answered NIP-42 as an account other than [pubkey].
+     *
+     * A relay serves reads under the identity that AUTH'd the socket. After an account swap the
+     * old sockets are still authenticated as the outgoing account, so the incoming account's REQ
+     * on one of them comes back with events it must not see (a private group only the previous
+     * account belongs to reads as fully visible). Closing subscriptions is not enough — the next
+     * REQ over the same socket is answered under the same stale identity. NIP-42 is reactive, so
+     * only a fresh socket produces a challenge the new account can answer.
+     *
+     * Public sockets (never challenged) are left alone. Reconnecting is the caller's job: the
+     * pool reopens them on demand. Returns the normalized URLs that were dropped.
+     */
+    suspend fun disconnectSocketsAuthedAsOther(pubkey: String?): List<String> {
+        // Collect under the lock, disconnect outside it: disconnectRelay takes the same mutex.
+        val stale =
+            poolMutex.withLock {
+                relayPool.entries.filter { (_, client) -> client.isAuthedAsOther(pubkey) }.map { it.key }
+            }
+        for (url in stale) {
+            try {
+                disconnectRelay(url)
+            } catch (_: Exception) {
+            }
+        }
+        return stale
+    }
+
+    /**
      * Clear all connections, disconnecting pool clients in parallel.
      */
     suspend fun clearAll() {

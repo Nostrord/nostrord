@@ -320,6 +320,7 @@ class NostrGroupClient(
     suspend fun connect(onMessage: (String) -> Unit) {
         isDisconnecting = false
         authCompleted = CompletableDeferred()
+        authedPubkey = null
         connectionJob = clientScope.launch {
             try {
                 client.webSocket(relayUrl) {
@@ -447,10 +448,22 @@ class NostrGroupClient(
         } ?: false
     }
 
-    /** Called after the AUTH response has been sent to the relay. */
-    fun notifyAuthCompleted() {
+    // Pubkey this socket answered NIP-42 with. The relay serves reads under the identity that
+    // AUTH'd the SOCKET, not under whatever account the app considers active, so a socket left
+    // over from a previous account keeps returning that account's private-group events.
+    private var authedPubkey: String? = null
+
+    /** Called after the AUTH response has been sent to the relay, signed by [pubkey]. */
+    fun notifyAuthCompleted(pubkey: String?) {
+        authedPubkey = pubkey
         authCompleted.complete(Unit)
     }
+
+    /**
+     * True when this socket is authenticated as an account other than [pubkey]. Sockets that
+     * never authenticated (public relays) are not "other": they serve everyone the same.
+     */
+    fun isAuthedAsOther(pubkey: String?): Boolean = authedPubkey != null && authedPubkey != pubkey
 
     suspend fun send(message: String) {
         trackSubLifecycle(message)
@@ -1309,6 +1322,13 @@ class NostrGroupClient(
                             putJsonArray("kinds") {
                                 add(5)
                                 add(9)
+                                // Forum threads ride the chat mux so a reply reaches the client
+                                // with the threads pane closed. Their own threads_/threadrepl_
+                                // subs only exist while that pane is open, so without these two
+                                // a thread reply is invisible until the user goes looking - no
+                                // notification, and a cold list on open.
+                                add(11)
+                                add(1111)
                                 add(9000)
                                 add(9001)
                                 add(9002)
@@ -1851,6 +1871,9 @@ class NostrGroupClient(
         val targetAuthorPubkey: String? = null,
         // NIP-29 `h` tag: group id the reaction was published to.
         val groupId: String? = null,
+        // NIP-22 `E` tag: the thread root the target belongs to, set when reacting inside a
+        // thread. Lets a notification open the threads pane without the target being in memory.
+        val threadRootId: String? = null,
     )
 
     fun parseMessage(message: String): NostrMessage? {
@@ -1916,6 +1939,7 @@ class NostrGroupClient(
 
             val targetAuthorPubkey = tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1)
             val groupId = tags.firstOrNull { it.size >= 2 && it[0] == "h" }?.get(1)
+            val threadRootId = tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1)
 
             NostrReaction(
                 id = event["id"]?.jsonPrimitive?.content ?: return null,
@@ -1926,6 +1950,7 @@ class NostrGroupClient(
                 createdAt = event["created_at"]?.jsonPrimitive?.long ?: (epochMillis() / 1000),
                 targetAuthorPubkey = targetAuthorPubkey,
                 groupId = groupId,
+                threadRootId = threadRootId,
             )
         } catch (e: Exception) {
             null

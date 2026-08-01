@@ -2351,6 +2351,15 @@ class NostrRepository(
                     connectionManager.disconnectRelay(norm)
                 }
             } catch (_: Exception) {}
+            // The loop above only covers the INCOMING account's joined relays, which is empty for
+            // a brand-new account — leaving the outgoing account's sockets open and still AUTH'd
+            // as it. Opening a private group only that account belongs to then reads it in full,
+            // because the relay answers under the socket's identity. Sweep by AUTH identity so
+            // every leftover socket is dropped regardless of whose relay list it is on.
+            try {
+                connectionManager.disconnectSocketsAuthedAsOther(pubkey)
+                    .forEach { connectedPoolRelays.remove(it) }
+            } catch (_: Exception) {}
             try {
                 ensureJoinedRelaysConnected(focusedRelay.takeIf { it.isNotBlank() })
             } catch (_: Exception) {}
@@ -3576,7 +3585,13 @@ class NostrRepository(
         )
     }
 
-    override suspend fun sendReaction(groupId: String, targetEventId: String, targetPubkey: String, emoji: String): Result<Unit> {
+    override suspend fun sendReaction(
+        groupId: String,
+        targetEventId: String,
+        targetPubkey: String,
+        emoji: String,
+        threadRootId: String?,
+    ): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
         return groupManager.sendReaction(
@@ -3586,6 +3601,7 @@ class NostrRepository(
             emoji = emoji,
             pubKey = pubKey,
             signEvent = { sessionManager.signEvent(it) },
+            threadRootId = threadRootId,
         )
     }
 
@@ -4761,7 +4777,7 @@ class NostrRepository(
                     if (sessionManager.handleAuthChallenge(client, authChallenge)) {
                         // Signal that AUTH is done so connect()/switchRelay() can
                         // proceed with requestGroups() after the relay accepted auth.
-                        client.notifyAuthCompleted()
+                        client.notifyAuthCompleted(sessionManager.getPublicKey())
                         resubscribeAfterAuth(client)
                         // Queued sends blocked on this relay's AUTH (resolveClientForGroup
                         // fails closed pre-AUTH) can flush now.
@@ -4838,8 +4854,16 @@ class NostrRepository(
                     }
                     // The forum thread-roots sub (threads_<groupId>) reached EOSE: stored threads
                     // are in, so the list can settle (show "No threads yet" only now, not on a timer).
+                    // The answer is also authoritative for what still exists, so anything we hold
+                    // for this relay that it did not serve was deleted elsewhere - drop it. Skipped
+                    // while AUTH is still pending, when an empty answer proves nothing.
                     if (subId.startsWith("threads_")) {
-                        groupManager.markThreadsLoaded(subId.removePrefix("threads_"))
+                        val threadGroupId = subId.removePrefix("threads_")
+                        groupManager.markThreadsLoaded(threadGroupId)
+                        if (!authBlocked) groupManager.reconcileThreadRootsAtEose(threadGroupId, sourceRelayUrl)
+                    }
+                    if (subId.startsWith("threadrepl_") && !authBlocked) {
+                        groupManager.reconcileThreadRepliesAtEose(subId.removePrefix("threadrepl_"), sourceRelayUrl)
                     }
                     closeOneShotSubAfterEose(subId, client)
                 }
@@ -5018,6 +5042,12 @@ class NostrRepository(
 
             "EVENT" -> {
                 if (arr.size < 3) return
+                // A socket still AUTH'd as another account answers REQs under THAT identity, so
+                // its events belong to a read scope this session does not have (a private group's
+                // messages and member lists). Drop them instead of letting them land in the active
+                // account's state and get cached under its key. Public sockets never authenticated
+                // and are not filtered.
+                if (client.isAuthedAsOther(sessionManager.getPublicKey())) return
                 val subId = arr[1].jsonPrimitive.content
                 val event = arr[2].jsonObject
                 val kind = event["kind"]?.jsonPrimitive?.int
@@ -5097,7 +5127,7 @@ class NostrRepository(
 
                     7 -> {
                         val reaction = client.parseReaction(event) ?: return
-                        val reactorPubkey = groupManager.handleReaction(reaction)
+                        val reactorPubkey = groupManager.handleReaction(reaction, relayUrl = client.getRelayUrl())
                         if (reactorPubkey != null && !metadataManager.hasMetadata(reactorPubkey)) {
                             scope.launch {
                                 requestUserMetadata(setOf(reactorPubkey))

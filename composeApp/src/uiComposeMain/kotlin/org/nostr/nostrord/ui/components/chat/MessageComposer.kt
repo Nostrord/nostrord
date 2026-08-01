@@ -26,6 +26,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -70,6 +72,8 @@ fun MessageComposer(
     placeholder: String,
     isSending: Boolean,
     modifier: Modifier = Modifier,
+    // Lets a caller put the caret here (picking Reply focuses the composer to type into).
+    focusRequester: FocusRequester? = null,
 ) {
     var showEmojiPicker by remember { mutableStateOf(false) }
     var isUploadingPaste by remember { mutableStateOf(false) }
@@ -127,6 +131,7 @@ fun MessageComposer(
                 modifier =
                 Modifier
                     .weight(1f)
+                    .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                     .onPreviewKeyEvent { event ->
                         when {
                             event.type == KeyEventType.KeyDown && event.key == Key.Escape && showEmojiPicker -> {
