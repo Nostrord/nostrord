@@ -3424,10 +3424,14 @@ class GroupManager(
      * Delete a message from a group.
      *
      * The deletion kind is chosen by who is deleting whose message:
-     * - Authors deleting their own message use kind 5 (NIP-09 standard deletion).
+     * - Authors deleting their own message use kind 5 (NIP-09 standard deletion), which stays
+     *   honored outside this relay by anything that mirrored the event.
      * - Admins deleting another member's message use kind 9005 (NIP-29
      *   delete-event moderation action). NIP-29 relays only honor a kind 5 from
      *   the author; removing someone else's message requires the admin kind 9005.
+     * - A kind 5 an admin sends is retried as 9005 when the relay refuses the kind outright
+     *   ("kind 5 not allowed"): some NIP-29 relays accept only the moderation route, and an
+     *   admin must not be the one member who cannot delete their own message there.
      *
      * Sends the deletion event to the relay; the relay broadcasts it and
      * handleDeletion() removes it from local state when received back.
@@ -3447,15 +3451,14 @@ class GroupManager(
                 _threadRoots.value[groupId].orEmpty() +
                 _threadReplies.value[groupId].orEmpty()
             ).firstOrNull { it.id == messageId }?.pubkey
-        val deletionKind = deletionKindFor(
-            isOwnMessage = messageAuthor == pubKey,
-            isAdmin = isGroupAdmin(groupId, pubKey),
-        )
-        return try {
+        val isAdmin = isGroupAdmin(groupId, pubKey)
+        val deletionKind = deletionKindFor(isOwnMessage = messageAuthor == pubKey, isAdmin = isAdmin)
+
+        suspend fun publish(kind: Int): org.nostr.nostrord.network.PublishResult {
             val event = Event(
                 pubkey = pubKey,
                 createdAt = epochMillis() / 1000,
-                kind = deletionKind,
+                kind = kind,
                 tags = listOf(
                     listOf("h", groupId),
                     listOf("e", messageId),
@@ -3464,12 +3467,25 @@ class GroupManager(
             )
             val signedEvent = signEvent(event)
             val eventId = signedEvent.id
-                ?: return Result.Error(AppError.Group.SendFailed(groupId, Exception("Event ID not generated")))
+                ?: return org.nostr.nostrord.network.PublishResult.Error("", Exception("Event ID not generated"))
             val message = buildJsonArray {
                 add("EVENT")
                 add(signedEvent.toJsonObject())
             }.toString()
-            when (val result = currentClient.sendAndAwaitOk(message, eventId)) {
+            return currentClient.sendAndAwaitOk(message, eventId)
+        }
+
+        return try {
+            val first = publish(deletionKind)
+            // Only a rejection escalates: a timeout is a connectivity problem, and resending
+            // would race a delete the relay may still be processing.
+            val result =
+                if (first is org.nostr.nostrord.network.PublishResult.Rejected && deletionKind == 5 && isAdmin) {
+                    publish(ADMIN_DELETE_EVENT_KIND)
+                } else {
+                    first
+                }
+            when (result) {
                 is org.nostr.nostrord.network.PublishResult.Success -> Result.Success(Unit)
                 is org.nostr.nostrord.network.PublishResult.Rejected ->
                     Result.Error(AppError.Group.SendFailed(groupId, Exception(result.reason)))
@@ -5321,6 +5337,9 @@ class GroupManager(
     }
 }
 
+/** NIP-29 delete-event: the admin moderation action that removes any member's event. */
+internal const val ADMIN_DELETE_EVENT_KIND = 9005
+
 /**
  * Pick the deletion event kind for a group message.
  *
@@ -5328,6 +5347,8 @@ class GroupManager(
  * - Kind 9005 is the NIP-29 delete-event moderation action; NIP-29 relays only let an
  *   admin remove another member's message through it, never through kind 5.
  *
- * An admin deleting their own message stays on kind 5 (they are the author).
+ * An admin deleting their own message stays on kind 5 (they are the author, and the NIP-09
+ * deletion also travels outside this relay). [GroupManager.deleteMessage] falls back to 9005
+ * if the relay rejects kind 5.
  */
-internal fun deletionKindFor(isOwnMessage: Boolean, isAdmin: Boolean): Int = if (!isOwnMessage && isAdmin) 9005 else 5
+internal fun deletionKindFor(isOwnMessage: Boolean, isAdmin: Boolean): Int = if (!isOwnMessage && isAdmin) ADMIN_DELETE_EVENT_KIND else 5

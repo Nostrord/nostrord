@@ -130,6 +130,7 @@ fun ThreadsScreen(
     val pendingReactions by vm.pendingReactions.collectAsState()
     val reactionError by vm.reactionError.collectAsState()
     val deleteError by vm.deleteError.collectAsState()
+    val isAdmin by vm.isAdmin.collectAsState()
     val myPubkey = remember { vm.getPublicKey() }
 
     // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
@@ -236,9 +237,9 @@ fun ThreadsScreen(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f),
                     )
-                    val ownRoot = openThread?.root
-                    if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
-                        IconButton(onClick = { deleteTarget = ownRoot }) {
+                    val root = openThread?.root
+                    if (root != null && canDeleteThreadMessage(root.pubkey, myPubkey, isAdmin)) {
+                        IconButton(onClick = { deleteTarget = root }) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete thread", tint = NostrordColors.TextSecondary)
                         }
                     }
@@ -271,6 +272,7 @@ fun ThreadsScreen(
                                     userMetadata = userMetadata,
                                     isRoot = isRoot,
                                     myPubkey = myPubkey,
+                                    isAdmin = isAdmin,
                                     route = route,
                                     status = messageStatus[msg.id],
                                     reactions = reactions[msg.id] ?: emptyMap(),
@@ -434,10 +436,11 @@ fun ThreadsScreen(
 
     deleteTarget?.let { target ->
         val isRoot = target.id == openThread?.root?.id
+        val moderatedAuthor = if (target.pubkey == myPubkey) null else threadDisplayName(target.pubkey, userMetadata[target.pubkey])
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text(if (isRoot) "Delete thread?" else "Delete message?") },
-            text = { Text("This cannot be undone.") },
+            text = { Text(deleteThreadConfirmBody(isRoot, moderatedAuthor)) },
             confirmButton = {
                 TextButton(onClick = {
                     deleteTarget = null
@@ -641,6 +644,7 @@ private fun ThreadMessage(
     userMetadata: Map<String, UserMetadata>,
     isRoot: Boolean,
     myPubkey: String?,
+    isAdmin: Boolean,
     route: GroupRoute,
     status: GroupManager.MessageStatus?,
     reactions: Map<String, GroupManager.ReactionInfo>,
@@ -660,7 +664,7 @@ private fun ThreadMessage(
     onDismiss: () -> Unit,
 ) {
     val meta = userMetadata[msg.pubkey]
-    val isAuthor = myPubkey != null && myPubkey == msg.pubkey
+    val canDelete = canDeleteThreadMessage(msg.pubkey, myPubkey, isAdmin)
     var menuVisible by remember { mutableStateOf(false) }
     var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
     val writeClipboard = rememberClipboardWriter()
@@ -700,7 +704,7 @@ private fun ThreadMessage(
             visible = menuVisible,
             onDismiss = { menuVisible = false },
             anchorOffsetPx = menuAnchorPx,
-            isAuthor = isAuthor,
+            canDelete = canDelete,
             canShareToChat = isRoot,
             onAction = { action ->
                 when (action) {

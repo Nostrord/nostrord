@@ -12,6 +12,7 @@ class DeletionKindTest {
     @Test
     fun `admin deleting own message uses kind 5`() {
         // An admin is still the author of their own message, so it is a standard deletion.
+        // A relay that refuses kind 5 gets the 9005 retry from deleteMessage instead.
         assertEquals(5, deletionKindFor(isOwnMessage = true, isAdmin = true))
     }
 

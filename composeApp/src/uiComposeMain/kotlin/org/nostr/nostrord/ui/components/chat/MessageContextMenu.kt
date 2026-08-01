@@ -160,7 +160,8 @@ fun ThreadMessageContextMenu(
     onDismiss: () -> Unit,
     onAction: (MessageContextAction) -> Unit,
     anchorOffsetPx: Offset? = null,
-    isAuthor: Boolean = false,
+    // Author (kind:5) or group admin (kind:9005); see canDeleteThreadMessage.
+    canDelete: Boolean = false,
     // Roots only: announce the thread in the group chat.
     canShareToChat: Boolean = false,
 ) {
@@ -238,7 +239,7 @@ fun ThreadMessageContextMenu(
                 },
             )
 
-            if (isAuthor) {
+            if (canDelete) {
                 ContextMenuDivider()
 
                 ContextMenuItem(

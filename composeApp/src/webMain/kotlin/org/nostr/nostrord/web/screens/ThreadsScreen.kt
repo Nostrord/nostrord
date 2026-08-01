@@ -13,6 +13,8 @@ import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
+import org.nostr.nostrord.ui.screens.group.canDeleteThreadMessage
+import org.nostr.nostrord.ui.screens.group.deleteThreadConfirmBody
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadTitle
@@ -114,6 +116,7 @@ val ThreadsScreen =
         val pendingReactions = useStateFlow(vm.pendingReactions)
         val reactionError = useStateFlow(vm.reactionError)
         val deleteError = useStateFlow(vm.deleteError)
+        val isAdmin = useStateFlow(vm.isAdmin)
         val myPubkey = vm.getPublicKey()
 
         // Full-picker target: the (eventId, authorPubkey) of the message being reacted to.
@@ -377,12 +380,12 @@ val ThreadsScreen =
                                 className = ClassName("threads-title")
                                 +"Thread"
                             }
-                            val ownRoot = openThread?.root
-                            if (myPubkey != null && ownRoot != null && ownRoot.pubkey == myPubkey) {
+                            val root = openThread?.root
+                            if (root != null && canDeleteThreadMessage(root.pubkey, myPubkey, isAdmin)) {
                                 button {
                                     className = ClassName("icon-btn")
                                     title = "Delete thread"
-                                    onClick = { setDeleteTarget(ownRoot) }
+                                    onClick = { setDeleteTarget(root) }
                                     icon(Ic.Delete)
                                 }
                             }
@@ -613,7 +616,7 @@ val ThreadsScreen =
                         copyToClipboard(m.msg.toEventJson())
                         setCtxMenu(null)
                     }
-                    if (myPubkey != null && myPubkey == m.msg.pubkey) {
+                    if (canDeleteThreadMessage(m.msg.pubkey, myPubkey, isAdmin)) {
                         div { className = ClassName("ctx-divider") }
                         ctxItem(Ic.Delete, "Delete message", danger = true) {
                             setCtxMenu(null)
@@ -650,9 +653,10 @@ val ThreadsScreen =
             // Delete confirm modal (chat parity: destructive confirm, no window.confirm).
             deleteTarget?.let { target ->
                 val isRoot = target.id == route.threadRootId
+                val moderatedAuthor = if (target.pubkey == myPubkey) null else threadDisplayName(target.pubkey, userMetadata[target.pubkey])
                 confirmDialog(
                     title = if (isRoot) "Delete Thread" else "Delete Message",
-                    body = "Are you sure you want to delete this ${if (isRoot) "thread" else "message"}? This action cannot be undone.",
+                    body = deleteThreadConfirmBody(isRoot, moderatedAuthor),
                     confirmLabel = "Delete",
                     danger = true,
                     onCancel = { setDeleteTarget(null) },

@@ -12,6 +12,8 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.ui.screens.group.ReactionChip
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.buildThreadSummaries
+import org.nostr.nostrord.ui.screens.group.canDeleteThreadMessage
+import org.nostr.nostrord.ui.screens.group.deleteThreadConfirmBody
 import org.nostr.nostrord.ui.screens.group.filterMutedReactions
 import org.nostr.nostrord.ui.screens.group.friendlyRelayError
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
@@ -23,6 +25,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -248,6 +251,31 @@ class ThreadsViewModelTest {
             chips,
         )
         assertTrue(topReactionChips(emptyMap()).isEmpty())
+    }
+
+    @Test
+    fun `canDeleteThreadMessage covers the author and any admin`() {
+        val me = "me"
+        val other = "other"
+        // Author deletes their own (kind:5), admin deletes anyone's (kind:9005).
+        assertTrue(canDeleteThreadMessage(me, me, isAdmin = false))
+        assertTrue(canDeleteThreadMessage(other, me, isAdmin = true))
+        assertTrue(canDeleteThreadMessage(me, me, isAdmin = true))
+        // A plain member gets no delete on someone else's thread, and logged out none at all.
+        assertFalse(canDeleteThreadMessage(other, me, isAdmin = false))
+        assertFalse(canDeleteThreadMessage(other, null, isAdmin = true))
+    }
+
+    @Test
+    fun `deleteThreadConfirmBody names the author only when moderating`() {
+        assertEquals(
+            "Are you sure you want to delete this thread? This cannot be undone.",
+            deleteThreadConfirmBody(isRoot = true, authorName = null),
+        )
+        assertEquals(
+            "Delete this message by Alice? Everyone in the group stops seeing it, and this cannot be undone.",
+            deleteThreadConfirmBody(isRoot = false, authorName = "Alice"),
+        )
     }
 
     @Test
