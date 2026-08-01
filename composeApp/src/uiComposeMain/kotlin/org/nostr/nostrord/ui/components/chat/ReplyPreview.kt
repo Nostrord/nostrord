@@ -1,7 +1,7 @@
 package org.nostr.nostrord.ui.components.chat
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -140,13 +140,20 @@ fun ReplyPreview(
     parentMessage: NostrGroupClient.NostrMessage?,
     parentMetadata: UserMetadata?,
     resolveMetadata: (String) -> UserMetadata? = { null },
-    onReplyClick: () -> Unit = {},
+    // Null when the quote is not tappable (the parent is not in this thread / chat page). Do NOT
+    // pass an empty lambda for that: a no-op clickable still consumes the gesture, so a
+    // long-press on the quote would never reach the row's context-menu detector.
+    onReplyClick: (() -> Unit)? = null,
+    // Keeps the row's context menu reachable from inside the quote: a plain clickable consumes
+    // the long-press, so the tappable quote has to offer the gesture itself.
+    onReplyLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     if (parentMessage == null) {
         // Parent message not found - show placeholder
         ReplyPreviewContainer(
             onClick = onReplyClick,
+            onLongClick = onReplyLongClick,
             modifier = modifier,
         ) {
             Text(
@@ -184,6 +191,7 @@ fun ReplyPreview(
 
     ReplyPreviewContainer(
         onClick = onReplyClick,
+        onLongClick = onReplyLongClick,
         modifier = modifier,
     ) {
         Text(
@@ -212,7 +220,8 @@ fun ReplyPreview(
  */
 @Composable
 private fun ReplyPreviewContainer(
-    onClick: () -> Unit,
+    onClick: (() -> Unit)?,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -230,8 +239,15 @@ private fun ReplyPreviewContainer(
                     NostrordColors.BackgroundFloating
                 },
             )
-            .clickable(onClick = onClick)
-            .pointerHoverIcon(PointerIcon.Hand, overrideDescendants = true)
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                        .pointerHoverIcon(PointerIcon.Hand, overrideDescendants = true)
+                } else {
+                    Modifier
+                },
+            )
             .padding(vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {

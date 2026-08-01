@@ -609,6 +609,8 @@ interface NostrRepositoryApi {
         targetEventId: String,
         targetPubkey: String,
         emoji: String,
+        /** Thread root when reacting inside a thread; null for chat reactions. */
+        threadRootId: String? = null,
     ): Result<Unit>
 
     /**

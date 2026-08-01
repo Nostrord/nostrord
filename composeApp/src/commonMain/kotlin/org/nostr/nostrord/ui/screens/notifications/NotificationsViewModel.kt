@@ -155,3 +155,19 @@ class NotificationsViewModel(
         const val KEY_UNREAD_ONLY = "notifications_unread_only"
     }
 }
+
+/**
+ * Muted action text for a feed row. Reactions carry their emoji; anything about a forum thread
+ * says so, since the row otherwise reads identically to the chat event it is not. Shared so the
+ * Compose and web feeds cannot word the same entry differently.
+ */
+fun notificationActionLabel(entry: NotificationEntry): String {
+    val inThread = if (entry.threadRootId != null) " in a thread" else ""
+    return when (entry.type) {
+        NotificationType.MENTION -> "mentioned you$inThread"
+        NotificationType.REPLY -> "replied$inThread"
+        NotificationType.MESSAGE -> "posted$inThread"
+        NotificationType.REACTION -> "reacted ${entry.emoji ?: ""}".trim() + inThread
+        NotificationType.GROUP_ADD -> "added you"
+    }
+}

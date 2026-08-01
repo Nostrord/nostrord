@@ -2675,9 +2675,8 @@ private fun ChildrenBuilder.joinErrorDialog(message: String, onDismiss: () -> Un
     }
 }
 
-/** Error dialog shown when the relay rejects a kind:5. Single OK button —
- *  matches the native AlertDialog at GroupScreen.kt:548-562. */
-internal fun ChildrenBuilder.deleteMessageErrorDialog(message: String, onDismiss: () -> Unit) {
+/** Acknowledge-only failure dialog: single OK button, nothing to retry from here. */
+internal fun ChildrenBuilder.errorDialog(title: String, message: String, onDismiss: () -> Unit) {
     div {
         className = ClassName("modal-overlay")
         onClick = { onDismiss() }
@@ -2686,7 +2685,7 @@ internal fun ChildrenBuilder.deleteMessageErrorDialog(message: String, onDismiss
             onClick = { it.stopPropagation() }
             div {
                 className = ClassName("modal-title")
-                +"Could Not Delete Message"
+                +title
             }
             div {
                 className = ClassName("modal-subtitle tight")
@@ -2703,6 +2702,10 @@ internal fun ChildrenBuilder.deleteMessageErrorDialog(message: String, onDismiss
         }
     }
 }
+
+/** Error dialog shown when the relay rejects a kind:5. Matches the native AlertDialog at
+ *  GroupScreen.kt:548-562. */
+internal fun ChildrenBuilder.deleteMessageErrorDialog(message: String, onDismiss: () -> Unit) = errorDialog("Could Not Delete Message", message, onDismiss)
 
 /** Error dialog shown when a media upload is rejected (too large, unsupported
  *  format, or an auth/server failure). Single OK button — mirrors the native
@@ -3828,7 +3831,7 @@ private val QuotedEvent =
         val quotedTags = local?.tags ?: cachedEv?.tags ?: emptyList()
 
         // Flips true when the event never resolves (e.g. its relay isn't connected), so the card
-        // shows "Event not found" instead of spinning forever — parity with native's 5s give-up.
+        // shows the removed-or-unavailable card instead of spinning forever — parity with native's 5s give-up.
         val (notFound, setNotFound) = useState { false }
         val (menuOpen, setMenuOpen) = useState { false }
 
@@ -3958,7 +3961,9 @@ private val QuotedEvent =
                 }
                 div {
                     className = ClassName("thread-quote-title")
-                    +(threadTitle ?: if (notFound) "Thread not found" else "Loading thread...")
+                    // Deleted and unreachable look identical from here (the relay just does not
+                    // serve it), so the copy must not claim either one.
+                    +(threadTitle ?: if (notFound) "Thread removed or unavailable" else "Loading thread...")
                 }
                 threadSnippet?.let {
                     div {
@@ -4144,7 +4149,7 @@ private val QuotedEvent =
                         icon(Ic.Warning)
                         span {
                             className = ClassName("quoted-event-notfound-label")
-                            +"Event not found"
+                            +"Event removed or unavailable"
                         }
                         button {
                             className = ClassName("quoted-event-retry")

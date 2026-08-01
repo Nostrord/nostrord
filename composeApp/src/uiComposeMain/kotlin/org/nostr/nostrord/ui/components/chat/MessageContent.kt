@@ -1923,7 +1923,9 @@ private fun QuotedEvent(
                         color = NostrordColors.TextMuted,
                     )
                     Text(
-                        text = "Event not found",
+                        // Deleted and unreachable look identical from here (the relay just does
+                        // not serve it), so the copy must not claim either one.
+                        text = "Event removed or unavailable",
                         color = NostrordColors.TextMuted,
                         style = NostrordTypography.Caption,
                     )
@@ -3054,7 +3056,9 @@ private fun AddressableEvent(
                         color = NostrordColors.TextMuted,
                     )
                     Text(
-                        text = "Event not found",
+                        // Deleted and unreachable look identical from here (the relay just does
+                        // not serve it), so the copy must not claim either one.
+                        text = "Event removed or unavailable",
                         color = NostrordColors.TextMuted,
                         style = NostrordTypography.Caption,
                     )

@@ -2,9 +2,11 @@ package org.nostr.nostrord.web.screens
 
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.notifications.NotificationEntry
-import org.nostr.nostrord.notifications.NotificationType
+import org.nostr.nostrord.ui.navigation.GroupRoute
+import org.nostr.nostrord.ui.navigation.notificationRoute
 import org.nostr.nostrord.ui.screens.notifications.NotifFilter
 import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
+import org.nostr.nostrord.ui.screens.notifications.notificationActionLabel
 import org.nostr.nostrord.utils.formatTimestamp
 import org.nostr.nostrord.utils.shortNpub
 import org.nostr.nostrord.web.bridge.useStateFlow
@@ -23,7 +25,7 @@ import web.cssom.ClassName
 
 external interface NotificationsPageProps : Props {
     var vm: NotificationsViewModel
-    var onOpen: (relayUrl: String, groupId: String, messageId: String?) -> Unit
+    var onOpenRoute: (GroupRoute) -> Unit
     var onOpenDrawer: () -> Unit
 }
 
@@ -102,7 +104,7 @@ val NotificationsPage =
                                     ?: entry.groupId.take(8)
                             notifRow(entry, meta, groupName, groupMeta?.picture) {
                                 vm.markRead(entry.id)
-                                props.onOpen(entry.relayUrl, entry.groupId, entry.messageId)
+                                props.onOpenRoute(notificationRoute(entry.relayUrl, entry.groupId, entry.messageId, entry.threadRootId))
                             }
                         }
                     }
@@ -115,13 +117,7 @@ private fun actorName(meta: UserMetadata?, pubkey: String): String = meta?.displ
     ?: meta?.name?.takeIf { it.isNotBlank() }
     ?: shortNpub(pubkey)
 
-private fun actionLabel(entry: NotificationEntry): String = when (entry.type) {
-    NotificationType.MENTION -> "mentioned you"
-    NotificationType.REPLY -> "replied"
-    NotificationType.MESSAGE -> "posted"
-    NotificationType.REACTION -> "reacted ${entry.emoji ?: ""}".trim()
-    NotificationType.GROUP_ADD -> "added you"
-}
+private fun actionLabel(entry: NotificationEntry): String = notificationActionLabel(entry)
 
 private fun ChildrenBuilder.notifRow(
     entry: NotificationEntry,

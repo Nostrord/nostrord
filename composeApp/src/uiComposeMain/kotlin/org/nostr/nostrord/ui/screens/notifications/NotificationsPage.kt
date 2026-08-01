@@ -43,9 +43,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.nostr.nostrord.notifications.NotificationEntry
-import org.nostr.nostrord.notifications.NotificationType
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.layout.PageHeader
+import org.nostr.nostrord.ui.navigation.GroupRoute
+import org.nostr.nostrord.ui.navigation.notificationRoute
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.utils.formatTimestamp
@@ -60,7 +61,7 @@ import org.nostr.nostrord.utils.shortNpub
 @Composable
 fun NotificationsPage(
     vm: NotificationsViewModel,
-    onOpenGroupAtRelay: (groupId: String, groupName: String?, relayUrl: String, targetMessageId: String?) -> Unit,
+    onOpenRoute: (GroupRoute) -> Unit,
     modifier: Modifier = Modifier,
     onOpenDrawer: (() -> Unit)? = null,
 ) {
@@ -147,7 +148,7 @@ fun NotificationsPage(
                             groupPicture = groupMeta?.picture,
                             onClick = {
                                 vm.markRead(entry.id)
-                                onOpenGroupAtRelay(entry.groupId, groupName, entry.relayUrl, entry.messageId)
+                                onOpenRoute(notificationRoute(entry.relayUrl, entry.groupId, entry.messageId, entry.threadRootId))
                             },
                         )
                     }
@@ -256,11 +257,4 @@ private fun NotificationRow(
     }
 }
 
-/** Muted action text per type; reactions show the emoji (no dedicated tab). */
-private fun actionLabel(entry: NotificationEntry): String = when (entry.type) {
-    NotificationType.MENTION -> "mentioned you"
-    NotificationType.REPLY -> "replied"
-    NotificationType.MESSAGE -> "posted"
-    NotificationType.REACTION -> "reacted ${entry.emoji ?: ""}".trim()
-    NotificationType.GROUP_ADD -> "added you"
-}
+private fun actionLabel(entry: NotificationEntry): String = notificationActionLabel(entry)

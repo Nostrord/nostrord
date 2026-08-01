@@ -22,6 +22,11 @@ data class NotificationEntry(
     val createdAt: Long,
     val preview: String,
     val messageId: String? = null,
+    /**
+     * Set when the entry is about a forum thread event: the kind:11 root to open. Chat entries
+     * leave it null. Defaulted so entries persisted before threads notified still deserialize.
+     */
+    val threadRootId: String? = null,
     val emoji: String? = null,
     val read: Boolean = false,
     // Snapshot of the group/relay display names at the moment the notification
@@ -75,11 +80,33 @@ class NotificationHistoryStore {
     }
 
     /** Mark every unread notification for [groupId] as read. No-op if none match. */
+    /**
+     * Mark a group's CHAT notifications read, as reading its chat does.
+     *
+     * Thread entries are left alone: their event is not in the chat, so opening the chat is no
+     * evidence the user saw it. They clear via [markReadForThread] when that thread is opened.
+     */
     fun markReadForGroup(groupId: String) {
         var changed = false
         _entries.update { current ->
             current.map {
-                if (it.groupId == groupId && !it.read) {
+                if (it.groupId == groupId && it.threadRootId == null && !it.read) {
+                    changed = true
+                    it.copy(read = true)
+                } else {
+                    it
+                }
+            }
+        }
+        if (changed) persist()
+    }
+
+    /** Mark every notification about thread [rootId] read: the user opened that thread. */
+    fun markReadForThread(rootId: String) {
+        var changed = false
+        _entries.update { current ->
+            current.map {
+                if (it.threadRootId == rootId && !it.read) {
                     changed = true
                     it.copy(read = true)
                 } else {

@@ -46,6 +46,22 @@ data class GroupRoute(
 enum class GroupView { Chat, Threads }
 
 /**
+ * Where a notification entry opens. Thread entries carry the root to open and land on the
+ * threads pane, targeting the reply/reaction inside it; everything else opens the chat at its
+ * message. Shared so both UIs route a notification the same way.
+ */
+fun notificationRoute(
+    relayUrl: String,
+    groupId: String,
+    messageId: String?,
+    threadRootId: String?,
+): GroupRoute = if (threadRootId != null) {
+    GroupRoute(relayUrl, groupId, messageId = messageId, view = GroupView.Threads, threadRootId = threadRootId)
+} else {
+    GroupRoute(relayUrl, groupId, messageId = messageId)
+}
+
+/**
  * Shareable web link for a thread: https://web.nostrord.com/#/g/<relay>/<id>/threads/<rootId>,
  * plus `?e=<messageId>` targeting the specific message to scroll to and flash. Backs "Copy
  * event link" in the thread context menu (the chat's nostrord.com/open ?e= form scrolls the
