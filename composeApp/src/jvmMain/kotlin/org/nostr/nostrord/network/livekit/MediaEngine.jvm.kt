@@ -13,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.nostr.nostrord.utils.AppError
@@ -209,14 +210,16 @@ actual class MediaEngine actual constructor() {
             launch { joined.state.collect { _connectionState.value = it.toAvState() } }
             launch { joined.microphoneEnabled.collect { _micEnabled.value = it } }
             launch {
-                joined.participants.collect { people ->
-                    _participants.value = people.map { person ->
+                // Subscription events only describe remote tracks; the local camera and mic
+                // are this engine's own state, combined in so toggling them re-emits the
+                // roster (the room's participant list alone never changes on a local toggle,
+                // which would leave the local tile stuck on its join-time snapshot).
+                combine(joined.participants, _cameraEnabled, _micEnabled) { people, camera, mic ->
+                    people.map { person ->
                         val mapped = person.toAvParticipant()
-                        // Subscription events only describe remote tracks; the local camera
-                        // state is this engine's own.
-                        if (person.isLocal) mapped.copy(cameraEnabled = _cameraEnabled.value, micEnabled = _micEnabled.value) else mapped
+                        if (person.isLocal) mapped.copy(cameraEnabled = camera, micEnabled = mic) else mapped
                     }
-                }
+                }.collect { _participants.value = it }
             }
         }
     }
