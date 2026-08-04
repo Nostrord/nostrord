@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.awt.GraphicsEnvironment
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.prefs.Preferences
@@ -16,6 +17,9 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import javax.swing.JOptionPane
+import javax.swing.SwingUtilities
+import kotlin.system.exitProcess
 
 sealed class UnlockState {
     object Initializing : UnlockState()
@@ -93,13 +97,20 @@ actual object SecureStorage {
         }
         legacyKey = loadLegacyKey()
 
-        val existingKeychainKey = KeychainStore.getMasterKey()
-        if (existingKeychainKey != null) {
-            masterKey = SecretKeySpec(existingKeychainKey, "AES")
-            keySource = KeySource.Keychain
-            _unlockState.value = UnlockState.Unlocked
-            migrateLegacyIfNeeded()
-            return
+        when (val result = KeychainStore.readMasterKey()) {
+            is MasterKeyResult.Found -> {
+                masterKey = SecretKeySpec(result.key, "AES")
+                keySource = KeySource.Keychain
+                _unlockState.value = UnlockState.Unlocked
+                migrateLegacyIfNeeded()
+                return
+            }
+            // Denied is fatal: an entry exists but the OS refused it. Continuing would
+            // mint a fresh key over it (orphaning the real one) or run on an ephemeral
+            // key whose writes silently clobber the real key's blobs. Exit instead;
+            // relaunching and allowing access recovers everything.
+            MasterKeyResult.Denied -> exitForDeniedKeychain()
+            MasterKeyResult.Absent -> {}
         }
 
         // Keychain available but empty: adopt it ONLY when no passphrase protects the
@@ -135,6 +146,33 @@ actual object SecureStorage {
                 _unlockState.value = UnlockState.Unlocked
             }
         }
+    }
+
+    private fun exitForDeniedKeychain(): Nothing {
+        val message =
+            "Nostrord was denied access to its entry in the system keychain, so your " +
+                "stored accounts cannot be unlocked.\n\n" +
+                "The app will close to keep that data safe. Reopen it and choose " +
+                "\"Always Allow\" when the system asks for keychain access."
+        System.err.println(message)
+        if (!GraphicsEnvironment.isHeadless()) {
+            val show = {
+                JOptionPane.showMessageDialog(
+                    null,
+                    message,
+                    "Keychain access denied",
+                    JOptionPane.ERROR_MESSAGE,
+                )
+            }
+            try {
+                // First touch of SecureStorage happens during Compose composition, i.e.
+                // ON the AWT event dispatch thread — invokeAndWait would throw there.
+                if (SwingUtilities.isEventDispatchThread()) show() else SwingUtilities.invokeAndWait(show)
+            } catch (_: Throwable) {
+                // Dialog is best-effort; the exit below is what protects the data.
+            }
+        }
+        exitProcess(1)
     }
 
     fun unlockWithPassphrase(passphrase: String): Boolean {
