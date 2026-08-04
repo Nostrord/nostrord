@@ -5,9 +5,26 @@ import com.github.javakeyring.Keyring
 import com.github.javakeyring.PasswordAccessException
 import java.util.Base64
 
+internal sealed interface MasterKeyResult {
+    data class Found(val key: ByteArray) : MasterKeyResult
+
+    data object Absent : MasterKeyResult
+
+    // The OS keyring holds an entry but refused to hand it over (user hit Deny on the
+    // macOS ACL prompt, locked Secret Service collection, ...). Minting a fresh key or
+    // running with an ephemeral one here would orphan every blob encrypted with the
+    // real key — callers must treat this as fatal, never as "no key yet".
+    data object Denied : MasterKeyResult
+}
+
 internal object KeychainStore {
     private const val SERVICE = "org.nostr.nostrord"
     private const val ACCOUNT_MASTER_KEY = "master_encryption_key"
+
+    // java-keyring 1.0.3 signals "entry does not exist" only via this message prefix
+    // (same string in the osx and freedesktop backends); every other failure is an
+    // access/backend error. Message-matching is version-fragile — revisit on upgrade.
+    private const val NOT_FOUND_PREFIX = "No stored credentials match"
 
     private val keyring: Keyring? by lazy {
         // Unit tests must not touch the real OS keyring: java-keyring's Secret Service
@@ -28,15 +45,20 @@ internal object KeychainStore {
 
     fun isAvailable(): Boolean = keyring != null
 
-    fun getMasterKey(): ByteArray? {
-        val ring = keyring ?: return null
+    fun readMasterKey(): MasterKeyResult {
+        val ring = keyring ?: return MasterKeyResult.Absent
         return try {
-            val b64 = ring.getPassword(SERVICE, ACCOUNT_MASTER_KEY) ?: return null
-            Base64.getDecoder().decode(b64)
-        } catch (_: PasswordAccessException) {
-            null
+            val b64 = ring.getPassword(SERVICE, ACCOUNT_MASTER_KEY)
+                ?: return MasterKeyResult.Absent
+            MasterKeyResult.Found(Base64.getDecoder().decode(b64))
+        } catch (e: PasswordAccessException) {
+            if (e.message?.startsWith(NOT_FOUND_PREFIX) == true) {
+                MasterKeyResult.Absent
+            } else {
+                MasterKeyResult.Denied
+            }
         } catch (_: Throwable) {
-            null
+            MasterKeyResult.Denied
         }
     }
 
