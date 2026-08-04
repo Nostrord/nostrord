@@ -1,10 +1,12 @@
 package org.nostr.nostrord.network.livekit
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.browser.document
 import kotlinx.coroutines.await
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.w3c.dom.Node
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 
@@ -46,6 +48,9 @@ actual class MediaEngine actual constructor() {
     actual val cameraEnabled: StateFlow<Boolean> = _cameraEnabled.asStateFlow()
 
     private var room: Room? = null
+
+    /** `<audio>` elements created for subscribed remote audio, removed on unsubscribe/leave. */
+    private val audioSinks = mutableListOf<dynamic>()
 
     actual suspend fun connect(credentials: LiveKitCredentials): Result<Unit> {
         if (room != null) {
@@ -143,13 +148,33 @@ actual class MediaEngine actual constructor() {
             RoomEvent.PARTICIPANT_CONNECTED,
             RoomEvent.PARTICIPANT_DISCONNECTED,
             RoomEvent.ACTIVE_SPEAKERS_CHANGED,
-            RoomEvent.TRACK_SUBSCRIBED,
-            RoomEvent.TRACK_UNSUBSCRIBED,
             RoomEvent.TRACK_MUTED,
             RoomEvent.TRACK_UNMUTED,
             RoomEvent.LOCAL_TRACK_PUBLISHED,
             RoomEvent.LOCAL_TRACK_UNPUBLISHED,
         ).forEach { target.on(it, onChange) }
+
+        // Remote audio is only audible once its track is attached to an <audio> element:
+        // livekit-client does not play subscribed audio on its own. Video needs no element
+        // here because the tiles attach it themselves via attachVideo.
+        target.on(RoomEvent.TRACK_SUBSCRIBED) { track: dynamic ->
+            if (track?.kind == "audio") {
+                val element = track.attach()
+                document.body?.appendChild(element.unsafeCast<Node>())
+                audioSinks.add(element)
+            }
+            refresh(target)
+        }
+        target.on(RoomEvent.TRACK_UNSUBSCRIBED) { track: dynamic ->
+            if (track?.kind == "audio") {
+                val detached = track.detach().unsafeCast<Array<dynamic>>()
+                detached.forEach { el ->
+                    audioSinks.remove(el)
+                    el?.remove()
+                }
+            }
+            refresh(target)
+        }
 
         target.on(RoomEvent.CONNECTED) {
             _connectionState.value = AvConnectionState.Connected
@@ -194,6 +219,8 @@ actual class MediaEngine actual constructor() {
         } catch (e: Throwable) {
             // Already gone; the state reset below is what matters.
         }
+        audioSinks.forEach { el -> runCatching { el?.remove() } }
+        audioSinks.clear()
         if (room === target) room = null
         _connectionState.value = AvConnectionState.Disconnected
         _participants.value = emptyList()
