@@ -1,6 +1,5 @@
 package org.nostr.nostrord.ui.components.chat
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -32,7 +32,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,14 +52,12 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.livekit.AV_UNSUPPORTED_MESSAGE
 import org.nostr.nostrord.network.livekit.AvConnectionState
-import org.nostr.nostrord.network.livekit.VideoFrameSink
 import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceParticipant
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
-import org.nostr.nostrord.ui.util.rgbaToImageBitmap
 import org.nostr.nostrord.utils.shortNpub
 
 /** Faces stacked in the bar before it stops. */
@@ -353,17 +349,21 @@ private fun AvSpaceRoomDialog(
                             modifier = Modifier
                                 .clip(CircleShape)
                                 .background(
-                                    if (connection == AvConnectionState.Connecting) {
-                                        NostrordColors.Primary.copy(alpha = 0.6f)
-                                    } else {
+                                    if (connection == AvConnectionState.Disconnected) {
                                         NostrordColors.Primary
+                                    } else {
+                                        NostrordColors.Primary.copy(alpha = 0.6f)
                                     },
                                 )
                                 .clickable(enabled = connection == AvConnectionState.Disconnected) { vm.join() }
                                 .padding(horizontal = Spacing.xxl, vertical = Spacing.sm),
                         ) {
                             Text(
-                                text = if (connection == AvConnectionState.Connecting) "Joining..." else "Join room",
+                                text = when (connection) {
+                                    AvConnectionState.Connecting -> "Joining..."
+                                    AvConnectionState.Reconnecting -> "Reconnecting..."
+                                    else -> "Join room"
+                                },
                                 color = Color.White,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -483,7 +483,7 @@ private fun AudioTile(
 
 /**
  * A 16:9 tile that renders [participant]'s video once their track is attachable, falling back
- * to the avatar. Frames arrive through a [VideoFrameSink] the engine pushes RGBA into.
+ * to the avatar. Drawing is per platform, behind [AvVideoSurface].
  */
 @Composable
 private fun VideoTile(
@@ -491,17 +491,7 @@ private fun VideoTile(
     participant: AvSpaceParticipant,
     userMetadata: Map<String, UserMetadata>,
 ) {
-    val sink = remember(participant.identity) { VideoFrameSink() }
-    var attached by remember(participant.identity) { mutableStateOf(false) }
-
-    DisposableEffect(participant.identity, participant.cameraEnabled) {
-        val identity = participant.identity
-        attached = identity != null && participant.cameraEnabled && vm.attachVideo(identity, sink)
-        onDispose {
-            if (identity != null) vm.detachVideo(identity, sink)
-        }
-    }
-    val frame by sink.frame.collectAsState()
+    val identity = participant.identity
 
     Box(
         modifier = Modifier
@@ -517,24 +507,21 @@ private fun VideoTile(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        val current = frame
-        if (attached && current != null) {
-            // A new ImageBitmap per frame: correctness first. Tile-sized frames keep this
-            // cheap, and a reused bitmap would need pixel-write APIs Compose does not share.
-            Image(
-                bitmap = rgbaToImageBitmap(current.width, current.height, current.rgba),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        } else {
-            OptimizedUserAvatar(
-                imageUrl = userMetadata[participant.pubkey]?.picture,
-                pubkey = participant.pubkey,
-                displayName = nameOf(participant.pubkey, userMetadata),
-                size = 48.dp,
-            )
-        }
+        AvVideoSurface(
+            identity = identity,
+            hasVideo = participant.cameraEnabled,
+            attach = { surface -> identity != null && vm.attachVideo(identity, surface) },
+            detach = { surface -> if (identity != null) vm.detachVideo(identity, surface) },
+            modifier = Modifier.fillMaxSize(),
+            fallback = {
+                OptimizedUserAvatar(
+                    imageUrl = userMetadata[participant.pubkey]?.picture,
+                    pubkey = participant.pubkey,
+                    displayName = nameOf(participant.pubkey, userMetadata),
+                    size = 48.dp,
+                )
+            },
+        )
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),

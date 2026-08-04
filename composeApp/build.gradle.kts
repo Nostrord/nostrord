@@ -91,6 +91,9 @@ kotlin {
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             // Animated GIF support: provides AnimatedImageDecoder (API 28+) and GifDecoder (API < 28)
             implementation("io.coil-kt.coil3:coil-gif:3.3.0")
+            // LiveKit for NIP-29 AV spaces. Android has an official SDK (WebRTC included),
+            // so unlike the desktop target this does not go through livekit-kmp.
+            implementation("io.livekit:livekit-android:2.27.0")
             // Media3 ExoPlayer for video playback (same stack as Amethyst)
             implementation("androidx.media3:media3-exoplayer:1.6.0")
             implementation("androidx.media3:media3-ui:1.6.0")

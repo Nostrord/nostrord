@@ -11,6 +11,7 @@ import coil3.gif.GifDecoder
 import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
 import okio.Path.Companion.toOkioPath
+import org.nostr.nostrord.network.livekit.AvMediaBridge
 import org.nostr.nostrord.network.managers.AndroidNetworkMonitorInit
 import org.nostr.nostrord.nostr.Nip55AndroidBridge
 import org.nostr.nostrord.notifications.AndroidNotificationSoundInit
@@ -46,6 +47,7 @@ class NostrordApplication :
         AndroidNetworkMonitorInit.initialize(applicationContext)
         AndroidNotificationSoundInit.initialize(applicationContext)
         VideoCache.initialize(applicationContext)
+        AvMediaBridge.initialize(applicationContext)
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader = ImageLoader
