@@ -66,7 +66,12 @@ actual class MediaEngine actual constructor() {
     actual val cameraEnabled: StateFlow<Boolean> = _cameraEnabled.asStateFlow()
 
     actual suspend fun connect(credentials: LiveKitCredentials): Result<Unit> {
-        if (room != null) return Result.Success(Unit)
+        if (room != null) {
+            // A dropped room leaves its handle behind. Rejoining needs a fresh LiveKitRoom, and
+            // without this the stale one reports success while nobody can hear anything.
+            if (_connectionState.value != AvConnectionState.Disconnected) return Result.Success(Unit)
+            disconnect()
+        }
         val devices = audio
             ?: return Result.Error(AppError.Unknown("No audio device is available on this computer"))
 

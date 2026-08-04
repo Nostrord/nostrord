@@ -48,7 +48,12 @@ actual class MediaEngine actual constructor() {
     private var room: Room? = null
 
     actual suspend fun connect(credentials: LiveKitCredentials): Result<Unit> {
-        if (room != null) return Result.Success(Unit)
+        if (room != null) {
+            // A dropped room leaves its handle behind. Rejoining needs a fresh Room, and
+            // without this the stale one reports success while nobody can hear anything.
+            if (_connectionState.value != AvConnectionState.Disconnected) return Result.Success(Unit)
+            disconnect()
+        }
         _connectionState.value = AvConnectionState.Connecting
         val newRoom = Room()
         return try {

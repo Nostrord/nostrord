@@ -172,9 +172,15 @@ val AvSpaceModal =
                     } else {
                         button {
                             className = ClassName("av-join-btn")
-                            disabled = connection == AvConnectionState.Connecting
+                            disabled = connection != AvConnectionState.Disconnected
                             onClick = { vm.join() }
-                            +(if (connection == AvConnectionState.Connecting) "Joining..." else "Join room")
+                            +(
+                                when (connection) {
+                                    AvConnectionState.Connecting -> "Joining..."
+                                    AvConnectionState.Reconnecting -> "Reconnecting..."
+                                    else -> "Join room"
+                                }
+                                )
                         }
                     }
                 }

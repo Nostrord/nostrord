@@ -2,6 +2,8 @@ package org.nostr.nostrord.ui.screens.avspace
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -53,7 +55,16 @@ class AvSpaceViewModel(
     /** Whether this build can capture and play media at all. */
     val canJoin: Boolean = engine.isSupported
 
-    val connectionState: StateFlow<AvConnectionState> = engine.connectionState
+    private val _rejoining = MutableStateFlow(false)
+
+    /**
+     * Connection as the user should read it: an automatic rejoin reads as [Reconnecting] rather
+     * than as having left, so the room does not flash a Join button between attempts.
+     */
+    val connectionState: StateFlow<AvConnectionState> =
+        combine(engine.connectionState, _rejoining) { state, rejoining ->
+            if (rejoining && state == AvConnectionState.Disconnected) AvConnectionState.Reconnecting else state
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, engine.connectionState.value)
     val micEnabled: StateFlow<Boolean> = engine.micEnabled
     val cameraEnabled: StateFlow<Boolean> = engine.cameraEnabled
 
@@ -99,7 +110,22 @@ class AvSpaceViewModel(
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /**
+     * What the user asked for, which is not what the engine currently has: a drop must restore
+     * the room and the tracks that were live when it happened, and a deliberate Leave must not
+     * be undone by the rejoin.
+     */
+    private var wantsRoom = false
+    private var wantsMic = false
+    private var wantsCamera = false
+    private var rejoinJob: Job? = null
+
     init {
+        viewModelScope.launch {
+            engine.connectionState.collect { state ->
+                if (state == AvConnectionState.Disconnected && wantsRoom) rejoin()
+            }
+        }
         viewModelScope.launch { repo.requestLiveKitParticipants(groupId) }
         viewModelScope.launch {
             repo.liveKitParticipants.collect { roster ->
@@ -116,8 +142,10 @@ class AvSpaceViewModel(
         viewModelScope.launch {
             when (val credentials = repo.fetchLiveKitCredentials(groupId)) {
                 is Result.Success -> {
-                    val connected = engine.connect(credentials.data)
-                    if (connected is Result.Error) _error.value = connected.error.message
+                    when (val connected = engine.connect(credentials.data)) {
+                        is Result.Success -> wantsRoom = true
+                        is Result.Error -> _error.value = connected.error.message
+                    }
                 }
 
                 is Result.Error -> _error.value = credentials.error.message
@@ -126,22 +154,61 @@ class AvSpaceViewModel(
     }
 
     fun leave() {
+        wantsRoom = false
+        wantsMic = false
+        wantsCamera = false
+        rejoinJob?.cancel()
+        _rejoining.value = false
         engine.disconnect()
     }
 
     fun toggleMic() {
         _error.value = null
+        val wanted = !micEnabled.value
         viewModelScope.launch {
-            val result = engine.setMicEnabled(!micEnabled.value)
-            if (result is Result.Error) _error.value = result.error.message
+            when (val result = engine.setMicEnabled(wanted)) {
+                is Result.Success -> wantsMic = wanted
+                is Result.Error -> _error.value = result.error.message
+            }
         }
     }
 
     fun toggleCamera() {
         _error.value = null
+        val wanted = !cameraEnabled.value
         viewModelScope.launch {
-            val result = engine.setCameraEnabled(!cameraEnabled.value)
-            if (result is Result.Error) _error.value = result.error.message
+            when (val result = engine.setCameraEnabled(wanted)) {
+                is Result.Success -> wantsCamera = wanted
+                is Result.Error -> _error.value = result.error.message
+            }
+        }
+    }
+
+    /**
+     * Come back after a drop nobody asked for.
+     *
+     * Each attempt mints a fresh token: the relay's is short-lived and single-join, so replaying
+     * the old one fails where a new one succeeds. Tracks that were live are restored, so a
+     * reconnect the user did not cause does not silently mute them either.
+     */
+    private fun rejoin() {
+        if (rejoinJob?.isActive == true) return
+        _rejoining.value = true
+        rejoinJob = viewModelScope.launch {
+            repeat(AvReconnect.MAX_ATTEMPTS) { attempt ->
+                delay(AvReconnect.delayMs(attempt))
+                if (!wantsRoom) return@launch
+                val credentials = repo.fetchLiveKitCredentials(groupId)
+                if (credentials is Result.Success && engine.connect(credentials.data) is Result.Success) {
+                    _rejoining.value = false
+                    if (wantsMic) engine.setMicEnabled(true)
+                    if (wantsCamera) engine.setCameraEnabled(true)
+                    return@launch
+                }
+            }
+            wantsRoom = false
+            _rejoining.value = false
+            _error.value = "The connection to the room dropped. Join again to come back."
         }
     }
 
@@ -159,6 +226,7 @@ class AvSpaceViewModel(
     fun detachVideo(identity: String, surface: Any) = engine.detachVideo(identity, surface)
 
     override fun onCleared() {
+        wantsRoom = false
         // The room must be left when the screen goes away, otherwise the relay keeps
         // publishing this user in kind 39004 and the mic stays hot.
         engine.disconnect()
