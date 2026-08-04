@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: nostrord/livekit-kmp
-          ref: 47bbcff836c977bd39b9251299c06fce6420ebc9
+          ref: 37095f807922b8ecf3d88c8ae931a824a7b8661f
           path: livekit-kmp
 
       - name: Publish livekit-kmp to mavenLocal
