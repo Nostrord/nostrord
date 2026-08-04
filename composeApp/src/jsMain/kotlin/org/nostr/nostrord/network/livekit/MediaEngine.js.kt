@@ -1,14 +1,14 @@
 package org.nostr.nostrord.network.livekit
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.browser.document
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.await
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.w3c.dom.Node
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
+import org.w3c.dom.Node
 
 /**
  * `RoomEvent` string values from the livekit-client SDK. Declared here rather than as an
