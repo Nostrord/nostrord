@@ -361,7 +361,10 @@ compose.desktop {
             // provides sun.misc.Unsafe for jnr-ffi (dbus-java transport); without it
             // Keyring.create() throws BackendNotSupportedException and the packaged app
             // falls back to the passphrase gate even with a Secret Service running.
-            modules("java.sql", "jdk.unsupported")
+            // jdk.httpserver provides com.sun.net.httpserver.HttpServer, which the Google
+            // login flow binds on localhost to catch the OAuth redirect; without it the
+            // sign-in dialog dies with NoClassDefFoundError in the packaged app.
+            modules("java.sql", "jdk.unsupported", "jdk.httpserver")
 
             linux {
                 iconFile.set(project.file("src/jvmMain/resources/icon-512.png"))
