@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -197,16 +198,20 @@ private fun AvSpaceRoomDialog(
     // Joined as far as the user is concerned. A reconnect counts: the room handle and the capture
     // are still live there. The initial join does not, since there is nothing to leave yet.
     val inRoom = connected || connection == AvConnectionState.Reconnecting
-    val anyVideo = participants.any { it.cameraEnabled }
-    // Everyone unmuted, on camera, or speaking is on stage; the rest are listening (web parity).
-    val onStage = participants.filter { it.micEnabled || it.isSpeaking || it.cameraEnabled }
-    val listeners = participants - onStage.toSet()
+    val anyVideo by vm.hasVideo.collectAsState()
+    val onStage by vm.onStage.collectAsState()
+    val listeners by vm.listeners.collectAsState()
 
     Dialog(onDismissRequest = onClose) {
         Surface(
             shape = NostrordShapes.shapeLarge,
             color = NostrordColors.Surface,
-            modifier = Modifier.fillMaxWidth(),
+            // Clamped then filled, so the shell settles at min(560dp, what the window allows)
+            // and stops tracking the roster's height. Mirrors the web's min(560px, 85vh).
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 320.dp, max = 560.dp)
+                .fillMaxHeight(),
         ) {
             Column {
                 // Header
@@ -265,11 +270,12 @@ private fun AvSpaceRoomDialog(
                     }
                 }
 
-                // Body
+                // Body. Fixed height, not content height: the roster churns constantly and a
+                // shell that tracks it resizes under the pointer on every mute.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 160.dp, max = 420.dp)
+                        .weight(1f, fill = true)
                         .padding(Spacing.lg),
                 ) {
                     when {
@@ -290,11 +296,23 @@ private fun AvSpaceRoomDialog(
                             }
                         }
 
+                        // Both sections always render. Letting one vanish when it empties makes
+                        // the room jump every time the last speaker mutes.
                         else -> Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                            AudioSection("On stage", onStage, userMetadata, small = false)
-                            if (listeners.isNotEmpty()) {
-                                AudioSection("Listeners", listeners, userMetadata, small = true)
-                            }
+                            AudioSection(
+                                "On stage",
+                                onStage,
+                                userMetadata,
+                                small = false,
+                                emptyNote = "Nobody is speaking yet.",
+                            )
+                            AudioSection(
+                                "Listeners",
+                                listeners,
+                                userMetadata,
+                                small = true,
+                                emptyNote = "Everyone here is on stage.",
+                            )
                         }
                     }
                 }
@@ -412,6 +430,7 @@ private fun AudioSection(
     people: List<AvSpaceParticipant>,
     userMetadata: Map<String, UserMetadata>,
     small: Boolean,
+    emptyNote: String,
 ) {
     Text(
         text = "$label · ${people.size}",
@@ -420,6 +439,16 @@ private fun AudioSection(
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(bottom = Spacing.sm),
     )
+    if (people.isEmpty()) {
+        // An empty section still holds its space, so the room does not jump when it empties.
+        Text(
+            text = emptyNote,
+            color = NostrordColors.TextMuted,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(bottom = Spacing.xl),
+        )
+        return
+    }
     // A flowing grid without nesting a lazy scrollable inside the dialog's scroll column.
     people.chunked(if (small) 5 else 4).forEach { rowPeople ->
         Row(

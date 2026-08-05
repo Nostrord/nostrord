@@ -65,13 +65,12 @@ val AvSpaceModal =
          * not, since there is nothing to leave yet.
          */
         val inRoom = connected || connection == AvConnectionState.Reconnecting
-        val anyVideo = participants.any { it.cameraEnabled }
-        // Everyone unmuted, on camera, or speaking is "on stage"; the rest are listening.
-        val onStage = participants.filter { it.micEnabled || it.isSpeaking || it.cameraEnabled }
-        val listeners = participants - onStage.toSet()
+        val anyVideo = useStateFlow(vm.hasVideo)
+        val onStage = useStateFlow(vm.onStage)
+        val listeners = useStateFlow(vm.listeners)
 
         div {
-            className = ClassName("modal-overlay")
+            className = ClassName("modal-overlay av-space-overlay")
             onClick = { props.onClose() }
             div {
                 className = ClassName("modal-card av-space-card")
@@ -148,19 +147,21 @@ val AvSpaceModal =
                             }
                         }
                     } else {
+                        // Both sections always render. Letting one vanish when it empties makes
+                        // the room jump every time the last speaker mutes.
                         AudioSection {
                             label = "On stage"
                             people = onStage
                             this.userMetadata = userMetadata
                             small = false
+                            emptyNote = "Nobody is speaking yet."
                         }
-                        if (listeners.isNotEmpty()) {
-                            AudioSection {
-                                label = "Listeners"
-                                people = listeners
-                                this.userMetadata = userMetadata
-                                small = true
-                            }
+                        AudioSection {
+                            label = "Listeners"
+                            people = listeners
+                            this.userMetadata = userMetadata
+                            small = true
+                            emptyNote = "Everyone here is on stage."
                         }
                     }
                 }
@@ -222,6 +223,9 @@ private external interface AudioSectionProps : Props {
 
     /** Listeners render at the smaller tile size. */
     var small: Boolean
+
+    /** Shown in place of the grid, so an empty section still holds its space. */
+    var emptyNote: String
 }
 
 private val AudioSection =
@@ -229,6 +233,13 @@ private val AudioSection =
         div {
             className = ClassName("av-section-label")
             +"${props.label} · ${props.people.size}"
+        }
+        if (props.people.isEmpty()) {
+            div {
+                className = ClassName("av-section-empty")
+                +props.emptyNote
+            }
+            return@FC
         }
         div {
             className = ClassName(if (props.small) "av-audio-grid av-audio-grid-small" else "av-audio-grid")

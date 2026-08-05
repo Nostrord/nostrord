@@ -10947,9 +10947,16 @@ button.hierarchy-crumb-item:hover {
     text-align: center;
 }
 
+/*
+ * Fixed height on purpose. The roster changes constantly (people join, mute, start talking), and
+ * a content-sized shell resizes under the cursor every time. The body scrolls instead.
+ */
 .av-space-card {
+    display: flex;
+    flex-direction: column;
     max-width: 640px;
     width: 100%;
+    height: min(560px, 85vh);
 }
 
 .av-space-header {
@@ -11001,6 +11008,12 @@ button.hierarchy-crumb-item:hover {
     flex: 1;
     overflow-y: auto;
     padding: var(--space-lg);
+}
+
+.av-section-empty {
+    margin-bottom: var(--space-xl);
+    color: var(--color-text-muted);
+    font-size: 13px;
 }
 
 .av-section-label {
@@ -11135,12 +11148,17 @@ button.hierarchy-crumb-item:hover {
     height: 14px;
 }
 
+/*
+ * Never wraps and never changes height: the bar is the one thing that has to sit still while the
+ * roster churns above it, since Leave lives here.
+ */
 .av-space-controls {
     display: flex;
-    flex-wrap: wrap;
+    flex: none;
     align-items: center;
     justify-content: center;
     gap: var(--space-sm);
+    min-height: 72px;
     padding: var(--space-md) var(--space-lg);
     border-top: 1px solid var(--color-line);
 }
@@ -11202,6 +11220,31 @@ button.hierarchy-crumb-item:hover {
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
+}
+
+/*
+ * Phone: a bottom sheet, the shape WhatsApp and Telegram both use for a live call. It buys the
+ * full width for the tile grid and puts the controls under the thumb instead of mid-screen.
+ */
+@media (max-width: 599px) {
+    .av-space-overlay {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    .av-space-card {
+        max-width: none;
+        height: 88vh;
+        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    }
+
+    .av-space-controls {
+        padding-bottom: max(var(--space-md), env(safe-area-inset-bottom));
+    }
+
+    .av-video-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
 }
 
 /* Empty room: no LIVE badge, so the bar reads as an invitation rather than an alert. */
