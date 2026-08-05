@@ -220,7 +220,9 @@ val HomePage =
                                     div {
                                         className = ClassName("card-grid")
                                         myGroups.forEach { group ->
-                                            discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, joinedByRelay.isJoinedOn(group.relayUrl, group.meta.id)) {
+                                            // Every card here is joined; the badge earns its
+                                            // place only in the mixed lists.
+                                            discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, isJoined = false) {
                                                 props.onOpenGroup(JoinedGroup(group.relayUrl, group.meta))
                                             }
                                         }
