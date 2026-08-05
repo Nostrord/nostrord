@@ -42,6 +42,23 @@ actual class MediaEngine actual constructor() {
         runCatching { PlatformAudio.open() }.getOrNull()
     }
 
+    /** Set once [bindDevices] has run, so a mic failure can say whether a device existed. */
+    private var hasMicrophone = true
+
+    /**
+     * Pin the device module to a named device instead of the index it defaults to.
+     *
+     * The default lands wherever the platform's enumeration starts, which on Linux is routinely a
+     * source that captures silence: the microphone reads as working and nobody hears a word. Best
+     * effort, since a machine that reports nothing can still listen.
+     */
+    private fun bindDevices(devices: PlatformAudio) {
+        val available = runCatching { devices.devices() }.getOrNull() ?: return
+        hasMicrophone = available.microphones.isNotEmpty()
+        available.microphones.firstOrNull { it.id != null }?.let { runCatching { devices.selectMicrophone(it) } }
+        available.speakers.firstOrNull { it.id != null }?.let { runCatching { devices.selectSpeaker(it) } }
+    }
+
     private var room: LiveKitRoom? = null
     private var mirrorJob: Job? = null
 
@@ -81,6 +98,7 @@ actual class MediaEngine actual constructor() {
         val devices = audio
             ?: return Result.Error(AppError.Unknown("No audio device is available on this computer"))
 
+        bindDevices(devices)
         _connectionState.value = AvConnectionState.Connecting
         val joining = LiveKitRoom(scope, devices)
         return try {
@@ -118,13 +136,18 @@ actual class MediaEngine actual constructor() {
 
     actual suspend fun setMicEnabled(enabled: Boolean): Result<Unit> {
         val current = room ?: return Result.Error(AppError.Unknown("Join the room before using the microphone"))
+        if (enabled && !hasMicrophone) {
+            return Result.Error(AppError.Unknown("No microphone was found on this computer"))
+        }
         return try {
             current.setMicrophoneEnabled(enabled)
             Result.Success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            Result.Error(AppError.Unknown(e.message ?: "Microphone access was denied"))
+            // There is no permission prompt on desktop, so a failure here is the device module
+            // refusing the device, not a denial.
+            Result.Error(AppError.Unknown(e.message ?: "Could not open the microphone"))
         }
     }
 
