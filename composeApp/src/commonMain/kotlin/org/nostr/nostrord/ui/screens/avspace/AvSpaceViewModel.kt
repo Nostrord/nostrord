@@ -37,7 +37,20 @@ data class AvSpaceParticipant(
      * sessions, which the spec's random JWT suffix explicitly allows.
      */
     val identity: String? = null,
-)
+) {
+    /** Sending something, which is what puts a person on stage rather than in the audience. */
+    val isPublishing: Boolean get() = micEnabled || cameraEnabled
+}
+
+/**
+ * Stable seating: the local user first, then everyone by pubkey.
+ *
+ * The roster is assembled from a relay list unioned with a map of live participants, so its
+ * natural order shifts on every update and the tiles shuffle under the cursor. Sorting on
+ * anything live (speaking, mute state, display name as it arrives) would reintroduce the same
+ * churn, so the key is the one thing about a person that never changes.
+ */
+private val rosterOrder = compareByDescending<AvSpaceParticipant> { it.isSelf }.thenBy { it.pubkey }
 
 /**
  * Shared logic for the NIP-29 AV space of one group. Both the web room and the Compose surface
@@ -112,8 +125,28 @@ class AvSpaceViewModel(
                     cameraEnabled = engineView?.cameraEnabled == true,
                     identity = engineView?.identity,
                 )
-            }
+            }.sortedWith(rosterOrder)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * Who is on stage: whoever is publishing audio or video.
+     *
+     * Speaking is deliberately not part of it. Active-speaker updates flip in well under a
+     * second, so folding them in here moves a person between sections on every syllable and the
+     * room reflows while they talk. Speaking lights the ring and nothing else.
+     */
+    val onStage: StateFlow<List<AvSpaceParticipant>> = participants
+        .map { people -> people.filter { it.isPublishing } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val listeners: StateFlow<List<AvSpaceParticipant>> = participants
+        .map { people -> people.filterNot { it.isPublishing } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Whether to lay the room out as video tiles rather than as avatars. */
+    val hasVideo: StateFlow<Boolean> = participants
+        .map { people -> people.any { it.cameraEnabled } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /**
      * What the user asked for, which is not what the engine currently has: a drop must restore

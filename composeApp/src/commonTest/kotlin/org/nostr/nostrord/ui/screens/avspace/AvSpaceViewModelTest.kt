@@ -82,9 +82,39 @@ class AvSpaceViewModelTest {
         val vm = viewModel(repo)
         testDispatcher.scheduler.advanceUntilIdle()
 
-        assertContentEquals(listOf(other, me), vm.participants.value.map { it.pubkey })
+        // Seated, not in arrival order: the local user leads and the rest follow by pubkey.
+        assertContentEquals(listOf(me, other), vm.participants.value.map { it.pubkey })
         assertTrue(vm.participants.value.single { it.pubkey == me }.isSelf)
         assertFalse(vm.participants.value.single { it.pubkey == other }.isSelf)
+    }
+
+    @Test
+    fun `seating does not depend on the order the roster arrives in`() = runTest {
+        val third = "c".repeat(64)
+        val repo = FakeNostrRepository()
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(third, other, me))
+        val vm = viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+        val first = vm.participants.value.map { it.pubkey }
+
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(me, third, other))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertContentEquals(first, vm.participants.value.map { it.pubkey })
+    }
+
+    @Test
+    fun `a listener stays a listener while speaking`() = runTest {
+        val repo = FakeNostrRepository()
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(me, other))
+        val vm = viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Nobody publishes, so the stage is empty however loud the room gets: speaking alone
+        // must never move a person between sections, or the layout reflows as they talk.
+        assertEquals(emptyList(), vm.onStage.value)
+        assertContentEquals(listOf(me, other), vm.listeners.value.map { it.pubkey })
+        assertFalse(vm.hasVideo.value)
     }
 
     @Test
