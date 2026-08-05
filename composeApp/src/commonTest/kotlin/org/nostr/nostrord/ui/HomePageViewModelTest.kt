@@ -13,6 +13,7 @@ import org.nostr.nostrord.notifications.NotificationHistoryStore
 import org.nostr.nostrord.notifications.NotificationType
 import org.nostr.nostrord.ui.screens.home.Friend
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
+import org.nostr.nostrord.ui.screens.home.railKey
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -580,5 +581,69 @@ class HomePageViewModelTest {
         store.markRead("n1")
         testDispatcher.scheduler.advanceUntilIdle()
         assertEquals(1, vm.notificationUnread.value)
+    }
+
+    @Test
+    fun `myGroups follows the kind10009 tag order, not relay load order`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value =
+            mapOf(
+                "wss://a" to listOf(meta("g1", "Alpha"), meta("g2", "Beta")),
+                "wss://b" to listOf(meta("g3", "Gamma")),
+            )
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("g1", "g2"), "wss://b" to setOf("g3"))
+        // Tag order interleaves the relays; the per-relay map cannot express it.
+        fake.groupOrderFlow.value = listOf("wss://a" to "g2", "wss://b" to "g3", "wss://a" to "g1")
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("g2", "g3", "g1"), vm.myGroups.value.map { it.meta.id })
+    }
+
+    @Test
+    fun `a group with no tag position yet sits at the end`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value = mapOf("wss://a" to listOf(meta("g1", "Alpha"), meta("fresh", "Fresh")))
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("fresh", "g1"))
+        fake.groupOrderFlow.value = listOf("wss://a" to "g1")
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("g1", "fresh"), vm.myGroups.value.map { it.meta.id })
+    }
+
+    @Test
+    fun `order entries are matched per relay, so a same-id group elsewhere keeps its own slot`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value =
+            mapOf(
+                "wss://a" to listOf(meta("dup", "On A")),
+                "wss://b" to listOf(meta("dup", "On B")),
+            )
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("dup"), "wss://b" to setOf("dup"))
+        fake.groupOrderFlow.value = listOf("wss://b" to "dup", "wss://a" to "dup")
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("wss://b", "wss://a"), vm.myGroups.value.map { it.relayUrl })
+    }
+
+    @Test
+    fun `reorderRail republishes the rail order and keeps unlisted entries after it`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value = mapOf("wss://a" to listOf(meta("g1", "Alpha"), meta("g2", "Beta")))
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("g1", "g2"))
+        // A channel lives in the list too, but never on the rail.
+        fake.groupOrderFlow.value = listOf("wss://a" to "g1", "wss://a" to "chan", "wss://a" to "g2")
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.reorderRail(listOf(railKey("wss://a", "g2"), railKey("wss://a", "g1")))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            listOf("wss://a" to "g2", "wss://a" to "g1", "wss://a" to "chan"),
+            fake.groupOrderFlow.value,
+        )
     }
 }

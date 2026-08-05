@@ -537,6 +537,7 @@ class NostrRepository(
         }.stateIn(scope, SharingStarted.Eagerly, emptySet())
     override val kind10009Relays: StateFlow<Set<String>> = outboxManager.kind10009Relays
     override val groupTagRelays: StateFlow<Set<String>> = outboxManager.groupTagRelays
+    override val groupOrder: StateFlow<List<Pair<String, String>>> = outboxManager.groupOrder
 
     // Public kind:10009 group lists of OTHER users (profile pages). Newest event
     // wins per pubkey; the active account's own list never lands here.
@@ -1089,6 +1090,7 @@ class NostrRepository(
                             groupManager.loadAllJoinedGroupsFromStorage(pubkey, restoredRelays)
                             groupManager.restoreJoinedGroupMetadataFromStorage(pubkey, restoredRelays)
                             groupManager.restoreGroupMembershipFromStorage(pubkey)
+                            outboxManager.restoreGroupOrder(pubkey)
                             groupManager.migrateMessageBlobsToCache(pubkey)
                             // Arm catch-up right before connect (fresh TTL) so the
                             // first mux refresh replays the closed-app backlog.
@@ -1128,6 +1130,7 @@ class NostrRepository(
                 groupManager.loadAllJoinedGroupsFromStorage(pubkey, allRelays)
                 groupManager.restoreJoinedGroupMetadataFromStorage(pubkey, allRelays)
                 groupManager.restoreGroupMembershipFromStorage(pubkey)
+                outboxManager.restoreGroupOrder(pubkey)
                 groupManager.migrateMessageBlobsToCache(pubkey)
                 unreadManager.initialize(pubkey)
                 notificationSettings?.initialize(pubkey)
@@ -1485,6 +1488,7 @@ class NostrRepository(
                 groupManager.loadAllJoinedGroupsFromStorage(newPubkey, allRelays)
                 groupManager.restoreJoinedGroupMetadataFromStorage(newPubkey, allRelays)
                 groupManager.restoreGroupMembershipFromStorage(newPubkey)
+                outboxManager.restoreGroupOrder(newPubkey)
                 groupManager.migrateMessageBlobsToCache(newPubkey)
             }
             unreadManager.initialize(newPubkey)
@@ -2297,6 +2301,7 @@ class NostrRepository(
             groupManager.loadAllJoinedGroupsFromStorage(pubkey, allRelays)
             groupManager.restoreJoinedGroupMetadataFromStorage(pubkey, allRelays)
             groupManager.restoreGroupMembershipFromStorage(pubkey)
+            outboxManager.restoreGroupOrder(pubkey)
             groupManager.migrateMessageBlobsToCache(pubkey)
             groupManager.loadRestrictedGroupsFromStorage(pubkey, allRelays)
             // Point GroupManager's current-relay flow at the new focused so the
@@ -2774,6 +2779,7 @@ class NostrRepository(
             groupManager.loadAllJoinedGroupsFromStorage(pubkey, relays)
             groupManager.restoreJoinedGroupMetadataFromStorage(pubkey, relays)
             groupManager.restoreGroupMembershipFromStorage(pubkey)
+            outboxManager.restoreGroupOrder(pubkey)
             groupManager.migrateMessageBlobsToCache(pubkey)
             groupManager.loadRestrictedGroupsFromStorage(pubkey, relays)
         }
@@ -4432,6 +4438,7 @@ class NostrRepository(
     private suspend fun publishJoinedGroupsListWith(
         pubKey: String,
         nip29Relays: List<String> = outboxManager.kind10009Relays.value.toList(),
+        orderOverride: List<Pair<String, String>>? = null,
     ): Result<Unit> {
         // The in-memory map can be partial early in a session (the storage restore and
         // the kind:10009 fetch are async). An event published from a partial map drops
@@ -4454,7 +4461,18 @@ class NostrRepository(
             nip29Relays = nip29Relays,
             signEvent = { sessionManager.signEvent(it) },
             messageHandler = { msg, client -> handleRelayMessage(msg, client) },
+            orderOverride = orderOverride,
         )
+    }
+
+    override suspend fun reorderGroups(order: List<Pair<String, String>>): Result<Unit> {
+        val pubKey = sessionManager.getPublicKey()
+            ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        // Membership is not derived from [order]: the publish emits only groups in the
+        // joined superset, so an entry here that is not joined is a no-op, and a joined
+        // group missing from it falls to the end. A reorder can never add a group.
+        val normalized = order.map { (relay, id) -> relay.normalizeRelayUrl() to id }.distinct()
+        return publishJoinedGroupsListWith(pubKey, orderOverride = normalized)
     }
 
     // Groups whose subscriptions the relay CLOSED (typically auth-required).

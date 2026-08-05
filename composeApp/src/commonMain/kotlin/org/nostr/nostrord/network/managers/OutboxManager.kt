@@ -15,8 +15,10 @@ import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.storage.loadGroupOrderFor
 import org.nostr.nostrord.storage.loadKind10009Timestamp
 import org.nostr.nostrord.storage.loadRelayListFor
+import org.nostr.nostrord.storage.saveGroupOrderFor
 import org.nostr.nostrord.storage.saveKind10009RepublishPendingFor
 import org.nostr.nostrord.storage.saveKind10009Timestamp
 import org.nostr.nostrord.storage.saveRelayListFor
@@ -66,6 +68,40 @@ class OutboxManager(
 
     private val _kind10009Relays = MutableStateFlow<Set<String>>(emptySet())
     val kind10009Relays: StateFlow<Set<String>> = _kind10009Relays.asStateFlow()
+
+    /**
+     * Rail order: (relay, groupId) in the tag order of the authoritative kind:10009, which is
+     * the only order the user actually controls (and the one a drag-reorder republishes).
+     * A sort key only: an entry whose group is not joined is ignored downstream, never
+     * re-added. Stale versions never touch it — a superseded list must not reorder the rail.
+     */
+    private val _groupOrder = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+    val groupOrder: StateFlow<List<Pair<String, String>>> = _groupOrder.asStateFlow()
+
+    /** Publish the tag order and persist it, so the next cold start sorts before the event lands. */
+    private fun applyGroupOrder(
+        pubKey: String,
+        order: List<Pair<String, String>>,
+    ) {
+        if (order == _groupOrder.value) return
+        _groupOrder.value = order
+        try {
+            SecureStorage.saveGroupOrderFor(pubKey, order)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Seed the order from storage at boot. Never overwrites an order already applied from an event. */
+    fun restoreGroupOrder(pubKey: String) {
+        if (_groupOrder.value.isNotEmpty()) return
+        val stored =
+            try {
+                SecureStorage.loadGroupOrderFor(pubKey)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        if (stored.isNotEmpty()) _groupOrder.value = stored
+    }
 
     /** Relay URLs that appear in "group" tags but NOT in "r" tags.
      *  These are implicit/temporary — shown in the rail but never persisted. */
@@ -310,8 +346,10 @@ class OutboxManager(
         nip29Relays: List<String>,
         signEvent: suspend (Event) -> Event,
         messageHandler: (String, NostrGroupClient) -> Unit,
+        orderOverride: List<Pair<String, String>>? = null,
     ): Result<Unit> {
         return try {
+            var publishedOrder: List<Pair<String, String>> = emptyList()
             val tags =
                 groupsMutex.withLock {
                     // Normalize and deduplicate relay URLs before publishing
@@ -322,11 +360,11 @@ class OutboxManager(
                     }
                     allRelayGroups = normalizedGroups.mapValues { it.value.toSet() }
 
+                    publishedOrder = orderJoinedGroups(allRelayGroups, orderOverride ?: _groupOrder.value)
+
                     val tagsList = mutableListOf<List<String>>()
-                    allRelayGroups.forEach { (relayUrl, groupIds) ->
-                        groupIds.forEach { groupId ->
-                            tagsList.add(listOf("group", groupId, relayUrl))
-                        }
+                    publishedOrder.forEach { (relayUrl, groupId) ->
+                        tagsList.add(listOf("group", groupId, relayUrl))
                     }
                     val distinctRelays = nip29Relays.map { it.normalizeRelayUrl() }.filter { it.isNotBlank() }.distinct()
                     distinctRelays.forEach { relayUrl ->
@@ -335,6 +373,9 @@ class OutboxManager(
 
                     tagsList
                 }
+            // Own publish is authoritative for order too: the event we are about to sign is
+            // exactly what the rail must show, including a drag that moved a chip.
+            applyGroupOrder(pubKey, publishedOrder)
 
             val event =
                 Event(
@@ -490,6 +531,8 @@ class OutboxManager(
 
         val newRelayGroups = mutableMapOf<String, MutableSet<String>>()
         val explicitNip29Relays = mutableListOf<String>()
+        // Tag sequence, preserved: bucketing by relay alone loses the only order the user has.
+        val taggedOrder = mutableListOf<Pair<String, String>>()
 
         tags.forEach { tag ->
             val tagArray = tag.jsonArray
@@ -498,7 +541,9 @@ class OutboxManager(
                 "group" -> {
                     val groupId = tagArray.getOrNull(1)?.jsonPrimitive?.content ?: return@forEach
                     val relayUrl = (tagArray.getOrNull(2)?.jsonPrimitive?.content ?: currentRelayUrl).normalizeRelayUrl()
-                    newRelayGroups.getOrPut(relayUrl) { mutableSetOf() }.add(groupId)
+                    if (newRelayGroups.getOrPut(relayUrl) { mutableSetOf() }.add(groupId)) {
+                        taggedOrder.add(relayUrl to groupId)
+                    }
                 }
                 "r" -> {
                     val relayUrl =
@@ -569,6 +614,9 @@ class OutboxManager(
             contentUnchanged = allRelayGroups == immutableRelayGroups
             allRelayGroups = immutableRelayGroups
         }
+        // Ahead of the contentUnchanged short-circuit below: a reorder published from another
+        // device changes only the tag sequence, and would otherwise never reach the rail.
+        applyGroupOrder(pubKey, taggedOrder)
         // Every connected relay re-delivers the applied event on each fetch (and
         // equal-createdAt now re-applies): identical content with the relay set already
         // in place changes nothing — skip the storage rewrites and callback refires.
@@ -795,4 +843,20 @@ class OutboxManager(
         kind10009SubId = null
         kind10009Received = false
     }
+}
+
+/**
+ * The `group` tags of a kind:10009 publish, in rail order: every entry of [joinedByRelay]
+ * exactly once, sorted by its position in [order], with the unpositioned ones (a fresh
+ * join) appended in map order. [order] only ranks — an entry of it that is not joined
+ * emits nothing, so a publish can never add a group the user did not join.
+ */
+fun orderJoinedGroups(
+    joinedByRelay: Map<String, Set<String>>,
+    order: List<Pair<String, String>>,
+): List<Pair<String, String>> {
+    val positions = order.withIndex().associate { (index, entry) -> entry to index }
+    return joinedByRelay
+        .flatMap { (relayUrl, groupIds) -> groupIds.map { relayUrl to it } }
+        .sortedBy { positions[it] ?: Int.MAX_VALUE }
 }

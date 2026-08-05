@@ -34,6 +34,22 @@ import org.nostr.nostrord.ui.screens.group.aggregateUnread
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
+ * Rail identity as a single string, for drag-reorder helpers that work on `List<String>`.
+ * The pair (relay, id) is the identity; the bare id is not, since the same id on two
+ * relays is two groups. Relay URLs carry no "|", so the first separator splits it back.
+ */
+fun railKey(
+    relayUrl: String,
+    groupId: String,
+): String = "$relayUrl|$groupId"
+
+fun parseRailKey(key: String): Pair<String, String>? {
+    val sep = key.indexOf('|')
+    if (sep <= 0 || sep == key.lastIndex) return null
+    return key.substring(0, sep) to key.substring(sep + 1)
+}
+
+/**
  * Curator whose public group list (kind:10009) seeds the "Recommended" tab: the
  * groups we hand-pick are simply the ones this account joins.
  */
@@ -194,6 +210,7 @@ class HomePageViewModel(
                 repo.userMetadata,
                 _membersResolved,
                 repo.groupMembersByRelay,
+                repo.groupOrder,
             ),
         ) { arr ->
             val groupsByRelay = arr[0] as Map<String, List<GroupMetadata>>
@@ -203,6 +220,10 @@ class HomePageViewModel(
             val meta = arr[4] as Map<String, UserMetadata>
             val resolved = arr[5] as Set<String>
             val membersByRelay = arr[6] as Map<String, Map<String, List<String>>>
+
+            @Suppress("UNCHECKED_CAST")
+            val order = arr[7] as List<Pair<String, String>>
+            val orderIndex = order.withIndex().associate { (index, entry) -> entry to index }
             joinedByRelay
                 .flatMap { (relay, ids) ->
                     val metas = groupsByRelay[relay].orEmpty().associateBy { it.id }
@@ -239,6 +260,13 @@ class HomePageViewModel(
                 }
                 // Dedup by (relay, id): the same id on two relays is two independent groups.
                 .distinctBy { it.relayUrl to it.meta.id }
+                // The kind:10009 tag order is the user's own order and the only stable one:
+                // the map above is keyed by relay, so its iteration order is whichever relay
+                // loaded first (the focused relay is seeded ahead of the rest), which
+                // reshuffled the rail between reloads. Stable sort, so a group with no
+                // position yet (fresh join, pending invite, orphan pin) sits at the end in
+                // arrival order and settles once the list is published.
+                .sortedBy { orderIndex[it.relayUrl to it.meta.id] ?: Int.MAX_VALUE }
             // Off Main: the previewPeople / associateBy / distinctBy transform is O(groups x members)
             // and re-runs for each of the ~50 metadata events that arrive in waves on home open;
             // running it on viewModelScope's Main dispatcher made it compete with composition. The
@@ -263,6 +291,21 @@ class HomePageViewModel(
      * stays (it would be unreachable otherwise). [railGroups] remains the unfiltered
      * joined list for non-rail consumers (restore validation, history labels).
      */
+    /**
+     * Persist a rail reorder: republish kind:10009 with the `group` tags in [orderedKeys]
+     * (rail order, [railKey] encoding). Entries the rail never renders (channels) follow,
+     * keeping their current relative order. Membership is untouched — the publish emits
+     * only joined groups, so a reorder can neither add nor drop one.
+     */
+    fun reorderRail(orderedKeys: List<String>) {
+        val moved = orderedKeys.mapNotNull(::parseRailKey)
+        if (moved.isEmpty()) return
+        viewModelScope.launch {
+            val movedSet = moved.toSet()
+            repo.reorderGroups(moved + repo.groupOrder.value.filterNot { it in movedSet })
+        }
+    }
+
     val railRootGroups: StateFlow<List<DiscoverGroup>> =
         railGroups
             .map { list ->

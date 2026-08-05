@@ -168,6 +168,9 @@ val WebAvatar =
                     className = ClassName((if (loaded) "avatar-photo loaded" else "avatar-photo") + whiteBg)
                     src = url
                     alt = props.name
+                    // The browser's native image drag would swallow the pointer stream an
+                    // avatar sits in (rail chip reorder), leaving a ghost image instead.
+                    draggable = false
                     onLoad = {
                         setErrored(false)
                         setLoaded(true)

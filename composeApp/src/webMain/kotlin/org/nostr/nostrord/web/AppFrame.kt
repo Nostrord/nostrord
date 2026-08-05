@@ -1,5 +1,6 @@
 package org.nostr.nostrord.web
 
+import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.awaitCancellation
 import org.nostr.nostrord.auth.removeAccountBusyLabel
@@ -19,8 +20,10 @@ import org.nostr.nostrord.ui.navigation.NotificationsRoute
 import org.nostr.nostrord.ui.navigation.RelayRoute
 import org.nostr.nostrord.ui.navigation.SettingsRoute
 import org.nostr.nostrord.ui.navigation.UserRoute
+import org.nostr.nostrord.ui.screens.group.moveChannelBefore
 import org.nostr.nostrord.ui.screens.group.rootGroupId
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
+import org.nostr.nostrord.ui.screens.home.railKey
 import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
 import org.nostr.nostrord.utils.accountDisplayLabel
 import org.nostr.nostrord.utils.normalizeRelayUrl
@@ -69,6 +72,19 @@ import react.useRef
 import react.useState
 import web.cssom.ClassName
 
+/** Squared pointer travel (px) past which a rail press is a drag, not a tap. */
+private const val DRAG_SLOP_SQ = 36.0
+
+/** Hold this long to pick a rail chip up by touch (matches the native rail's long press). */
+private const val RAIL_LONG_PRESS_MS = 400
+
+/** Hit-test id of the strip below the last rail chip: drop there to land last. */
+private const val RAIL_END_DROP = "__rail_end__"
+
+/** Distance from a rail edge where a drag starts auto-scrolling, and its minimum speed (px/frame). */
+private const val RAIL_EDGE_PX = 56.0
+private const val RAIL_SCROLL_STEP = 3.0
+
 /**
  * New-design logged-in frame (prototype AppShell): the 72px groups rail (home,
  * joined groups with unread badges, add, DMs and notifications) plus the 240px
@@ -113,6 +129,130 @@ val AppFrame =
         val (logoutBusy, setLogoutBusy) = useState { false }
         // Which step of the rail "+" add-group flow is open: "chooser" / "create" / "join".
         val (addGroupStep, setAddGroupStep) = useState<String?> { null }
+        // Rail drag-reorder, same pointer hit-testing as the channel sidebar: chips are
+        // found via elementFromPoint + data-rkey, and the drop inserts the dragged chip
+        // before the hovered one. No optimistic override — reorderRail applies the new
+        // order to the shared flow before the publish leaves, so the rail re-sorts at once.
+        val (dragKey, setDragKey) = useState<String?> { null }
+        val (overKey, setOverKey) = useState<String?> { null }
+
+        // Set while a drag actually moved, so the pointerup's click navigates nowhere.
+        val railDraggedRef = useRef<Boolean>(null)
+
+        fun startRailDrag(
+            key: String,
+            e: react.dom.events.PointerEvent<*>,
+        ) {
+            // No preventDefault: the chip is a real button that must keep taking focus and
+            // must let the mobile keyboard close when it navigates away from a chat.
+            val startX = e.clientX
+            val startY = e.clientY
+            // Mouse picks the chip up as soon as it travels past the slop. Touch cannot:
+            // the same early movement is how the rail scrolls, so it waits for a long
+            // press, like the native rail. Until then the browser owns the gesture.
+            val touch = e.pointerType.toString() != "mouse"
+            railDraggedRef.current = false
+            val currentOrder = railRoots.map { railKey(it.relayUrl, it.meta.id) }
+            fun targetAt(
+                x: Double,
+                y: Double,
+            ): String? = document.asDynamic().elementFromPoint(x, y)?.closest("[data-rkey]")?.getAttribute("data-rkey") as String?
+
+            var cleanup: (() -> Unit)? = null
+            var pressTimer: Int? = null
+            var autoScrollFrame: Int? = null
+            var pointerX = startX
+            var pointerY = startY
+
+            // Edge auto-scroll: the drop target is whatever sits under the pointer, so a chip
+            // at the bottom could never reach the top of a scrolled rail without this. Runs
+            // per frame (not per pointermove) so holding still at the edge keeps scrolling.
+            fun autoScrollStep() {
+                val rail = document.querySelector(".rail-scroll")
+                if (rail == null || railDraggedRef.current != true) {
+                    autoScrollFrame = null
+                    return
+                }
+                val rect = rail.getBoundingClientRect()
+                val speed =
+                    when {
+                        pointerY < rect.top + RAIL_EDGE_PX ->
+                            -RAIL_SCROLL_STEP.coerceAtLeast((rect.top + RAIL_EDGE_PX - pointerY) / 4)
+                        pointerY > rect.bottom - RAIL_EDGE_PX ->
+                            RAIL_SCROLL_STEP.coerceAtLeast((pointerY - (rect.bottom - RAIL_EDGE_PX)) / 4)
+                        else -> 0.0
+                    }
+                if (speed != 0.0) {
+                    rail.asDynamic().scrollTop = rail.asDynamic().scrollTop as Double + speed
+                    // Chips moved under a still pointer: re-read the hovered one.
+                    setOverKey(targetAt(pointerX, pointerY))
+                }
+                autoScrollFrame = window.requestAnimationFrame { autoScrollStep() }
+            }
+
+            fun engage() {
+                pressTimer = null
+                railDraggedRef.current = true
+                setDragKey(key)
+                setOverKey(key)
+                if (autoScrollFrame == null) autoScrollFrame = window.requestAnimationFrame { autoScrollStep() }
+            }
+            // Non-passive: once the chip is picked up, this is the only thing that stops
+            // the rail from scrolling under the finger for the rest of the drag.
+            val onTouchMove: (dynamic) -> Unit = { ev ->
+                if (railDraggedRef.current == true) ev.preventDefault()
+            }
+            val onMove: (dynamic) -> Unit = { ev ->
+                pointerX = ev.clientX as Double
+                pointerY = ev.clientY as Double
+                val dx = pointerX - startX
+                val dy = pointerY - startY
+                val movedPastSlop = dx * dx + dy * dy > DRAG_SLOP_SQ
+                if (railDraggedRef.current != true && movedPastSlop) {
+                    if (touch) {
+                        // Moved before the press landed: this is a scroll, so drop the gesture.
+                        pressTimer?.let { window.clearTimeout(it) }
+                        cleanup?.invoke()
+                    } else {
+                        engage()
+                    }
+                }
+                if (railDraggedRef.current == true) setOverKey(targetAt(ev.clientX as Double, ev.clientY as Double))
+            }
+            val onUp: (dynamic) -> Unit = { ev ->
+                if (railDraggedRef.current == true) {
+                    val target = targetAt(ev.clientX as Double, ev.clientY as Double)
+                    if (target != null && target != key) {
+                        // The end strip maps to a null target: drop after the last chip.
+                        val newOrder = moveChannelBefore(currentOrder, key, target.takeIf { it != RAIL_END_DROP })
+                        if (newOrder != currentOrder) vm.reorderRail(newOrder)
+                    }
+                }
+                cleanup?.invoke()
+            }
+            val onCancel: (dynamic) -> Unit = { _ -> cleanup?.invoke() }
+
+            cleanup = {
+                pressTimer?.let { window.clearTimeout(it) }
+                pressTimer = null
+                autoScrollFrame?.let { window.cancelAnimationFrame(it) }
+                autoScrollFrame = null
+                setDragKey(null)
+                setOverKey(null)
+                window.asDynamic().removeEventListener("pointermove", onMove)
+                window.asDynamic().removeEventListener("pointerup", onUp)
+                window.asDynamic().removeEventListener("pointercancel", onCancel)
+                window.asDynamic().removeEventListener("touchmove", onTouchMove)
+            }
+
+            window.asDynamic().addEventListener("pointermove", onMove)
+            window.asDynamic().addEventListener("pointerup", onUp)
+            window.asDynamic().addEventListener("pointercancel", onCancel)
+            if (touch) {
+                window.asDynamic().addEventListener("touchmove", onTouchMove, js("({ passive: false })"))
+                pressTimer = window.setTimeout({ engage() }, RAIL_LONG_PRESS_MS)
+            }
+        }
         // Friend tapped in the home sidebar: open the quick profile modal first (no
         // chat composer around, so no Mention action), with "View profile" inside it
         // for the full page.
@@ -297,9 +437,21 @@ val AppFrame =
                         val activeRelay = groupRoute?.relayUrl?.normalizeRelayUrl()
                         railRoots.forEach { group ->
                             val name = group.meta.name ?: group.meta.id
+                            val rkey = railKey(group.relayUrl, group.meta.id)
                             div {
                                 key = "${group.relayUrl}/${group.meta.id}"
-                                className = ClassName("rail-group")
+                                className =
+                                    ClassName(
+                                        buildString {
+                                            append("rail-group")
+                                            if (dragKey == rkey) append(" dragging")
+                                            if (overKey == rkey && dragKey != null && dragKey != rkey) append(" drag-over")
+                                        },
+                                    )
+                                asDynamic()["data-rkey"] = rkey
+                                // Kill any native HTML drag started inside the chip; it would
+                                // take over the pointer stream the reorder needs.
+                                onDragStart = { it.preventDefault() }
                                 button {
                                     className =
                                         ClassName(
@@ -313,7 +465,12 @@ val AppFrame =
                                             },
                                         )
                                     title = name
-                                    onClick = { pushRoute(GroupRoute(group.relayUrl, group.meta.id)) }
+                                    // Long-press-free: the chip drags from its own pointer down, and
+                                    // a plain click still navigates (no move => no reorder).
+                                    onPointerDown = { e -> startRailDrag(rkey, e) }
+                                    onClick = {
+                                        if (railDraggedRef.current != true) pushRoute(GroupRoute(group.relayUrl, group.meta.id))
+                                    }
                                     WebAvatar {
                                         url = group.meta.picture
                                         seed = group.meta.id
@@ -329,6 +486,16 @@ val AppFrame =
                                         +(if (unread > 99) "99+" else "$unread")
                                     }
                                 }
+                            }
+                        }
+                        // End drop strip, only while dragging: a chip target always inserts
+                        // BEFORE it, so this is the only way to land after the last group.
+                        // Hidden for the last chip itself, which is already there.
+                        val lastRailKey = railRoots.lastOrNull()?.let { railKey(it.relayUrl, it.meta.id) }
+                        if (dragKey != null && dragKey != lastRailKey) {
+                            div {
+                                className = ClassName(if (overKey == RAIL_END_DROP) "rail-drop-end drag-over" else "rail-drop-end")
+                                asDynamic()["data-rkey"] = RAIL_END_DROP
                             }
                         }
                         // Add-group is the last scrollable item (after the groups) so the

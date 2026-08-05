@@ -3,6 +3,8 @@ package org.nostr.nostrord.ui.components.layout
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -64,10 +66,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
@@ -76,6 +84,8 @@ import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -93,6 +103,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.nostr.nostrord.auth.removeAccountBusyLabel
@@ -142,10 +153,12 @@ import org.nostr.nostrord.ui.screens.group.components.AddGroupModal
 import org.nostr.nostrord.ui.screens.group.components.CreateGroupModal
 import org.nostr.nostrord.ui.screens.group.components.JoinGroupModal
 import org.nostr.nostrord.ui.screens.group.components.UserProfileModal
+import org.nostr.nostrord.ui.screens.group.moveChannelBefore
 import org.nostr.nostrord.ui.screens.group.rootGroupId
 import org.nostr.nostrord.ui.screens.home.Friend
 import org.nostr.nostrord.ui.screens.home.HomePageScreen
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
+import org.nostr.nostrord.ui.screens.home.railKey
 import org.nostr.nostrord.ui.screens.notifications.NotificationsPage
 import org.nostr.nostrord.ui.screens.notifications.NotificationsSidebar
 import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
@@ -160,6 +173,7 @@ import org.nostr.nostrord.ui.window.onBackForwardMouseButtons
 import org.nostr.nostrord.utils.accountDisplayLabel
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.rememberClipboardWriter
+import kotlin.math.roundToInt
 
 /**
  * New-design logged-in frame (prototype AppShell): the 72px groups rail (home,
@@ -188,6 +202,64 @@ fun AppFrame() {
     val dmUnread by AppModule.nostrRepository.totalDmUnread.collectAsState()
     val dmEnabled by AppModule.dmSettings.dmEnabled.collectAsState()
     var addGroupStep by remember { mutableStateOf<AddGroupStep?>(null) }
+
+    // Rail drag reorder (long-press to pick a chip up, so a tap still opens the group).
+    // Index railRoots.size is the slot after the last chip. No optimistic copy:
+    // reorderRail updates the shared order flow before the publish leaves.
+    var railDragKey by remember { mutableStateOf<String?>(null) }
+    var railDragDelta by remember { mutableStateOf(0f) }
+    var railChipHeightPx by remember { mutableStateOf(0) }
+    var railScrollAtDragStart by remember { mutableStateOf(0) }
+    val railScroll = rememberScrollState()
+    val railKeys = railRoots.map { railKey(it.relayUrl, it.meta.id) }
+    val railDragFromIndex = railKeys.indexOf(railDragKey)
+    val railPitchPx = railChipHeightPx + with(LocalDensity.current) { 8.dp.roundToPx() }
+    // Travel counts auto-scroll, not just pointer movement: on a rail taller than its
+    // viewport, a pointer-only offset would need the cursor to move the full content
+    // height (off-screen) to reach the last slot. Holding at the edge now advances the
+    // target as the content scrolls under it.
+    val railDragTravel = railDragDelta + (railScroll.value - railScrollAtDragStart)
+    val railDragOverIndex =
+        if (railDragKey != null && railDragFromIndex >= 0 && railPitchPx > 0) {
+            (railDragFromIndex + (railDragTravel / railPitchPx).roundToInt()).coerceIn(0, railKeys.size)
+        } else {
+            -1
+        }
+
+    // Edge auto-scroll while a chip is held: keeps the aimed-at slot on screen and, with
+    // the travel above, is what carries the target to the ends of a long rail. Per frame,
+    // so holding still at an edge keeps going.
+    LaunchedEffect(railDragKey) {
+        if (railDragKey == null) return@LaunchedEffect
+        val edge = railPitchPx.toFloat()
+        while (isActive && railPitchPx > 0) {
+            // Recomputed per frame from state: the composition-scope value above is
+            // captured once and would freeze at the offset the drag started with.
+            val chipTop =
+                railDragFromIndex * railPitchPx + railDragDelta + (railScroll.value - railScrollAtDragStart)
+            val viewTop = railScroll.value.toFloat()
+            val viewBottom = viewTop + railScroll.viewportSize
+            val step =
+                when {
+                    chipTop < viewTop + edge -> -edge / 4f
+                    chipTop + railChipHeightPx > viewBottom - edge -> edge / 4f
+                    else -> 0f
+                }
+            if (step != 0f) railScroll.scrollBy(step)
+            withFrameNanos { }
+        }
+    }
+
+    fun endRailDrag(commit: Boolean) {
+        val key = railDragKey
+        val over = railDragOverIndex
+        val from = railDragFromIndex
+        railDragKey = null
+        railDragDelta = 0f
+        if (!commit || key == null || over < 0 || over == from) return
+        val newOrder = moveChannelBefore(railKeys, key, railKeys.getOrNull(over))
+        if (newOrder != railKeys) vm.reorderRail(newOrder)
+    }
     // Friend tapped in the home sidebar: open the quick profile modal first (no
     // chat composer around, so no Mention action), with "View profile" inside it
     // for the full page.
@@ -367,7 +439,7 @@ fun AppFrame() {
                     modifier =
                     Modifier
                         .weight(1f, fill = false)
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(railScroll),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -377,7 +449,8 @@ fun AppFrame() {
                     // different chip and must not light up too.
                     val activeRootId = groupRoute?.groupId?.let { open -> rootGroupId(open) { groupParents[it] } }
                     val activeRelay = groupRoute?.relayUrl?.normalizeRelayUrl()
-                    railRoots.forEach { group ->
+                    railRoots.forEachIndexed { index, group ->
+                        val rkey = railKey(group.relayUrl, group.meta.id)
                         RailGroupButton(
                             name = group.meta.name ?: group.meta.id,
                             picture = group.meta.picture,
@@ -386,10 +459,37 @@ fun AppFrame() {
                             active = activeRootId == group.meta.id &&
                                 activeRelay == group.relayUrl.normalizeRelayUrl() &&
                                 !showNotifications,
+                            dragging = railDragKey == rkey,
+                            dropIndicator = index == railDragOverIndex && index != railDragFromIndex,
+                            onDragStart = {
+                                railDragKey = rkey
+                                railDragDelta = 0f
+                                railScrollAtDragStart = railScroll.value
+                            },
+                            onDrag = { dy -> railDragDelta += dy },
+                            onDragEnd = { endRailDrag(commit = true) },
+                            onDragCancel = { endRailDrag(commit = false) },
+                            onHeight = { railChipHeightPx = it },
                         ) {
                             history.navigate(GroupRoute(group.relayUrl, group.meta.id))
                             closeDrawer()
                         }
+                    }
+                    // End drop indicator: the slot after the last chip (a chip target always
+                    // inserts BEFORE it, so this is how a group lands last). Not for the last
+                    // chip itself, which is already there.
+                    if (railDragKey != null &&
+                        railDragOverIndex == railKeys.size &&
+                        railDragFromIndex != railKeys.lastIndex
+                    ) {
+                        Box(
+                            modifier =
+                            Modifier
+                                .width(48.dp)
+                                .height(2.dp)
+                                .clip(NostrordShapes.shapeSmall)
+                                .background(NostrordColors.Primary),
+                        )
                     }
                     // Add-group is the last scrollable item (after the groups) so the group
                     // list keeps all the rail space and scrolls together with it.
@@ -870,9 +970,24 @@ private fun RailGroupButton(
     groupId: String,
     unread: Int,
     active: Boolean = false,
+    dragging: Boolean = false,
+    dropIndicator: Boolean = false,
+    onDragStart: () -> Unit = {},
+    onDrag: (Float) -> Unit = {},
+    onDragEnd: () -> Unit = {},
+    onDragCancel: () -> Unit = {},
+    onHeight: (Int) -> Unit = {},
     onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    // pointerInput captures its lambdas once; the drop math lives in callbacks the rail
+    // recreates on every recomposition (they close over the current drag indexes). Route
+    // through rememberUpdatedState or the drop commits against first-composition state.
+    val currentOnDragStart by rememberUpdatedState(onDragStart)
+    val currentOnDrag by rememberUpdatedState(onDrag)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+    val currentOnDragCancel by rememberUpdatedState(onDragCancel)
+    val indicatorColor = NostrordColors.Primary
     val isHovered by interactionSource.collectIsHoveredAsState()
     val highlighted = active || isHovered
     // Smoothly morph the corner radius (16dp -> 12dp) rather than snapping the shape,
@@ -885,7 +1000,37 @@ private fun RailGroupButton(
     val shape = RoundedCornerShape(cornerRadius)
     // Span the full rail width so the active pill can sit on the left edge while
     // the icon stays centered.
-    Box(modifier = Modifier.width(72.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier =
+        Modifier
+            .width(72.dp)
+            .onSizeChanged { onHeight(it.height) }
+            .alpha(if (dragging) 0.4f else 1f)
+            // Drop target line at the top edge (drop = insert before this chip).
+            .drawBehind {
+                if (dropIndicator) {
+                    drawRoundRect(
+                        color = indicatorColor,
+                        size = Size(size.width, 2.dp.toPx()),
+                        cornerRadius = CornerRadius(1.dp.toPx()),
+                    )
+                }
+            }
+            // Long press, not plain drag: a tap must still open the group, and the chip
+            // has no separate handle to grab.
+            .pointerInput(groupId) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { currentOnDragStart() },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        currentOnDrag(amount.y)
+                    },
+                    onDragEnd = { currentOnDragEnd() },
+                    onDragCancel = { currentOnDragCancel() },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
         // Left pill marker: grows from 0 to 20dp on hover and 36dp when active (web .rail-item::before).
         val pillHeight by animateDpAsState(
             targetValue = if (active) {
