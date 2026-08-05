@@ -15,6 +15,7 @@ import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.notifications.NotificationEntry
 import org.nostr.nostrord.notifications.NotificationType
 import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.ui.text.flattenMarkdownForPreview
 
 /** Notifications type filter (prototype tabs). Reactions have no tab; they show under [ALL]. */
 enum class NotifFilter { ALL, MENTIONS, REPLIES, MESSAGES }
@@ -86,14 +87,19 @@ class NotificationsViewModel(
         NotifFilter.MESSAGES -> entry.type == NotificationType.MESSAGE
     }
 
-    /** The notifications to render, after the type, group and unread-only filters. */
+    /**
+     * The notifications to render, after the type, group and unread-only filters.
+     * Previews are flattened here rather than in either UI: entries persisted
+     * before previews were flattened still hold raw markers, and neither feed row
+     * renders them. Idempotent, so freshly built previews pass through unchanged.
+     */
     val filtered: StateFlow<List<NotificationEntry>> =
         combine(entries, _typeFilter, _unreadOnly, _groupFilter) { list, type, unread, group ->
             list.filter { e ->
                 matchesType(e, type) &&
                     (group == null || e.groupId == group) &&
                     (!unread || !e.read)
-            }
+            }.map { e -> e.copy(preview = flattenMarkdownForPreview(e.preview)) }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Total unread, for the header pill. */
