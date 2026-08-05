@@ -736,27 +736,21 @@ object MessageContentParser {
     // ============================================================================
 
     /**
-     * Bold text: **text** (markdown) and *text* (Nostr style). Both render bold — additive, so
-     * existing *bold* keeps working while markdown **bold** is also recognized. The double form is
-     * matched first (see [findFormatting]) so it isn't split into two empty single-asterisk marks.
+     * Inline markers, all guarded against literal use in ordinary text - see [MarkdownEmphasis].
+     * Bold is additive: **text** (markdown) and *text* (Nostr style) both render bold, with the
+     * double form matched first (see [findFormatting]) so it isn't split into two single marks.
      */
-    private val boldDoubleRegex = Regex("\\*\\*([\\s\\S]+?)\\*\\*")
-    private val boldRegex = Regex("\\*([\\s\\S]*?)\\*")
-
-    /** Italic text: _text_, word-bounded so snake_case identifiers keep their underscores. */
+    private val boldDoubleRegex = MarkdownEmphasis.boldDoubleRegex
+    private val boldRegex = MarkdownEmphasis.boldRegex
     private val italicRegex = MarkdownEmphasis.italicUnderscoreRegex
+    private val strikethroughRegex = MarkdownEmphasis.strikethroughRegex
+    private val spoilerRegex = MarkdownEmphasis.spoilerRegex
 
     /**
      * Monospace/inline code: `text` (not triple backticks)
      * Uses simple approach to avoid lookbehind compatibility issues
      */
     private val monospaceRegex = Regex("`([^`]+)`")
-
-    /** Strikethrough: ~~text~~ (non-greedy, at least one char). */
-    private val strikethroughRegex = Regex("~~([\\s\\S]+?)~~")
-
-    /** Spoiler: ||text|| (non-greedy, at least one char). */
-    private val spoilerRegex = Regex("\\|\\|([\\s\\S]+?)\\|\\|")
 
     /**
      * Find text formatting (bold, italic, monospace) in non-covered regions.

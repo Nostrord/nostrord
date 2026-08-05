@@ -43,10 +43,10 @@ fun aboutMentionPubkeys(text: String): Set<String> = ABOUT_REGEX
         }
     }.toSet()
 
-// Markdown subset mirrored from native MessageContentParser: *bold* (any content,
-// non-greedy), _italic_ (word-bounded) and `inline code` (opaque: no entities inside).
+// Markdown subset mirrored from native MessageContentParser: *bold*, _italic_ (both
+// guarded, see MarkdownEmphasis) and `inline code` (opaque: no entities inside).
 private val INLINE_CODE_REGEX = Regex("`([^`]+)`")
-private val BOLD_REGEX = Regex("\\*([\\s\\S]*?)\\*")
+private val BOLD_REGEX = MarkdownEmphasis.boldRegex
 private val ITALIC_REGEX = MarkdownEmphasis.italicUnderscoreRegex
 
 /**

@@ -3745,15 +3745,9 @@ private fun ChildrenBuilder.renderEntities(
     if (last < content.length) renderFormattedText(content.substring(last), emojiMap)
 }
 
-// Inline formatting tokens, longest markers first so **bold** wins over *bold* and ~~/|| aren't
-// split. Mirrors native MessageContentParser: * and ** are bold (additive), _ italic, ~~ strike,
-// || spoiler. The _ arm is word-bounded (shared with native) so identifiers such as
-// nip44_decrypt_batch keep their underscores instead of italicizing the middle.
-private val INLINE_FORMAT_REGEX =
-    Regex(
-        "~~[\\s\\S]+?~~|\\|\\|[\\s\\S]+?\\|\\||\\*\\*[\\s\\S]+?\\*\\*|\\*[^*\\n]+?\\*|" +
-            MarkdownEmphasis.ITALIC_UNDERSCORE_PATTERN,
-    )
+// Inline formatting tokens: * and ** bold (additive), _ italic, ~~ strike, || spoiler. Shared
+// with native MessageContentParser, guards included - see MarkdownEmphasis.
+private val INLINE_FORMAT_REGEX = MarkdownEmphasis.inlineMarkerRegex
 
 /**
  * Render inline *bold* / **bold**, _italic_, ~~strikethrough~~ and ||spoiler|| in a non-URL text
