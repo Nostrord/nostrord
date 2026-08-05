@@ -1,7 +1,10 @@
 package org.nostr.nostrord.network.livekit
 
 import android.Manifest
+import io.livekit.android.AudioOptions
+import io.livekit.android.AudioType
 import io.livekit.android.LiveKit
+import io.livekit.android.LiveKitOverrides
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.Participant
@@ -72,7 +75,7 @@ actual class MediaEngine actual constructor() {
             ?: return Result.Error(AppError.Unknown(AV_UNSUPPORTED_MESSAGE))
 
         _connectionState.value = AvConnectionState.Connecting
-        val joining = LiveKit.create(appContext = context)
+        val joining = LiveKit.create(appContext = context, overrides = AV_OVERRIDES)
         return try {
             joining.connect(url = credentials.serverUrl, token = credentials.token)
             room = joining
@@ -201,6 +204,15 @@ actual class MediaEngine actual constructor() {
         }
     }
 }
+
+/**
+ * Play the room as media rather than as a phone call.
+ *
+ * The SDK default puts playback on `MODE_IN_COMMUNICATION` / `STREAM_VOICE_CALL`, which runs the
+ * device's voice pipeline: its automatic gain rides the noise floor up whenever the room is quiet
+ * and a listener hears a constant hiss. `MediaAudioType` takes playback off that path.
+ */
+private val AV_OVERRIDES = LiveKitOverrides(audioOptions = AudioOptions(audioOutputType = AudioType.MediaAudioType()))
 
 private fun Room.participantOf(identity: String): Participant? = if (localParticipant.identity?.value == identity) {
     localParticipant
