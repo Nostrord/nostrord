@@ -52,6 +52,7 @@ val AvSpaceModal =
         val micOn = useStateFlow(vm.micEnabled)
         val cameraOn = useStateFlow(vm.cameraEnabled)
         val error = useStateFlow(vm.error)
+        val audioBlocked = useStateFlow(vm.audioPlaybackBlocked)
         val userMetadata = useStateFlow(repo.userMetadata)
 
         useEscClose { props.onClose() }
@@ -102,6 +103,20 @@ val AvSpaceModal =
                             className = ClassName("av-space-error-close")
                             onClick = { vm.dismissError() }
                             icon(Ic.Close)
+                        }
+                    }
+                }
+
+                // Autoplay policy: the browser refused to start audio without a gesture, so
+                // give it one. Success fires audioPlaybackChanged and the banner clears itself.
+                if (audioBlocked) {
+                    div {
+                        className = ClassName("av-space-audio-unlock")
+                        span { +"Your browser blocked the room's audio" }
+                        button {
+                            className = ClassName("av-space-audio-unlock-btn")
+                            onClick = { vm.startAudio() }
+                            +"Enable audio"
                         }
                     }
                 }

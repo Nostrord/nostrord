@@ -66,6 +66,11 @@ actual class MediaEngine actual constructor() {
     private val _cameraEnabled = MutableStateFlow(false)
     actual val cameraEnabled: StateFlow<Boolean> = _cameraEnabled.asStateFlow()
 
+    /** The ADM plays without permission; the browser-only autoplay block never happens here. */
+    actual val audioPlaybackBlocked: StateFlow<Boolean> = MutableStateFlow(false)
+
+    actual fun startAudio() {}
+
     actual suspend fun connect(credentials: LiveKitCredentials): Result<Unit> {
         if (room != null) {
             // A dropped room leaves its handle behind. Rejoining needs a fresh LiveKitRoom, and

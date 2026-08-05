@@ -29,6 +29,7 @@ private object RoomEvent {
     const val TRACK_UNMUTED = "trackUnmuted"
     const val LOCAL_TRACK_PUBLISHED = "localTrackPublished"
     const val LOCAL_TRACK_UNPUBLISHED = "localTrackUnpublished"
+    const val AUDIO_PLAYBACK_CHANGED = "audioPlaybackChanged"
 }
 
 /** Web AV transport, backed by the livekit-client SDK over WebRTC. */
@@ -46,6 +47,9 @@ actual class MediaEngine actual constructor() {
 
     private val _cameraEnabled = MutableStateFlow(false)
     actual val cameraEnabled: StateFlow<Boolean> = _cameraEnabled.asStateFlow()
+
+    private val _audioPlaybackBlocked = MutableStateFlow(false)
+    actual val audioPlaybackBlocked: StateFlow<Boolean> = _audioPlaybackBlocked.asStateFlow()
 
     private var room: Room? = null
 
@@ -81,6 +85,12 @@ actual class MediaEngine actual constructor() {
     actual fun disconnect() {
         val current = room ?: return
         teardown(current)
+    }
+
+    actual fun startAudio() {
+        // Success resumes every attached element and fires audioPlaybackChanged, which
+        // clears the flag; a rejected promise means the gesture didn't count, keep it set.
+        room?.asDynamic()?.startAudio()
     }
 
     actual suspend fun setMicEnabled(enabled: Boolean): Result<Unit> {
@@ -176,6 +186,12 @@ actual class MediaEngine actual constructor() {
             refresh(target)
         }
 
+        // The browser can refuse to start audio without a user gesture (autoplay policy).
+        // livekit-client reports it here; the UI offers a tap that calls startAudio().
+        target.on(RoomEvent.AUDIO_PLAYBACK_CHANGED) {
+            _audioPlaybackBlocked.value = target.asDynamic().canPlaybackAudio != true
+        }
+
         target.on(RoomEvent.CONNECTED) {
             _connectionState.value = AvConnectionState.Connected
             refresh(target)
@@ -221,6 +237,7 @@ actual class MediaEngine actual constructor() {
         }
         audioSinks.forEach { el -> runCatching { el?.remove() } }
         audioSinks.clear()
+        _audioPlaybackBlocked.value = false
         if (room === target) room = null
         _connectionState.value = AvConnectionState.Disconnected
         _participants.value = emptyList()

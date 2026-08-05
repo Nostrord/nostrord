@@ -12,6 +12,9 @@ actual class MediaEngine actual constructor() {
     actual val participants: StateFlow<List<AvParticipant>> = stub.participants
     actual val micEnabled: StateFlow<Boolean> = stub.micEnabled
     actual val cameraEnabled: StateFlow<Boolean> = stub.cameraEnabled
+    actual val audioPlaybackBlocked: StateFlow<Boolean> = stub.audioPlaybackBlocked
+
+    actual fun startAudio() {}
 
     actual suspend fun connect(credentials: LiveKitCredentials): Result<Unit> = stub.unsupported()
 

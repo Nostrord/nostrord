@@ -41,6 +41,16 @@ expect class MediaEngine() {
     val micEnabled: StateFlow<Boolean>
     val cameraEnabled: StateFlow<Boolean>
 
+    /**
+     * True while the platform refuses to play subscribed audio until a user gesture — the
+     * browser's autoplay policy. Always false on native targets, where playback needs no
+     * permission. The UI offers a tap that calls [startAudio].
+     */
+    val audioPlaybackBlocked: StateFlow<Boolean>
+
+    /** Resume audio playback from a user gesture. No-op where playback was never blocked. */
+    fun startAudio()
+
     /** Join the room described by [credentials]. Publishes nothing until a track is enabled. */
     suspend fun connect(credentials: LiveKitCredentials): Result<Unit>
 

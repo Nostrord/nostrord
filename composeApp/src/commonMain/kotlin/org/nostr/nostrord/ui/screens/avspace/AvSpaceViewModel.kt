@@ -68,6 +68,11 @@ class AvSpaceViewModel(
     val micEnabled: StateFlow<Boolean> = engine.micEnabled
     val cameraEnabled: StateFlow<Boolean> = engine.cameraEnabled
 
+    /** Browser autoplay block; the web UI shows an enable-audio tap while true. */
+    val audioPlaybackBlocked: StateFlow<Boolean> = engine.audioPlaybackBlocked
+
+    fun startAudio() = engine.startAudio()
+
     private val _error = MutableStateFlow<String?>(null)
 
     /** Last join or capture failure, for a dismissible banner. Cleared on the next attempt. */

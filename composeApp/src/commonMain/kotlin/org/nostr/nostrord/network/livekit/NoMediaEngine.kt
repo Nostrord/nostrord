@@ -19,6 +19,7 @@ internal class NoMediaEngine {
     val participants: StateFlow<List<AvParticipant>> = MutableStateFlow(emptyList())
     val micEnabled: StateFlow<Boolean> = MutableStateFlow(false)
     val cameraEnabled: StateFlow<Boolean> = MutableStateFlow(false)
+    val audioPlaybackBlocked: StateFlow<Boolean> = MutableStateFlow(false)
 
     fun unsupported(): Result<Unit> = Result.Error(AppError.Unknown(AV_UNSUPPORTED_MESSAGE))
 }
