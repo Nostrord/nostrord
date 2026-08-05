@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -192,6 +193,10 @@ private fun AvSpaceRoomDialog(
     val error by vm.error.collectAsState()
 
     val connected = connection == AvConnectionState.Connected
+
+    // Joined as far as the user is concerned. A reconnect counts: the room handle and the capture
+    // are still live there. The initial join does not, since there is nothing to leave yet.
+    val inRoom = connected || connection == AvConnectionState.Reconnecting
     val anyVideo = participants.any { it.cameraEnabled }
     // Everyone unmuted, on camera, or speaking is on stage; the rest are listening (web parity).
     val onStage = participants.filter { it.micEnabled || it.isSpeaking || it.cameraEnabled }
@@ -310,17 +315,22 @@ private fun AvSpaceRoomDialog(
                             fontSize = 13.sp,
                         )
 
-                        connected -> {
+                        // The whole bar stays up through a reconnect: hiding it there strands the
+                        // user with a hot microphone and no way out, which is exactly when a
+                        // flapping connection makes them want to leave.
+                        inRoom -> {
                             ControlButton(
                                 active = micOn,
                                 icon = if (micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
                                 label = if (micOn) "Mute" else "Unmute",
+                                enabled = connected,
                                 onClick = { vm.toggleMic() },
                             )
                             ControlButton(
                                 active = cameraOn,
                                 icon = if (cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
                                 label = if (cameraOn) "Turn camera off" else "Turn camera on",
+                                enabled = connected,
                                 onClick = { vm.toggleCamera() },
                             )
                             Box(
@@ -549,13 +559,20 @@ private fun VideoTile(
 }
 
 @Composable
-private fun ControlButton(active: Boolean, icon: ImageVector, label: String, onClick: () -> Unit) {
+private fun ControlButton(
+    active: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
     Box(
         modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
             .background(if (active) NostrordColors.Primary else NostrordColors.InputBackground)
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.5f),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

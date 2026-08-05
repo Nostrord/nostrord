@@ -58,6 +58,13 @@ val AvSpaceModal =
         useEscClose { props.onClose() }
 
         val connected = connection == AvConnectionState.Connected
+
+        /**
+         * Joined as far as the user is concerned. A reconnect counts: the room handle and the
+         * capture are still live there, so leaving has to stay reachable. The initial join does
+         * not, since there is nothing to leave yet.
+         */
+        val inRoom = connected || connection == AvConnectionState.Reconnecting
         val anyVideo = participants.any { it.cameraEnabled }
         // Everyone unmuted, on camera, or speaking is "on stage"; the rest are listening.
         val onStage = participants.filter { it.micEnabled || it.isSpeaking || it.cameraEnabled }
@@ -165,17 +172,22 @@ val AvSpaceModal =
                             className = ClassName("av-space-note")
                             +"Live audio and video are only available on the web for now."
                         }
-                    } else if (connected) {
+                    } else if (inRoom) {
+                        // The whole bar stays up while connecting or reconnecting: hiding it
+                        // there strands the user with a hot microphone and no way out, which
+                        // is exactly when a flapping connection makes them want to leave.
                         ControlButton {
                             active = micOn
                             glyph = if (micOn) Ic.Mic else Ic.MicOff
                             title = if (micOn) "Mute" else "Unmute"
+                            enabled = connected
                             onPress = { vm.toggleMic() }
                         }
                         ControlButton {
                             active = cameraOn
                             glyph = if (cameraOn) Ic.Videocam else Ic.VideocamOff
                             title = if (cameraOn) "Turn camera off" else "Turn camera on"
+                            enabled = connected
                             onPress = { vm.toggleCamera() }
                         }
                         button {
@@ -309,6 +321,7 @@ private external interface ControlButtonProps : Props {
     var active: Boolean
     var glyph: Ic
     var title: String
+    var enabled: Boolean
     var onPress: () -> Unit
 }
 
@@ -317,6 +330,7 @@ private val ControlButton =
         button {
             className = ClassName(if (props.active) "av-ctrl av-ctrl-on" else "av-ctrl")
             this.title = props.title
+            disabled = !props.enabled
             onClick = { props.onPress() }
             icon(props.glyph)
         }
