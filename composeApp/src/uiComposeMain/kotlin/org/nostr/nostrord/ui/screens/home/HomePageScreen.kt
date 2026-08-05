@@ -347,7 +347,9 @@ fun HomePageScreen(
                                                 hasMetadata = group.hasMetadata,
                                                 relayUrl = group.relayUrl,
                                                 relayIconUrl = relayMetadata[group.relayUrl]?.icon,
-                                                isJoined = joinedGroupsByRelay.isJoinedOn(group.relayUrl, group.meta.id),
+                                                // Every card in My groups is joined; the badge
+                                                // earns its place only in the mixed lists.
+                                                isJoined = false,
                                                 onRelayClick = { onOpenRelay(group.relayUrl) },
                                                 onClick = { onOpenGroup(JoinedGroup(group.relayUrl, group.meta)) },
                                             )
