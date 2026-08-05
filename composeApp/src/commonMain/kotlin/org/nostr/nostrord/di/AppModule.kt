@@ -48,6 +48,7 @@ import org.nostr.nostrord.settings.NotificationSettings
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.cache.CacheStore
 import org.nostr.nostrord.storage.cache.createCacheStore
+import org.nostr.nostrord.ui.text.flattenMarkdownForPreview
 import org.nostr.nostrord.utils.epochSeconds
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
@@ -402,7 +403,7 @@ object AppModule {
                 if (selfPubkey == null || message.pubkey != selfPubkey) {
                     val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
                         ?: groupManager.getRelayForGroup(groupId) ?: ""
-                    val preview = resolveMentionsForNotification(message.content).take(120)
+                    val preview = notificationPreview(message.content)
                     val groupName = groupDisplayName(groupId)
                     val relayName = relayDisplayName(relayUrl)
                     notificationHistoryStore.add(
@@ -451,7 +452,7 @@ object AppModule {
             onReplyNotify = { groupId, message ->
                 val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
                     ?: groupManager.getRelayForGroup(groupId) ?: ""
-                val preview = resolveMentionsForNotification(message.content).take(120)
+                val preview = notificationPreview(message.content)
                 val groupName = groupDisplayName(groupId)
                 val relayName = relayDisplayName(relayUrl)
                 notificationHistoryStore.add(
@@ -493,7 +494,7 @@ object AppModule {
             onThreadReplyNotify = { groupId, reply ->
                 val relayUrl = reply.relayUrl
                     ?: groupManager.getRelayForGroup(groupId) ?: ""
-                val preview = resolveMentionsForNotification(reply.content).take(120)
+                val preview = notificationPreview(reply.content)
                 val groupName = groupDisplayName(groupId)
                 val relayName = relayDisplayName(relayUrl)
                 // The E tag is the thread root; without it the entry would open the chat, where a
@@ -539,7 +540,7 @@ object AppModule {
             onMentionNotify = { groupId, message ->
                 val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
                     ?: groupManager.getRelayForGroup(groupId) ?: ""
-                val preview = resolveMentionsForNotification(message.content).take(120)
+                val preview = notificationPreview(message.content)
                 val groupName = groupDisplayName(groupId)
                 val relayName = relayDisplayName(relayUrl)
                 notificationHistoryStore.add(
@@ -811,6 +812,14 @@ object AppModule {
      * references into a readable summary needs the event itself, which isn't
      * available here.
      */
+    /**
+     * The message text as a notification shows it: mentions resolved to names and
+     * markdown flattened to plain text. Feeds both the in-app feed and the OS
+     * notification body, neither of which renders markers - and the OS body is why
+     * spoilers are masked rather than unwrapped.
+     */
+    private fun notificationPreview(content: String): String = flattenMarkdownForPreview(resolveMentionsForNotification(content)).take(120)
+
     private fun resolveMentionsForNotification(content: String): String {
         val matches = Nip27.findReferenceMatches(content)
         if (matches.isEmpty()) return content
