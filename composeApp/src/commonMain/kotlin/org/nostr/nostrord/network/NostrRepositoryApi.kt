@@ -214,6 +214,13 @@ interface NostrRepositoryApi {
     val groupTagRelays: StateFlow<Set<String>>
 
     /**
+     * Rail order: (relayUrl, groupId) in the tag order of the account's kind:10009, the
+     * order the user controls by dragging. Purely a sort key: an entry here whose group is
+     * not joined is ignored, never a source of membership.
+     */
+    val groupOrder: StateFlow<List<Pair<String, String>>>
+
+    /**
      * Public NIP-29 group lists (kind:10009) of OTHER users, keyed by pubkey, as
      * (relayUrl, groupId) refs. Filled by [requestUserGroupList]; the active
      * account's own list keeps flowing through the joined-groups state instead.
@@ -450,6 +457,14 @@ interface NostrRepositoryApi {
         groupId: String,
         orderedIds: List<String>,
     ): Result<Unit>
+
+    /**
+     * Reorder the rail by republishing kind:10009 with the `group` tags in [order].
+     * Membership is untouched: entries not currently joined are dropped and joined groups
+     * missing from [order] keep their slot at the end, so a reorder can never add a group
+     * to the published list.
+     */
+    suspend fun reorderGroups(order: List<Pair<String, String>>): Result<Unit>
 
     fun isGroupJoined(groupId: String): Boolean
 

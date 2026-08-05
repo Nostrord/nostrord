@@ -1825,6 +1825,58 @@ body {
     height: 36px;
 }
 
+/* Drag reorder: the dragged chip dims, the chip under the pointer shows a drop line
+   above it (the dragged chip lands before it). Mirrors .group-side-row's states.
+   The chip owns the whole pointer stream: no text selection, and no native image drag
+   from the avatar inside (Safari needs -webkit-user-drag, the attribute is not enough). */
+.rail-group {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.rail-group img,
+.rail-group svg,
+.rail-group canvas {
+    -webkit-user-drag: none;
+    pointer-events: none;
+}
+
+.rail-group.dragging {
+    opacity: 0.4;
+}
+
+.rail-group.drag-over::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -4px;
+    height: 2px;
+    border-radius: var(--radius-full);
+    background: var(--color-primary);
+}
+
+/* End drop strip, rendered only while dragging: the slot after the last chip.
+   align-self overrides the rail's align-items:center — an empty div would otherwise be
+   0px wide and hit-test as nothing, reserving the space but never taking the drop. */
+.rail-drop-end {
+    position: relative;
+    align-self: stretch;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.rail-drop-end.drag-over::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    right: 0;
+    left: 0;
+    height: 2px;
+    border-radius: var(--radius-full);
+    background: var(--color-primary);
+}
+
 .rail-group-btn .group-card-avatar {
     width: 48px;
     height: 48px;

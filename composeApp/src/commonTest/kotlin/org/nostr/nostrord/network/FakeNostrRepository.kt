@@ -358,6 +358,11 @@ class FakeNostrRepository : NostrRepositoryApi {
         orderedIds: List<String>,
     ): Result<Unit> = Result.Success(Unit)
 
+    override suspend fun reorderGroups(order: List<Pair<String, String>>): Result<Unit> {
+        groupOrderFlow.value = order
+        return Result.Success(Unit)
+    }
+
     override fun isGroupJoined(groupId: String): Boolean = joinedGroups.value.contains(groupId)
 
     override suspend fun requestGroupMessages(
@@ -665,6 +670,9 @@ class FakeNostrRepository : NostrRepositoryApi {
     override val restrictedRelays: StateFlow<Map<String, String>> = MutableStateFlow(emptyMap())
     override val kind10009Relays: StateFlow<Set<String>> = MutableStateFlow(emptySet())
     override val groupTagRelays: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+
+    val groupOrderFlow = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+    override val groupOrder: StateFlow<List<Pair<String, String>>> = groupOrderFlow
 
     override suspend fun fetchGroupPreview(
         groupId: String,

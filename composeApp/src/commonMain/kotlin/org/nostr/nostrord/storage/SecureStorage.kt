@@ -382,6 +382,42 @@ private const val RELAY_LIST_MIGRATION_DONE_KEY = "relay_list_legacy_migrated"
 
 private const val NOSTRCONNECT_RELAYS_KEY = "nostrconnect_relays"
 
+private fun groupOrderForAccountKey(pubkey: String) = "group_order_${pubkeyDigest(pubkey)}"
+
+/**
+ * Rail order: `relay|id` entries in the tag order of the account's kind:10009. A sort key
+ * only — an entry whose group is not joined is ignored, never a source of membership.
+ * Persisted so a cold start orders the rail before the event lands.
+ */
+fun SecureStorage.saveGroupOrderFor(
+    pubkey: String,
+    order: List<Pair<String, String>>,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveStringPref(
+            groupOrderForAccountKey(pubkey),
+            Json.encodeToString<List<String>>(order.map { (relay, id) -> "$relay|$id" }),
+        )
+    } catch (_: Exception) {
+    }
+}
+
+fun SecureStorage.loadGroupOrderFor(pubkey: String): List<Pair<String, String>> {
+    if (pubkey.isBlank()) return emptyList()
+    val raw = getStringPref(groupOrderForAccountKey(pubkey), "")
+    if (raw.isBlank()) return emptyList()
+    return try {
+        Json.decodeFromString<List<String>>(raw).mapNotNull { entry ->
+            // Relay URLs carry no "|", so the first separator splits it; a group id may.
+            val sep = entry.indexOf('|')
+            if (sep <= 0 || sep == entry.lastIndex) null else entry.substring(0, sep) to entry.substring(sep + 1)
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
 /**
  * NIP-46 nostrconnect:// QR-login relays the user customized. Global (pre-login)
  * — not per-account, since they are chosen before any account exists.
