@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.components.chat
 
 import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.nostr.Nip68
+import org.nostr.nostrord.ui.text.MarkdownEmphasis
 
 /**
  * # Chat Message Content Parser
@@ -742,11 +743,8 @@ object MessageContentParser {
     private val boldDoubleRegex = Regex("\\*\\*([\\s\\S]+?)\\*\\*")
     private val boldRegex = Regex("\\*([\\s\\S]*?)\\*")
 
-    /**
-     * Italic text: _text_ (requires word boundary - space or start/end)
-     * Avoids matching underscores in snake_case or emoji shortcodes
-     */
-    private val italicRegex = Regex("(?:^|(?<=\\s))_([^_]+)_(?=\\s|$|[.,!?;:])")
+    /** Italic text: _text_, word-bounded so snake_case identifiers keep their underscores. */
+    private val italicRegex = MarkdownEmphasis.italicUnderscoreRegex
 
     /**
      * Monospace/inline code: `text` (not triple backticks)

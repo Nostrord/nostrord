@@ -34,6 +34,7 @@ import org.nostr.nostrord.ui.screens.group.classifyReactionError
 import org.nostr.nostrord.ui.screens.group.pluralizeSystemAction
 import org.nostr.nostrord.ui.scroll.ChatScrollPolicy
 import org.nostr.nostrord.ui.scroll.JumpPillTarget
+import org.nostr.nostrord.ui.text.MarkdownEmphasis
 import org.nostr.nostrord.utils.ChatSearch
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
@@ -3746,9 +3747,13 @@ private fun ChildrenBuilder.renderEntities(
 
 // Inline formatting tokens, longest markers first so **bold** wins over *bold* and ~~/|| aren't
 // split. Mirrors native MessageContentParser: * and ** are bold (additive), _ italic, ~~ strike,
-// || spoiler.
+// || spoiler. The _ arm is word-bounded (shared with native) so identifiers such as
+// nip44_decrypt_batch keep their underscores instead of italicizing the middle.
 private val INLINE_FORMAT_REGEX =
-    Regex("~~[\\s\\S]+?~~|\\|\\|[\\s\\S]+?\\|\\||\\*\\*[\\s\\S]+?\\*\\*|\\*[^*\\n]+?\\*|_[^_\\n]+?_")
+    Regex(
+        "~~[\\s\\S]+?~~|\\|\\|[\\s\\S]+?\\|\\||\\*\\*[\\s\\S]+?\\*\\*|\\*[^*\\n]+?\\*|" +
+            MarkdownEmphasis.ITALIC_UNDERSCORE_PATTERN,
+    )
 
 /**
  * Render inline *bold* / **bold**, _italic_, ~~strikethrough~~ and ||spoiler|| in a non-URL text
