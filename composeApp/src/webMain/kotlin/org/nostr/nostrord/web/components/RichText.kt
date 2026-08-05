@@ -2,6 +2,7 @@ package org.nostr.nostrord.web.components
 
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.ui.text.MarkdownEmphasis
 import react.ChildrenBuilder
 import react.dom.html.ReactHTML.a
 import react.dom.html.ReactHTML.code
@@ -46,7 +47,7 @@ fun aboutMentionPubkeys(text: String): Set<String> = ABOUT_REGEX
 // non-greedy), _italic_ (word-bounded) and `inline code` (opaque: no entities inside).
 private val INLINE_CODE_REGEX = Regex("`([^`]+)`")
 private val BOLD_REGEX = Regex("\\*([\\s\\S]*?)\\*")
-private val ITALIC_REGEX = Regex("(?:^|(?<=\\s))_([^_]+)_(?=\\s|\$|[.,!?;:])")
+private val ITALIC_REGEX = MarkdownEmphasis.italicUnderscoreRegex
 
 /**
  * Render an about / description string with clickable web links, NIP-27 mentions
