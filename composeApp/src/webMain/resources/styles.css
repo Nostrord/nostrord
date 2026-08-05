@@ -11223,19 +11223,21 @@ button.hierarchy-crumb-item:hover {
 }
 
 /*
- * Phone: a bottom sheet, the shape WhatsApp and Telegram both use for a live call. It buys the
- * full width for the tile grid and puts the controls under the thumb instead of mid-screen.
+ * Phone: the room takes the screen, the way WhatsApp and Telegram treat a call in progress. A
+ * live room is the task, not a sheet over one, and the tile grid wants every pixel.
  */
 @media (max-width: 599px) {
     .av-space-overlay {
-        align-items: flex-end;
         padding: 0;
     }
 
     .av-space-card {
         max-width: none;
-        height: 88vh;
-        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        width: 100%;
+        /* dvh, not vh: the mobile URL bar collapsing must not leave the controls off-screen. */
+        height: 100dvh;
+        max-height: 100dvh;
+        border-radius: 0;
     }
 
     .av-space-controls {

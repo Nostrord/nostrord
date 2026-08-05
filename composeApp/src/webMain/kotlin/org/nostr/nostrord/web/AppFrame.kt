@@ -44,6 +44,7 @@ import org.nostr.nostrord.web.components.tabItem
 import org.nostr.nostrord.web.components.useTabBadge
 import org.nostr.nostrord.web.modals.AddAccountModal
 import org.nostr.nostrord.web.modals.AddGroupModal
+import org.nostr.nostrord.web.modals.AvSpaceModalHost
 import org.nostr.nostrord.web.modals.CreateGroupModal
 import org.nostr.nostrord.web.modals.JoinGroupModal
 import org.nostr.nostrord.web.modals.UserProfileModal
@@ -979,5 +980,9 @@ val AppFrame =
             // Fullscreen image viewer host: mounted once so ImageViewer.show(...) from a
             // chat image opens the lightbox over the frame.
             ImageViewerHost {}
+
+            // AV room host: mounted once so every entry point shows the same room, outside the
+            // mobile drawer's transform.
+            AvSpaceModalHost {}
         }
     }

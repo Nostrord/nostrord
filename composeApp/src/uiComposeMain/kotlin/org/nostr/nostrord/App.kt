@@ -31,6 +31,7 @@ import org.nostr.nostrord.auth.pomegranate.PomegranateAuthHost
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.startup.AppStartState
 import org.nostr.nostrord.startup.StartupResolver
+import org.nostr.nostrord.ui.components.chat.AvSpaceRoomHost
 import org.nostr.nostrord.ui.components.layout.AppFrame
 import org.nostr.nostrord.ui.components.navigation.MinimalTitleBar
 import org.nostr.nostrord.ui.navigation.clearBrowserUrlQuery
@@ -227,6 +228,9 @@ fun App() {
             // Google (pomegranate) sign-in WebView, shown over login or backup export when
             // the flow opens a popup.
             PomegranateAuthHost()
+
+            // AV room host: mounted once so every entry point shows the same room.
+            AvSpaceRoomHost()
         }
     }
 }

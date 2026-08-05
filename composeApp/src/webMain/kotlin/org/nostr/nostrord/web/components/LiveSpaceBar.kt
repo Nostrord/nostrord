@@ -1,7 +1,11 @@
 package org.nostr.nostrord.web.components
 
+import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.UserMetadata
+import org.nostr.nostrord.ui.screens.avspace.LiveSpaceBarViewModel
 import org.nostr.nostrord.utils.shortNpub
+import org.nostr.nostrord.web.bridge.useStateFlow
+import org.nostr.nostrord.web.bridge.useViewModel
 import react.FC
 import react.Props
 import react.dom.html.ReactHTML.button
@@ -10,8 +14,7 @@ import react.dom.html.ReactHTML.span
 import web.cssom.ClassName
 
 external interface LiveSpaceBarProps : Props {
-    /** Pubkeys currently in the room, from kind 39004. */
-    var participants: List<String>
+    var groupId: String
     var userMetadata: Map<String, UserMetadata>
     var onOpen: () -> Unit
 }
@@ -23,14 +26,24 @@ private const val AVATAR_STACK = 4
  * In-chat banner for a NIP-29 AV space: participant count, a stack of the first few faces and
  * a Join action.
  *
- * Shown for every group carrying the `livekit` tag, including an empty room. NIP-29 has no
- * "open the room" event - the relay creates it lazily on the first token request - so hiding
- * the empty state would leave nobody able to be the first one in.
+ * Self-hiding: an empty room costs the chat pane a row and tells the reader nothing. Starting
+ * the first room lives in the sidebar's Voice room row, which is always there, so the chat only
+ * carries the bar once there is a call to join (or one this browser is already in).
  */
 val LiveSpaceBar =
     FC<LiveSpaceBarProps> { props ->
-        val count = props.participants.size
+        val repo = AppModule.nostrRepository
+        val selfPubkey = useStateFlow(repo.activePubkey)
+        val vm = useViewModel(props.groupId) {
+            LiveSpaceBarViewModel(repo, props.groupId, selfPubkey, AppModule.avSpaceHost)
+        }
+        val participants = useStateFlow(vm.participants)
+        val joined = useStateFlow(vm.joined)
+        val visible = useStateFlow(vm.visible)
+        val count = participants.size
         val live = count > 0
+
+        if (!visible) return@FC
         button {
             className = ClassName(if (live) "live-space-bar" else "live-space-bar live-space-idle")
             onClick = { props.onOpen() }
@@ -63,7 +76,8 @@ val LiveSpaceBar =
             }
             div {
                 className = ClassName("live-space-avatars")
-                props.participants.take(AVATAR_STACK).forEach { pubkey ->
+                participants.take(AVATAR_STACK).forEach { participant ->
+                    val pubkey = participant.pubkey
                     WebAvatar {
                         key = pubkey
                         url = props.userMetadata[pubkey]?.picture
@@ -75,7 +89,13 @@ val LiveSpaceBar =
             }
             span {
                 className = ClassName("live-space-join")
-                +(if (live) "Join" else "Start")
+                // Already inside: the pill returns you to the room instead of offering to
+                // join one you are in, which is the mini-player every call app falls back to.
+                +when {
+                    joined -> "Open"
+                    live -> "Join"
+                    else -> "Start"
+                }
             }
         }
     }

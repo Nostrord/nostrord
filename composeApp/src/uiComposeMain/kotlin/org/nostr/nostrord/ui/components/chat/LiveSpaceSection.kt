@@ -35,9 +35,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -57,6 +54,7 @@ import org.nostr.nostrord.network.livekit.AvConnectionState
 import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceParticipant
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceViewModel
+import org.nostr.nostrord.ui.screens.avspace.LiveSpaceBarViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
@@ -75,29 +73,31 @@ private fun nameOf(pubkey: String, userMetadata: Map<String, UserMetadata>): Str
 /**
  * Live NIP-29 AV space banner for [groupId], opening the room dialog.
  *
- * Shown for any group carrying the `livekit` tag, empty room included: the relay creates the
- * room lazily on the first token request, so the empty state is exactly when someone needs the
- * entry point. Mirrors the web LiveSpaceBar (LIVE badge only while occupied, Start/Join pill).
+ * Self-hiding: an empty room costs the chat pane a row and tells the reader nothing. Starting
+ * the first room lives in the sidebar's Voice room row, which is always there, so the chat only
+ * carries the banner once there is a call to join (or one this client is already in). Mirrors
+ * the web LiveSpaceBar (LIVE badge only while occupied, Join/Open pill).
  */
 @Composable
 fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
     val repo = AppModule.nostrRepository
-    val vm = viewModel(key = "avspace-$groupId") {
-        AvSpaceViewModel(repo, groupId, repo.activePubkey.value)
+    val host = AppModule.avSpaceHost
+    val vm = viewModel(key = "livespacebar-$groupId") {
+        LiveSpaceBarViewModel(repo, groupId, repo.activePubkey.value, host)
     }
-    val hasSpace by vm.hasSpace.collectAsState()
+    val visible by vm.visible.collectAsState()
     val participants by vm.participants.collectAsState()
+    val joined by vm.joined.collectAsState()
     val userMetadata by repo.userMetadata.collectAsState()
-    var roomOpen by remember(groupId) { mutableStateOf(false) }
 
-    if (!hasSpace) return
+    if (!visible) return
     val live = participants.isNotEmpty()
 
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(if (live) NostrordColors.PrimarySubtle else NostrordColors.SurfaceVariant)
-            .clickable { roomOpen = true }
+            .clickable { host.show(groupId, repo.activePubkey.value) }
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -145,35 +145,42 @@ fun LiveSpaceSection(groupId: String, modifier: Modifier = Modifier) {
                 .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
         ) {
             Text(
-                text = if (live) "Join" else "Start",
+                // Already inside: the pill returns you to the room instead of offering to join
+                // one you are in, which is the mini-player every call app falls back to.
+                text = when {
+                    joined -> "Open"
+                    live -> "Join"
+                    else -> "Start"
+                },
                 color = Color.White,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
     }
-
-    if (roomOpen) {
-        AvSpaceRoomDialog(
-            vm = vm,
-            userMetadata = userMetadata,
-            onClose = { roomOpen = false },
-        )
-    }
 }
 
 /**
- * Standalone room entry for callers outside the chat pane (the sidebar's voice row). Shares
- * the bar's ViewModel via the key, so both surfaces see one connection.
+ * The one place the AV room renders. Mounted once from `App`, like [PomegranateAuthHost].
+ *
+ * Every entry point (the in-chat banner, the sidebar's voice row) calls `AvSpaceHost.show(...)`
+ * rather than mounting its own dialog, so there is a single room on screen no matter which
+ * surface opened it.
  */
 @Composable
-fun AvSpaceRoom(groupId: String, onClose: () -> Unit) {
+fun AvSpaceRoomHost() {
     val repo = AppModule.nostrRepository
-    val vm = viewModel(key = "avspace-$groupId") {
-        AvSpaceViewModel(repo, groupId, repo.activePubkey.value)
-    }
+    val host = AppModule.avSpaceHost
+    val visible by host.roomVisible.collectAsState()
+    val session by host.session.collectAsState()
     val userMetadata by repo.userMetadata.collectAsState()
-    AvSpaceRoomDialog(vm = vm, userMetadata = userMetadata, onClose = onClose)
+
+    val live = session?.takeIf { visible } ?: return
+    AvSpaceRoomDialog(
+        vm = live.viewModel,
+        userMetadata = userMetadata,
+        onClose = { host.hide() },
+    )
 }
 
 /**

@@ -391,6 +391,7 @@ class FakeNostrRepository : NostrRepositoryApi {
         Result.Error(AppError.Network.Disconnected("no relay"))
     var avSupported: Boolean = false
     val requestedLiveKitParticipants = mutableListOf<String>()
+    var liveKitCredentialRequests = 0
 
     override suspend fun requestLiveKitParticipants(groupId: String) {
         requestedLiveKitParticipants += groupId
@@ -398,7 +399,10 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     override suspend fun relaySupportsAv(groupId: String): Boolean = avSupported
 
-    override suspend fun fetchLiveKitCredentials(groupId: String): Result<LiveKitCredentials> = liveKitCredentials
+    override suspend fun fetchLiveKitCredentials(groupId: String): Result<LiveKitCredentials> {
+        liveKitCredentialRequests++
+        return liveKitCredentials
+    }
 
     override suspend fun requestPendingJoinRequests(groupId: String) {}
 

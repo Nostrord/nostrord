@@ -71,12 +71,28 @@ class AvSpaceViewModel(
     private val _rejoining = MutableStateFlow(false)
 
     /**
-     * Connection as the user should read it: an automatic rejoin reads as [Reconnecting] rather
-     * than as having left, so the room does not flash a Join button between attempts.
+     * Set the instant Join is pressed, well before the engine knows anything.
+     *
+     * Joining starts with minting a relay token, which signs a NIP-98 header: over a bunker that
+     * waits on a human tapping approve, and it can run for seconds. The engine is still
+     * Disconnected throughout, so without this the button keeps offering to join something the
+     * user already asked for.
+     */
+    private val _joining = MutableStateFlow(false)
+
+    /**
+     * Connection as the user should read it: minting a token reads as [Connecting] and an
+     * automatic rejoin as [Reconnecting] rather than as having left, so the room never flashes a
+     * Join button at someone who is on their way in.
      */
     val connectionState: StateFlow<AvConnectionState> =
-        combine(engine.connectionState, _rejoining) { state, rejoining ->
-            if (rejoining && state == AvConnectionState.Disconnected) AvConnectionState.Reconnecting else state
+        combine(engine.connectionState, _rejoining, _joining) { state, rejoining, joining ->
+            when {
+                state != AvConnectionState.Disconnected -> state
+                rejoining -> AvConnectionState.Reconnecting
+                joining -> AvConnectionState.Connecting
+                else -> state
+            }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, engine.connectionState.value)
     val micEnabled: StateFlow<Boolean> = engine.micEnabled
     val cameraEnabled: StateFlow<Boolean> = engine.cameraEnabled
@@ -157,6 +173,7 @@ class AvSpaceViewModel(
     private var wantsMic = false
     private var wantsCamera = false
     private var rejoinJob: Job? = null
+    private var joinJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -175,18 +192,27 @@ class AvSpaceViewModel(
 
     /** Mint a token from the relay and connect. No-op while already connected or connecting. */
     fun join() {
-        if (connectionState.value != AvConnectionState.Disconnected) return
+        // Guarded on the flag, not on connectionState: that one is a stateIn, so its value
+        // trails by a dispatch and two quick taps would both get through.
+        if (_joining.value || engine.connectionState.value != AvConnectionState.Disconnected) return
         _error.value = null
-        viewModelScope.launch {
-            when (val credentials = repo.fetchLiveKitCredentials(groupId)) {
-                is Result.Success -> {
-                    when (val connected = engine.connect(credentials.data)) {
-                        is Result.Success -> wantsRoom = true
-                        is Result.Error -> _error.value = connected.error.message
+        // Set here rather than inside the coroutine: the press and the repaint are the same
+        // frame, and a state change one dispatch later is the delay this exists to remove.
+        _joining.value = true
+        joinJob = viewModelScope.launch {
+            try {
+                when (val credentials = repo.fetchLiveKitCredentials(groupId)) {
+                    is Result.Success -> {
+                        when (val connected = engine.connect(credentials.data)) {
+                            is Result.Success -> wantsRoom = true
+                            is Result.Error -> _error.value = connected.error.message
+                        }
                     }
-                }
 
-                is Result.Error -> _error.value = credentials.error.message
+                    is Result.Error -> _error.value = credentials.error.message
+                }
+            } finally {
+                _joining.value = false
             }
         }
     }
@@ -196,6 +222,10 @@ class AvSpaceViewModel(
         wantsMic = false
         wantsCamera = false
         rejoinJob?.cancel()
+        // A join still minting its token counts as leaving: the pending connect must not land
+        // after the user backed out.
+        joinJob?.cancel()
+        _joining.value = false
         _rejoining.value = false
         engine.disconnect()
     }

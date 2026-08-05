@@ -4,11 +4,9 @@ import kotlinx.coroutines.awaitCancellation
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.livekit.AvConnectionState
-import org.nostr.nostrord.network.livekit.MediaEngine
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceParticipant
 import org.nostr.nostrord.ui.screens.avspace.AvSpaceViewModel
 import org.nostr.nostrord.web.bridge.useStateFlow
-import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.displayNameOf
@@ -43,9 +41,11 @@ val AvSpaceModal =
     FC<AvSpaceModalProps> { props ->
         val repo = AppModule.nostrRepository
         val selfPubkey = useStateFlow(repo.activePubkey)
-        // One engine per open room: recreating it on re-render would drop the connection.
-        val engine = useMemo(props.groupId) { MediaEngine() }
-        val vm = useViewModel(props.groupId) { AvSpaceViewModel(repo, props.groupId, selfPubkey, engine) }
+        // Owned by AvSpaceHost, not by this component: closing the room must not hang up the
+        // call, and the sidebar entry has to reach the same session this one is showing.
+        val vm = useMemo(props.groupId, selfPubkey) {
+            AppModule.avSpaceHost.open(props.groupId, selfPubkey)
+        }
 
         val participants = useStateFlow(vm.participants)
         val connection = useStateFlow(vm.connectionState)
@@ -142,7 +142,7 @@ val AvSpaceModal =
                                     key = participant.pubkey
                                     this.participant = participant
                                     this.userMetadata = userMetadata
-                                    this.engine = engine
+                                    this.vm = vm
                                 }
                             }
                         }
@@ -272,7 +272,7 @@ private val AudioSection =
 private external interface VideoTileProps : Props {
     var participant: AvSpaceParticipant
     var userMetadata: Map<String, UserMetadata>
-    var engine: MediaEngine
+    var vm: AvSpaceViewModel
 }
 
 private val VideoTile =
@@ -286,13 +286,13 @@ private val VideoTile =
         useEffect(identity, participant.cameraEnabled) {
             val element = videoRef.current
             if (identity != null && element != null && participant.cameraEnabled) {
-                props.engine.attachVideo(identity, element)
+                props.vm.attachVideo(identity, element)
             }
             try {
                 awaitCancellation()
             } finally {
                 val current = videoRef.current
-                if (identity != null && current != null) props.engine.detachVideo(identity, current)
+                if (identity != null && current != null) props.vm.detachVideo(identity, current)
             }
         }
 

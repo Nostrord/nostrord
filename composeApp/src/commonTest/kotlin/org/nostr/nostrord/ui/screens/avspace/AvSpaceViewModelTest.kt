@@ -137,6 +137,32 @@ class AvSpaceViewModelTest {
     }
 
     @Test
+    fun `a second press while the token is being minted is ignored`() = runTest {
+        val repo = FakeNostrRepository()
+        val vm = viewModel(repo)
+
+        // Minting signs a NIP-98 header, which over a bunker waits on a human tapping approve.
+        // Both taps land inside that window, and only one may go through.
+        vm.join()
+        vm.join()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, repo.liveKitCredentialRequests)
+    }
+
+    @Test
+    fun `leaving cancels a join that is still minting its token`() = runTest {
+        val repo = FakeNostrRepository()
+        val vm = viewModel(repo)
+
+        vm.join()
+        vm.leave()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(AvConnectionState.Disconnected, vm.connectionState.value)
+    }
+
+    @Test
     fun `a token failure surfaces its cause instead of connecting`() = runTest {
         val repo = FakeNostrRepository()
         repo.liveKitCredentials = Result.Error(AppError.Unknown("relay refused the token (403)"))

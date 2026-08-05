@@ -74,7 +74,6 @@ import org.nostr.nostrord.web.components.uploadBlob
 import org.nostr.nostrord.web.components.useEscClose
 import org.nostr.nostrord.web.components.zapBadge
 import org.nostr.nostrord.web.modals.AddMemberModal
-import org.nostr.nostrord.web.modals.AvSpaceModal
 import org.nostr.nostrord.web.modals.GroupInfoModal
 import org.nostr.nostrord.web.modals.GroupInviteModal
 import org.nostr.nostrord.web.modals.InviteCodesModal
@@ -1118,9 +1117,6 @@ val ChatScreen =
         val connState = useStateFlow(vm.connectionState)
         val membersLoading = group.id in useStateFlow(vm.loadingMembers)
         val myPubkey = vm.getPublicKey()
-        // NIP-29 AV space: the relay publishes the live roster as kind:39004.
-        val liveParticipants = useStateFlow(AppModule.nostrRepository.liveKitParticipants)[group.id].orEmpty()
-        val (avSpaceOpen, setAvSpaceOpen) = useState(false)
         // Zaps require signing a kind:9734 request, so only offer them when an account
         // with a usable signer is active.
         val canSign = useStateFlow(ActiveAccountManager.session) != null
@@ -1914,18 +1910,17 @@ val ChatScreen =
                     // subgroup channels, the header cog above.
                 }
 
-                // Live AV space (NIP-29 LiveKit rooms). Shown for any group carrying the
-                // `livekit` tag, empty room included: the relay creates the room on the first
-                // token request, so an empty room is exactly when someone needs the entry
-                // point. Keyed like every conditional sibling of .chat-main so toggling it
-                // never remounts the message list.
+                // Live AV space (NIP-29 LiveKit rooms). The bar hides itself while the room is
+                // empty (starting one lives in the sidebar), so this only gates on the group
+                // having a room at all. Keyed like every conditional sibling of .chat-main so
+                // toggling it never remounts the message list.
                 if (group.hasLiveKit) {
                     div {
                         key = "live-space-bar"
                         LiveSpaceBar {
-                            participants = liveParticipants
+                            groupId = group.id
                             this.userMetadata = userMetadata
-                            onOpen = { setAvSpaceOpen(true) }
+                            onOpen = { AppModule.avSpaceHost.show(group.id, myPubkey) }
                         }
                     }
                 }
@@ -2526,13 +2521,6 @@ val ChatScreen =
                 }
             }
 
-            if (avSpaceOpen) {
-                AvSpaceModal {
-                    groupId = group.id
-                    this.groupName = groupName
-                    onClose = { setAvSpaceOpen(false) }
-                }
-            }
             if (infoOpen) {
                 GroupInfoModal {
                     this.group = group

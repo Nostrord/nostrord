@@ -1577,6 +1577,9 @@ class NostrRepository(
      * stay dark until an app restart. Single source of truth so the two paths cannot drift.
      */
     private suspend fun resetSessionScopedCaches() {
+        // A live AV room belongs to the account that joined it: it must not survive the swap,
+        // and the microphone least of all.
+        AppModule.avSpaceHost.release()
         lastRequestGroupsAt.clear()
         relaysNeedingResubscribe.clear()
         muxRestrictedRetryJobs.values.forEach { it.cancel() }

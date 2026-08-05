@@ -65,9 +65,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
-import org.nostr.nostrord.ui.components.chat.AvSpaceRoom
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
+import org.nostr.nostrord.ui.screens.avspace.LiveSpaceBarViewModel
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.ui.screens.group.channelTree
 import org.nostr.nostrord.ui.screens.group.components.CreateGroupModal
@@ -127,6 +127,13 @@ fun GroupSidebar(
     val rootName = rootMeta?.name ?: rootId
     val isRootAdmin = currentUserPubkey != null && currentUserPubkey in groupAdmins[rootId].orEmpty()
     val memberCount = groupMembers[rootId].orEmpty().size
+    // Same ViewModel the in-chat banner uses, so both surfaces agree on who is in the room:
+    // the relay's kind 39004 lags a join by a webhook round-trip, and only the live engine
+    // knows this client is already inside.
+    val spaceVm = viewModel(key = "livespacebar-$rootId") {
+        LiveSpaceBarViewModel(AppModule.nostrRepository, rootId, currentUserPubkey, AppModule.avSpaceHost)
+    }
+    val liveCount = spaceVm.participants.collectAsState().value.size
     // Optimistic channel order while a drag-reorder kind:9002 round-trips; cleared once
     // the relay's kind:39000 echoes it (or on publish failure).
     var orderOverride by remember(rootId) { mutableStateOf<List<String>?>(null) }
@@ -178,8 +185,6 @@ fun GroupSidebar(
             ?.supportsSubgroups == true
 
     var showMembers by remember { mutableStateOf(false) }
-    var showSpace by remember { mutableStateOf(false) }
-    val liveParticipants by AppModule.nostrRepository.liveKitParticipants.collectAsState()
     var showCreateSubgroup by remember { mutableStateOf(false) }
     var showManage by remember { mutableStateOf(false) }
     // Tab the Manage modal opens on: the Members row jumps admins straight to "Members".
@@ -219,14 +224,13 @@ fun GroupSidebar(
                 active = route.view == GroupView.Threads && route.groupId == rootId,
             ) { onNavigateGroup(GroupRoute(route.relayUrl, rootId, view = GroupView.Threads)) }
             // Voice room row (prototype ChannelsSidebar): shown when the group has a LiveKit
-            // space, with the live participant count. The room dialog is self-contained, so
-            // the sidebar opens it without routing through the chat pane.
+            // space, with the live participant count. The room is mounted once over the frame
+            // (AvSpaceRoomHost), so this only asks the host to show it.
             if (rootMeta?.hasLiveKit == true) {
-                val liveCount = liveParticipants[rootId].orEmpty().size
                 SidebarRow(
                     icon = Icons.Default.Mic,
                     label = if (liveCount > 0) "Voice room · $liveCount" else "Voice room",
-                ) { showSpace = true }
+                ) { AppModule.avSpaceHost.show(rootId, AppModule.nostrRepository.activePubkey.value) }
             }
             SidebarRow(
                 icon = Icons.Default.People,
@@ -320,9 +324,6 @@ fun GroupSidebar(
         }
     }
 
-    if (showSpace) {
-        AvSpaceRoom(groupId = rootId, onClose = { showSpace = false })
-    }
     if (showMembers) {
         MembersModal(
             groupId = rootId,
