@@ -246,6 +246,88 @@ class Kind10009BaselineTest {
     }
 
     @Test
+    fun `a private entry reaches the joined map the rail is built from`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        // The real shape: many public groups across relays, the private one on a relay that only
+        // appears as an `r` tag.
+        val publicTags =
+            """[["group","nostrord","wss://chat.wisp.talk"],["group","lotus","wss://groups.0xchat.com"],""" +
+                """["r","wss://chat.wisp.talk"],["r","wss://groups.0xchat.com"],["r","wss://relay.groups.nip29.com"]]"""
+        val private = Nip51.encodeTags(listOf(listOf("group", "29", "wss://relay.groups.nip29.com")))
+
+        var relayGroups: Map<String, Set<String>> = emptyMap()
+        outbox.handleKind10009Event(
+            event(1786035415, CIPHERTEXT, publicTags),
+            "wss://chat.wisp.talk",
+            OWNER,
+            {},
+            onRelayGroupsUpdated = { relayGroups = it },
+            decryptPrivate = { private },
+        )
+
+        assertEquals(setOf("29"), relayGroups["wss://relay.groups.nip29.com"], "the private group must reach the rail")
+        scope.cancel()
+    }
+
+    @Test
+    fun `the same event from many relays decrypts once`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        val private = Nip51.encodeTags(listOf(listOf("group", "secret", "wss://relay.two")))
+        var decrypts = 0
+        val relays = listOf("wss://relay.one", "wss://relay.two", "wss://relay.three", "wss://relay.four")
+
+        // Every connected relay delivers the same own kind:10009.
+        relays.forEach { relay ->
+            outbox.handleKind10009Event(
+                event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+                relay,
+                OWNER,
+                {},
+                decryptPrivate = {
+                    decrypts++
+                    private
+                },
+            )
+        }
+
+        // One round-trip, not one per relay: a remote signer answered 17 identical requests for
+        // the same ciphertext and timed them all out.
+        assertEquals(1, decrypts)
+        scope.cancel()
+    }
+
+    @Test
+    fun `a group stays in the list when the signer cannot read the private section`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        val private = Nip51.encodeTags(listOf(listOf("group", "secret", "wss://relay.two")))
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { private },
+        )
+        // The list is republished (rotated ciphertext) while the signer is unreachable.
+        outbox.handleKind10009Event(
+            event(200, "AhRotatedCiphertext==", """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { null },
+        )
+
+        // Losing it here would delete the group from the rail AND from its stored slot, because
+        // the signer happened to be slow.
+        assertEquals(setOf("secret"), outbox.getJoinedGroupsForRelay("wss://relay.two"))
+        assertTrue(outbox.privateSectionOpaque.value)
+        scope.cancel()
+    }
+
+    @Test
     fun `another author's list is not adopted as our baseline`() = runTest {
         val scope = TestScope(testScheduler)
         val outbox = manager(scope)

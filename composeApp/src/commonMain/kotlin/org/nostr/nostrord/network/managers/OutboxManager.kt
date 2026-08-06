@@ -55,7 +55,10 @@ class OutboxManager(
         const val BASELINE_WAIT_MS = 7_000L
 
         /** Cap on one private-section decrypt: a bunker signer may be slow, offline, or refuse. */
-        const val PRIVATE_DECRYPT_TIMEOUT_MS = 8_000L
+        const val PRIVATE_DECRYPT_TIMEOUT_MS = 20_000L
+
+        /** How long a failed decrypt is remembered before the next event may try again. */
+        const val PRIVATE_DECRYPT_RETRY_MS = 60_000L
     }
 
     val bootstrapRelays: List<String> = relayListManager.bootstrapRelays
@@ -102,6 +105,13 @@ class OutboxManager(
     // the same event on each fetch and reconnect.
     private var privateTags: List<List<String>> = emptyList()
     private var privateDecryptedFrom: String = ""
+
+    // Every connected relay delivers the same own kind:10009, so the decrypt is single-flighted:
+    // the first arrival does the round-trip and the rest read its result. Without this a remote
+    // signer got one request per relay for the same ciphertext and timed them all out.
+    private val privateDecryptMutex = Mutex()
+    private var privateDecryptFailedFor: String = ""
+    private var privateDecryptFailedAt: Long = 0L
 
     /**
      * Joined groups the user keeps in the private (encrypted) section. Excluded from the public
@@ -461,6 +471,20 @@ class OutboxManager(
             return emptyList()
         }
         if (content == privateDecryptedFrom) return privateTags
+        return privateDecryptMutex.withLock { decryptPrivateSection(content, decryptPrivate) }
+    }
+
+    private suspend fun decryptPrivateSection(
+        content: String,
+        decryptPrivate: suspend (String) -> String?,
+    ): List<List<String>> {
+        // Re-checked under the lock: while this coroutine queued, the first arrival may have
+        // resolved (or failed) the very same ciphertext.
+        if (content == privateDecryptedFrom) return privateTags
+        if (content == privateDecryptFailedFor && epochMillis() - privateDecryptFailedAt < PRIVATE_DECRYPT_RETRY_MS) {
+            _privateSectionOpaque.value = true
+            return emptyList()
+        }
         val plaintext =
             withTimeoutOrNull(PRIVATE_DECRYPT_TIMEOUT_MS) {
                 try {
@@ -473,6 +497,8 @@ class OutboxManager(
             }
         val decoded = plaintext?.let { Nip51.decodeTags(it) }
         if (decoded == null) {
+            privateDecryptFailedFor = content
+            privateDecryptFailedAt = epochMillis()
             // NIP-04-era or foreign encryption, a signer that refused, or a bunker that never
             // answered. Leave it opaque: the publish path keeps the ciphertext untouched.
             privateTags = emptyList()
@@ -482,6 +508,7 @@ class OutboxManager(
         }
         privateTags = decoded
         privateDecryptedFrom = content
+        privateDecryptFailedFor = ""
         _privateSectionOpaque.value = false
         return decoded
     }
@@ -816,7 +843,18 @@ class OutboxManager(
         }
         // The private section is read last: an entry both sections carry stays public, so a
         // publish can never demote a group the public tags already advertise.
-        resolvePrivateTags(incomingBaseline.content, decryptPrivate).forEach { absorb(it, fromPrivateSection = true) }
+        val privateTagList = resolvePrivateTags(incomingBaseline.content, decryptPrivate)
+        if (_privateSectionOpaque.value) {
+            // Unreadable right now (a signer that timed out or refused): the entries the last
+            // successful decrypt found still belong to the list, so they keep their place in the
+            // rail. Dropping them would make a private group vanish from the app because the
+            // signer was slow — and take its stored slot with it.
+            _privateGroupEntries.value.forEach { (relayUrl, groupId) ->
+                absorb(listOf("group", groupId, relayUrl), fromPrivateSection = true)
+            }
+        } else {
+            privateTagList.forEach { absorb(it, fromPrivateSection = true) }
+        }
         // Only the newest version seen defines which side an entry lives on: a superseded one
         // could otherwise mark as private a group the user has since made public. An unreadable
         // section keeps the entries the last successful decrypt found — they are still inside
