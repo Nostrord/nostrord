@@ -97,12 +97,21 @@ fun removeAccountDialogBody(
     accountLabel: String,
     fallbackLabel: String?,
     method: AuthMethod,
+    holdsDmEncryptionKey: Boolean = false,
 ): String {
     val erased = "${erasedSubject(method, accountLabel)} will be erased on this device."
-    return when {
-        isActive && fallbackLabel != null -> "$erased You'll switch to \"$fallbackLabel\"."
-        isActive -> "$erased ${signInAgainHint(method)}"
-        else -> erased
+    val base =
+        when {
+            isActive && fallbackLabel != null -> "$erased You'll switch to \"$fallbackLabel\"."
+            isActive -> "$erased ${signInAgainHint(method)}"
+            else -> erased
+        }
+    // Unlike the identity key, this one is not recoverable from a backup phrase or a signer:
+    // messages already sent to it can only ever be opened with it.
+    return if (holdsDmEncryptionKey) {
+        "$base This device also holds this account's DM encryption key. Export it first or messages sent to it become unreadable."
+    } else {
+        base
     }
 }
 

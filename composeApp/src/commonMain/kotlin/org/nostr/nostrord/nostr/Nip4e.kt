@@ -20,6 +20,12 @@ object Nip4e {
     /** Replaceable announcement carrying the account's encryption pubkey. */
     const val KIND_ENCRYPTION_KEY = 10044
 
+    /** Device pairing: new client offers a throwaway pubkey (Phase 2b). */
+    const val KIND_CLIENT_KEY = 4454
+
+    /** Device pairing: holder sends the encryption privkey to that throwaway key (Phase 2b). */
+    const val KIND_KEY_SHARE = 4455
+
     /** Names an encryption pubkey. On kind:10044 it is the announcement; on a seal, the sender's. */
     const val TAG_ENCRYPTION_PUBKEY = "n"
 
@@ -54,6 +60,83 @@ object Nip4e {
         tags = encPubkeyHex?.takeIf { isPubkey(it) }?.let { listOf(listOf(TAG_ENCRYPTION_PUBKEY, it)) } ?: emptyList(),
         content = "",
     )
+
+    /** Throwaway pubkey a pairing event carries (uppercase `P`). */
+    const val TAG_THROWAWAY_PUBKEY = "P"
+
+    /** The same value under the name Coop reads; emitted alongside `P` for compatibility. */
+    const val TAG_THROWAWAY_PUBKEY_LEGACY = "pubkey"
+
+    /**
+     * Device pairing, step 1: a device without the encryption key publishes a throwaway pubkey
+     * [throwawayPubkey], identity-signed, so a device that holds the key can answer it.
+     *
+     * No device label: it would tell every relay which OS and browser the requesting device runs,
+     * and the pairing code already lets the user confirm which request they are approving.
+     */
+    fun buildClientKeyRequest(
+        identityPubkey: String,
+        throwawayPubkey: String,
+        createdAt: Long,
+    ): Event = Event(
+        pubkey = identityPubkey,
+        createdAt = createdAt,
+        kind = KIND_CLIENT_KEY,
+        // Both names for the same key: the NIP defines `P`, Coop only reads `pubkey`.
+        tags =
+        listOf(
+            listOf(TAG_THROWAWAY_PUBKEY_LEGACY, throwawayPubkey),
+            listOf(TAG_THROWAWAY_PUBKEY, throwawayPubkey),
+        ),
+        content = "",
+    )
+
+    /**
+     * Device pairing, step 2: the holding device answers with the encryption key, NIP-44 encrypted
+     * from its own throwaway [senderThrowawayPubkey] to the requester's [recipientThrowawayPubkey].
+     * Neither identity key is involved in the encryption, so the share is readable only by the
+     * device that generated the request.
+     */
+    fun buildKeyShare(
+        identityPubkey: String,
+        senderThrowawayPubkey: String,
+        recipientThrowawayPubkey: String,
+        encryptedKey: String,
+        createdAt: Long,
+    ): Event = Event(
+        pubkey = identityPubkey,
+        createdAt = createdAt,
+        kind = KIND_KEY_SHARE,
+        tags =
+        listOf(
+            listOf(TAG_THROWAWAY_PUBKEY, senderThrowawayPubkey),
+            listOf("p", recipientThrowawayPubkey),
+        ),
+        content = encryptedKey,
+    )
+
+    /** The throwaway pubkey [event] publishes: `P`, or Coop's `pubkey` when that is all it sent. */
+    fun throwawayPubkeyFrom(event: Event): String? = event.tags.firstOrNull { it.firstOrNull() == TAG_THROWAWAY_PUBKEY && isPubkey(it.getOrNull(1)) }?.get(1)
+        ?: event.tags.firstOrNull { it.firstOrNull() == TAG_THROWAWAY_PUBKEY_LEGACY && isPubkey(it.getOrNull(1)) }?.get(1)
+
+    /** Which throwaway pubkey a kind:4455 is addressed to (lowercase `p`). */
+    fun keyShareRecipientFrom(event: Event): String? = event.tags
+        .firstOrNull { it.firstOrNull() == "p" && isPubkey(it.getOrNull(1)) }
+        ?.get(1)
+
+    /**
+     * Short code both devices show so the user can confirm they are approving the request they
+     * actually made. Derived from the throwaway pubkey rather than carried in a tag: the
+     * requesting device generated it and the holding device reads it off the request, so nothing
+     * new goes on the wire and there is nothing extra to agree on.
+     *
+     * Eight characters in two groups, matching Jumble exactly: the whole point is that the user
+     * can compare the code across two devices, which fails if the clients format it differently.
+     */
+    fun pairingCode(throwawayPubkey: String): String {
+        val code = throwawayPubkey.take(8).uppercase()
+        return "${code.take(4)} ${code.drop(4)}"
+    }
 
     private fun isPubkey(value: String?): Boolean = value != null && value.length == 64 && value.all { it.isHexDigit() }
 

@@ -8,8 +8,11 @@ import org.nostr.nostrord.auth.Account
 import org.nostr.nostrord.network.RoleDefinition
 import org.nostr.nostrord.network.livekit.LiveKitCredentials
 import org.nostr.nostrord.network.managers.ConnectionManager
+import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
+import org.nostr.nostrord.network.managers.DmEncryptionManager
 import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.ZapManager
@@ -147,6 +150,66 @@ class FakeNostrRepository : NostrRepositoryApi {
     override val dmRelaysByPubkey: StateFlow<Map<String, List<String>>> = dmRelaysByPubkeyFlow
     override val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>> = MutableStateFlow(emptyMap())
     override fun requestPeerDmRelays(pubkey: String) {}
+
+    val dmEncryptionStateFlow = MutableStateFlow<DmEncryptionManager.State>(DmEncryptionManager.State.Unavailable)
+    override val dmEncryptionState: StateFlow<DmEncryptionManager.State> = dmEncryptionStateFlow
+    var enableDmEncryptionResult: Result<Unit> = Result.Success(Unit)
+    var importDmEncryptionKeyResult: Boolean = true
+    var exportedDmEncryptionKey: String? = null
+
+    override suspend fun enableDmEncryption(): Result<Unit> = enableDmEncryptionResult
+
+    override suspend fun disableDmEncryption(): Result<Unit> = Result.Success(Unit)
+
+    var rotateDmEncryptionKeyResult: Result<Unit> = Result.Success(Unit)
+
+    override suspend fun rotateDmEncryptionKey(): Result<Unit> {
+        calls += "rotateDmEncryptionKey"
+        return rotateDmEncryptionKeyResult
+    }
+
+    override fun importDmEncryptionKey(privateKeyHex: String): Boolean = importDmEncryptionKeyResult
+
+    override fun exportDmEncryptionKey(): String? = exportedDmEncryptionKey
+
+    val dmArchiveProgressFlow = MutableStateFlow(DmArchiveManager.Progress())
+    override val dmArchiveProgress: StateFlow<DmArchiveManager.Progress> = dmArchiveProgressFlow
+    var archivableCount: Int = 0
+    var archiveDmHistoryResult: Result<Unit> = Result.Success(Unit)
+
+    override suspend fun countDmArchivableMessages(): Int = archivableCount
+
+    override suspend fun archiveDmHistory(): Result<Unit> {
+        calls += "archiveDmHistory"
+        return archiveDmHistoryResult
+    }
+
+    override fun cancelDmArchive() {
+        calls += "cancelDmArchive"
+    }
+
+    val dmPairingStateFlow = MutableStateFlow<DmPairingManager.State>(DmPairingManager.State.Idle)
+    override val dmPairingState: StateFlow<DmPairingManager.State> = dmPairingStateFlow
+    var requestDmEncryptionKeyResult: Result<Unit> = Result.Success(Unit)
+    var approveDmPairingResult: Result<Unit> = Result.Success(Unit)
+
+    override suspend fun requestDmEncryptionKey(): Result<Unit> {
+        calls += "requestDmEncryptionKey"
+        return requestDmEncryptionKeyResult
+    }
+
+    override suspend fun approveDmPairing(): Result<Unit> {
+        calls += "approveDmPairing"
+        return approveDmPairingResult
+    }
+
+    override fun declineDmPairing() {
+        calls += "declineDmPairing"
+    }
+
+    override fun dismissDmPairing() {
+        calls += "dismissDmPairing"
+    }
     override val latestMessageTimestamps: StateFlow<Map<String, Long>> = MutableStateFlow(emptyMap())
     override val totalUnread: StateFlow<Int> = MutableStateFlow(0)
     override val unreadByRelay: StateFlow<Map<String, Int>> = MutableStateFlow(emptyMap())
