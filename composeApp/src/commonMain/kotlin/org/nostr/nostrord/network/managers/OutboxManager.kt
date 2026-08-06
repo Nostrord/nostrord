@@ -15,7 +15,7 @@ import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
-import org.nostr.nostrord.network.outbox.kind10009Tags
+import org.nostr.nostrord.network.outbox.buildKind10009Publish
 import org.nostr.nostrord.network.outbox.rebuildPrivateGroupTags
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip51
@@ -93,6 +93,9 @@ class OutboxManager(
     // True once the network fetch for the own kind:10009 has settled (an event applied, or the
     // fetch finished with none). Until then a publish has no baseline to preserve and waits.
     private val _kind10009BaselineSettled = MutableStateFlow(false)
+
+    /** True once a publish may replace the own kind:10009 without losing what it does not own. */
+    val kind10009BaselineSettled: StateFlow<Boolean> = _kind10009BaselineSettled.asStateFlow()
 
     // Decrypted private section of the newest own kind:10009, cached by the ciphertext it came
     // from: with a bunker signer every decrypt is a remote round-trip, and relays re-deliver
@@ -562,17 +565,17 @@ class OutboxManager(
 
                     publishedOrder = orderJoinedGroups(allRelayGroups, orderOverride ?: _groupOrder.value)
 
-                    // Groups the user keeps private stay out of the public tags and are written
-                    // back into the encrypted section below.
-                    val privateEntries = _privateGroupEntries.value
-                    privateOrder = publishedOrder.filter { it in privateEntries }
-                    val distinctRelays =
-                        nip29Relays
-                            .map { it.normalizeRelayUrl() }
-                            .filter { it.isNotBlank() && it !in _privateOnlyRelays.value }
-                            .distinct()
                     baseline = kind10009Baseline
-                    kind10009Tags(publishedOrder - privateEntries, distinctRelays, baseline.foreignTags)
+                    val split =
+                        buildKind10009Publish(
+                            joinedOrder = publishedOrder,
+                            privateEntries = _privateGroupEntries.value,
+                            nip29Relays = nip29Relays.map { it.normalizeRelayUrl() }.filter { it.isNotBlank() }.distinct(),
+                            privateOnlyRelays = _privateOnlyRelays.value,
+                            foreignTags = baseline.foreignTags,
+                        )
+                    privateOrder = split.privateOrder
+                    split.tags
                 }
             // Own publish is authoritative for order too: the event we are about to sign is
             // exactly what the rail must show, including a drag that moved a chip.

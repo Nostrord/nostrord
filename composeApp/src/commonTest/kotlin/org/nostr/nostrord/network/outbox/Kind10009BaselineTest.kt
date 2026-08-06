@@ -11,6 +11,7 @@ import org.nostr.nostrord.network.managers.OutboxManager
 import org.nostr.nostrord.nostr.Nip51
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private const val OWNER = "0000000000000000000000000000000000000000000000000000000000baseline"
@@ -175,6 +176,51 @@ class Kind10009BaselineTest {
 
         // Forgetting them would publish the group the user hid as a public tag.
         assertEquals(setOf("wss://relay.two" to "secret"), outbox.privateGroupEntries.value)
+        scope.cancel()
+    }
+
+    @Test
+    fun `a publish never writes a private group or a private-only relay in the clear`() {
+        val publish =
+            buildKind10009Publish(
+                joinedOrder = listOf("wss://relay.one" to "abc", "wss://relay.two" to "secret"),
+                privateEntries = setOf("wss://relay.two" to "secret"),
+                nip29Relays = listOf("wss://relay.one", "wss://relay.two"),
+                privateOnlyRelays = setOf("wss://relay.two"),
+                foreignTags = listOf(listOf("title", "My groups")),
+            )
+
+        assertEquals(
+            listOf(
+                listOf("group", "abc", "wss://relay.one"),
+                listOf("r", "wss://relay.one"),
+                listOf("title", "My groups"),
+            ),
+            publish.tags,
+        )
+        assertEquals(listOf("wss://relay.two" to "secret"), publish.privateOrder)
+    }
+
+    @Test
+    fun `the private section is only re-encrypted when its groups changed`() {
+        val current = listOf(listOf("group", "secret", "wss://relay.two"), listOf("word", "spoiler"))
+
+        // Same groups, same tags: the publish carries the previous ciphertext untouched, which is
+        // what keeps another client's section from being rewritten on every unrelated publish.
+        assertEquals(current, rebuildPrivateGroupTags(current, listOf("wss://relay.two" to "secret")))
+        assertTrue(rebuildPrivateGroupTags(current, emptyList()) != current, "leaving the group must rewrite the section")
+    }
+
+    @Test
+    fun `no publish may replace the list before the fetch settles`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+
+        assertFalse(outbox.kind10009BaselineSettled.value, "nothing has been seen yet: a publish would wipe the content")
+
+        outbox.handleKind10009Event(event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""), "wss://relay.one", OWNER, {})
+
+        assertTrue(outbox.kind10009BaselineSettled.value)
         scope.cancel()
     }
 

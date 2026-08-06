@@ -982,7 +982,7 @@ fun GroupScreen(
                             },
                         )
                     },
-                    onJoinGroup = { inviteCode -> vm.joinGroup(inviteCode) },
+                    onJoinGroup = { inviteCode, listPrivately -> vm.joinGroup(inviteCode, listPrivately) },
                     onLeaveGroup = { showLeaveDialog = true },
                     onShowGroupInfo = { showGroupInfoModal = true },
                     onEditGroup = { showEditGroupModal = true },
@@ -1128,7 +1128,7 @@ fun GroupScreen(
                             },
                         )
                     },
-                    onJoinGroup = { inviteCode -> vm.joinGroup(inviteCode) },
+                    onJoinGroup = { inviteCode, listPrivately -> vm.joinGroup(inviteCode, listPrivately) },
                     onLeaveGroup = { showLeaveDialog = true },
                     onShowGroupInfo = { showGroupInfoModal = true },
                     onEditGroup = { showEditGroupModal = true },

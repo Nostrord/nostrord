@@ -3074,9 +3074,13 @@ class NostrRepository(
     override suspend fun ensureBunkerConnected(): Boolean = sessionManager.ensureBunkerConnected()
 
     // Group operations
-    override suspend fun joinGroup(groupId: String, inviteCode: String?): Result<Unit> {
+    override suspend fun joinGroup(groupId: String, inviteCode: String?, listPrivately: Boolean): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val joinRelay = connectionManager.currentRelayUrl.value
+        // Before the join publishes the list, not after: a group marked private afterwards would
+        // already have gone out in the clear once, and relays keep that version.
+        if (listPrivately) outboxManager.setGroupPrivate(joinRelay, groupId, true)
         val result = groupManager.joinGroup(
             groupId = groupId,
             pubKey = pubKey,
@@ -3090,6 +3094,8 @@ class NostrRepository(
             // connected with a chat sub so notifications fire even when the user is
             // browsing a different focused.
             scope.launch { ensureJoinedRelaysConnected(connectionManager.currentRelayUrl.value) }
+        } else if (listPrivately) {
+            outboxManager.setGroupPrivate(joinRelay, groupId, false)
         }
         return result
     }

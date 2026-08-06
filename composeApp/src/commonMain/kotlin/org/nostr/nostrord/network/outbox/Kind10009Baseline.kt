@@ -86,3 +86,32 @@ fun kind10009Tags(
     tags.addAll(foreignTags)
     return tags
 }
+
+/** What a kind:10009 publish writes in the clear, and what goes into the encrypted section. */
+data class Kind10009Publish(
+    val tags: List<List<String>>,
+    val privateOrder: List<Pair<String, String>>,
+)
+
+/**
+ * Split the joined list into the public tags and the private entries of one publish.
+ *
+ * [joinedOrder] is every joined (relay, group) in rail order; [privateEntries] and
+ * [privateOnlyRelays] are what the user keeps out of the clear. Nothing in either of those
+ * reaches [Kind10009Publish.tags] — that is the invariant that keeps a private group private.
+ */
+fun buildKind10009Publish(
+    joinedOrder: List<Pair<String, String>>,
+    privateEntries: Set<Pair<String, String>>,
+    nip29Relays: List<String>,
+    privateOnlyRelays: Set<String>,
+    foreignTags: List<List<String>>,
+): Kind10009Publish = Kind10009Publish(
+    tags =
+    kind10009Tags(
+        order = joinedOrder.filterNot { it in privateEntries },
+        nip29Relays = nip29Relays.filterNot { it in privateOnlyRelays },
+        foreignTags = foreignTags,
+    ),
+    privateOrder = joinedOrder.filter { it in privateEntries },
+)

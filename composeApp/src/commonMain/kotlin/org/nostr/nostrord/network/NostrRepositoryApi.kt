@@ -412,9 +412,14 @@ interface NostrRepositoryApi {
         customGroupId: String? = null,
     ): Result<String>
 
+    /**
+     * Join [groupId]. [listPrivately] puts it straight into the encrypted section of the
+     * kind:10009, so the group is never advertised in the clear, not even by the join publish.
+     */
     suspend fun joinGroup(
         groupId: String,
         inviteCode: String? = null,
+        listPrivately: Boolean = false,
     ): Result<Unit>
 
     /**

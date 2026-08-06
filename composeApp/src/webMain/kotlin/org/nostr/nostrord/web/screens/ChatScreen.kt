@@ -95,6 +95,7 @@ import react.dom.html.ReactHTML.em
 import react.dom.html.ReactHTML.img
 import react.dom.html.ReactHTML.input
 import react.dom.html.ReactHTML.kbd
+import react.dom.html.ReactHTML.label
 import react.dom.html.ReactHTML.pre
 import react.dom.html.ReactHTML.s
 import react.dom.html.ReactHTML.span
@@ -108,6 +109,8 @@ import web.cssom.ClassName
 import web.dom.ElementId
 import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
+import web.html.InputType
+import web.html.checkbox
 import kotlin.math.abs
 import org.nostr.nostrord.ui.screens.group.pendingJoinRequests as computePendingJoinRequests
 
@@ -307,7 +310,7 @@ private external interface ChatComposerProps : Props {
 
     /** Cleared after a successful publish so the parent can drop the reply target. */
     var onSent: () -> Unit
-    var onJoin: () -> Unit
+    var onJoin: (listPrivately: Boolean) -> Unit
 
     /** When the request to join a closed group is pending: the time it was sent (for the
      *  "Requested ..." line) and the action to cancel it (mirrors native MessageInput). */
@@ -539,6 +542,9 @@ private val ChatComposer =
         // Markdown toolbar (prototype Composer): wraps the selection via execCommand
         // so edits join the textarea's NATIVE undo stack (Ctrl+Z works).
         val (toolbarOpen, setToolbarOpen) = useState { false }
+        // The privacy choice is made at the join, so a group the user wants hidden is never
+        // published in the clear even once (a replaceable event keeps that version).
+        val (joinPrivately, setJoinPrivately) = useState { false }
         // Hints popup (keyboard shortcuts on desktop, mention triggers on touch).
         // Opened by Ctrl+/ or the footer pill; Esc, typing, or clicking outside
         // closes it. Never triggered by a typed character, so every glyph
@@ -658,7 +664,7 @@ private val ChatComposer =
         } else if (!props.canPost) {
             // Not a member — prompt to join (or show pending) instead of the composer.
             div {
-                className = ClassName("composer-join")
+                className = ClassName(if (props.isPending) "composer-join" else "composer-join stacked")
                 if (props.isPending) {
                     div {
                         className = ClassName("composer-pending-text")
@@ -679,12 +685,24 @@ private val ChatComposer =
                         +"Cancel request"
                     }
                 } else {
-                    span { +"Join the group to send messages" }
-                    button {
-                        className = ClassName("composer-join-btn")
-                        onClick = { props.onJoin() }
-                        icon(Ic.PersonAdd)
-                        span { +(if (!props.groupIsOpen) "Request to Join" else "Join Now") }
+                    div {
+                        className = ClassName("composer-join-row")
+                        span { +"Join the group to send messages" }
+                        button {
+                            className = ClassName("composer-join-btn")
+                            onClick = { props.onJoin(joinPrivately) }
+                            icon(Ic.PersonAdd)
+                            span { +(if (!props.groupIsOpen) "Request to Join" else "Join Now") }
+                        }
+                    }
+                    label {
+                        className = ClassName("composer-join-private")
+                        input {
+                            type = InputType.checkbox
+                            checked = joinPrivately
+                            onChange = { setJoinPrivately(it.target.checked) }
+                        }
+                        span { +"Add privately, so nobody can see you are in this group" }
                     }
                 }
             }
@@ -1734,8 +1752,8 @@ val ChatScreen =
             setSearchingOlder(false)
         }
 
-        fun join() {
-            vm.joinGroup()
+        fun join(listPrivately: Boolean = false) {
+            vm.joinGroup(listPrivately = listPrivately)
         }
 
         // Scroll a loaded message into view and flash it (used by reply-preview clicks).
@@ -2407,7 +2425,7 @@ val ChatScreen =
                             // history (native parity: AutoScrollEffect's ownAppend).
                             setJumpNonce { it + 1 }
                         }
-                        this.onJoin = { join() }
+                        this.onJoin = { listPrivately -> join(listPrivately) }
                         this.pendingRequestedAtSeconds = pendingRequestedAt
                         this.membersResolving = membersResolving
                         // Cancel a pending join request = leave the group, then navigate away.

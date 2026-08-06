@@ -282,7 +282,11 @@ class FakeNostrRepository : NostrRepositoryApi {
     override suspend fun joinGroup(
         groupId: String,
         inviteCode: String?,
-    ): Result<Unit> = Result.Success(Unit)
+        listPrivately: Boolean,
+    ): Result<Unit> {
+        calls += "joinGroup:$groupId:$listPrivately"
+        return Result.Success(Unit)
+    }
 
     override suspend fun requestGroupThreads(groupId: String): Boolean {
         calls += "requestGroupThreads:$groupId"
