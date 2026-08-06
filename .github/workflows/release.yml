@@ -238,6 +238,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
 
+      # Same reason as desktop-release: this job compiles the JVM target, which resolves
+      # livekit-kmp from mavenLocal. Keep the ref in step with ci.yml and desktop-release.
+      - name: Checkout livekit-kmp
+        uses: actions/checkout@v5
+        with:
+          repository: nostrord/livekit-kmp
+          ref: 37095f807922b8ecf3d88c8ae931a824a7b8661f
+          path: livekit-kmp
+
+      - name: Publish livekit-kmp to mavenLocal
+        run: cd livekit-kmp && ./gradlew publishToMavenLocal -q
+
       - name: Build .deb
         run: ./gradlew :composeApp:fixDebPackage --no-daemon
 
