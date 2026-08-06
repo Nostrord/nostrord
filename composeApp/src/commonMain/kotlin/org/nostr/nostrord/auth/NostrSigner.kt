@@ -136,36 +136,8 @@ interface NostrSigner {
             }
         }
 
-        /** How this signer session answers the custom `nip44_decrypt_batch` method. */
-        enum class BatchDecryptMode { Untried, Supported, Unsupported }
-
-        @Volatile
-        var batchDecryptMode: BatchDecryptMode = BatchDecryptMode.Untried
-            private set
-
-        private val decryptBatcher = org.nostr.nostrord.nostr.Nip46DecryptBatcher(
-            send = { items -> nip46Client.nip44DecryptBatch(items) },
-        )
-
         override suspend fun nip44Decrypt(peerPubkeyHex: String, ciphertext: String): String {
             if (disposed) throw SigningException("Bunker signer has been disposed")
-            // Batch lane first: concurrent decrypts (the DM backlog) coalesce into one
-            // request/response event pair, the only real cure for the bunker relay's
-            // rate limit. Falls back to per-item for signers without the method.
-            if (batchDecryptMode != BatchDecryptMode.Unsupported) {
-                try {
-                    val plaintext = decryptBatcher.decrypt(peerPubkeyHex, ciphertext)
-                    batchDecryptMode = BatchDecryptMode.Supported
-                    return plaintext
-                        ?: throw SigningException("Bunker NIP-44 decryption failed: signer could not decrypt")
-                } catch (e: org.nostr.nostrord.nostr.Nip46DecryptBatcher.BatchUnsupported) {
-                    batchDecryptMode = BatchDecryptMode.Unsupported
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    if (e is SigningException) throw e
-                    throw SigningException("Bunker NIP-44 decryption failed: ${e.message}", e)
-                }
-            }
             return try {
                 nip46Client.nip44Decrypt(peerPubkeyHex, ciphertext)
             } catch (e: Exception) {
