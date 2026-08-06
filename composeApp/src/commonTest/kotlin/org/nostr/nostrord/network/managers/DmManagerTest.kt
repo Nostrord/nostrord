@@ -13,6 +13,59 @@ import kotlin.test.assertTrue
 class DmManagerTest {
     private fun signer() = NostrSigner.Local(KeyPair.generate())
 
+    private fun announcement(author: String, key: String?, createdAt: Long) = org.nostr.nostrord.nostr.Nip4e.buildAnnouncement(author, key, createdAt)
+
+    @Test
+    fun `an announced encryption key is used for that peer`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val peer = signer().pubkey
+        val key = "b".repeat(64)
+        assertEquals(null, dm.encryptionKeyFor(peer))
+
+        dm.ingestEncryptionKey(announcement(peer, key, createdAt = 10L))
+        assertEquals(key, dm.encryptionKeyFor(peer))
+    }
+
+    @Test
+    fun `an older announcement cannot regress a newer key`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val peer = signer().pubkey
+        val newer = "b".repeat(64)
+        val older = "c".repeat(64)
+
+        dm.ingestEncryptionKey(announcement(peer, newer, createdAt = 20L))
+        // Same replaceable arriving from a slower relay, stale copy.
+        dm.ingestEncryptionKey(announcement(peer, older, createdAt = 10L))
+        assertEquals(newer, dm.encryptionKeyFor(peer))
+    }
+
+    @Test
+    fun `a withdrawal puts the peer back on identity encryption`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val peer = signer().pubkey
+        dm.ingestEncryptionKey(announcement(peer, "b".repeat(64), createdAt = 10L))
+        dm.ingestEncryptionKey(announcement(peer, null, createdAt = 20L))
+        assertEquals(null, dm.encryptionKeyFor(peer))
+    }
+
+    @Test
+    fun `encryption keys are dropped on account switch`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val peer = signer().pubkey
+        dm.ingestEncryptionKey(announcement(peer, "b".repeat(64), createdAt = 10L))
+        dm.clear()
+        assertEquals(null, dm.encryptionKeyFor(peer))
+    }
+
+    @Test
+    fun `hydrated encryption keys survive a cold start`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val peer = signer().pubkey
+        val key = "b".repeat(64)
+        dm.hydrate(emptyList(), emptyMap(), encKeys = mapOf(peer to DmEncKey(key, 10L)))
+        assertEquals(key, dm.encryptionKeyFor(peer))
+    }
+
     @Test
     fun `received message lands under the sender as the conversation peer`() = runTest {
         val dm = DmManager(backgroundScope)
