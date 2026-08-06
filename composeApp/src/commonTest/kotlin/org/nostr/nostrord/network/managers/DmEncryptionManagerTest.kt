@@ -2,9 +2,12 @@ package org.nostr.nostrord.network.managers
 
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip4e
+import org.nostr.nostrord.storage.Nip4eStoredKey
 import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.storage.loadNip4eKeysFor
 import org.nostr.nostrord.storage.saveNip4eAnnouncedFor
 import org.nostr.nostrord.storage.saveNip4eKeysFor
+import org.nostr.nostrord.utils.epochSeconds
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -128,6 +131,78 @@ class DmEncryptionManagerTest {
         // Messages between the first announcement and the rotation are already addressed to a key
         // we still hold, so moving the cutoff would re-archive them for nothing.
         assertEquals(firstAnnouncedAt, manager.announcedAt())
+    }
+
+    @Test
+    fun `a retired key past the retention window is dropped`() {
+        val pubkey = account("ab")
+        val stale = KeyPair.generate()
+        val current = KeyPair.generate()
+        SecureStorage.saveNip4eAnnouncedFor(pubkey, true)
+        SecureStorage.saveNip4eKeysFor(
+            pubkey,
+            listOf(
+                Nip4eStoredKey(current.privateKeyHex),
+                Nip4eStoredKey(stale.privateKeyHex, retiredAt = epochSeconds() - DmEncryptionManager.RETENTION_SECONDS - 1),
+            ),
+        )
+
+        val manager = DmEncryptionManager()
+        manager.loadFor(pubkey, remoteSigner = true)
+
+        // A rotated-away key is a decryption capability we deliberately stop keeping around.
+        assertEquals(listOf(current.publicKeyHex), manager.heldKeys().map { it.publicKeyHex })
+    }
+
+    @Test
+    fun `a retired key inside the window is kept`() {
+        val pubkey = account("ac")
+        val recent = KeyPair.generate()
+        val current = KeyPair.generate()
+        SecureStorage.saveNip4eAnnouncedFor(pubkey, true)
+        SecureStorage.saveNip4eKeysFor(
+            pubkey,
+            listOf(
+                Nip4eStoredKey(current.privateKeyHex),
+                Nip4eStoredKey(recent.privateKeyHex, retiredAt = epochSeconds() - 60),
+            ),
+        )
+
+        val manager = DmEncryptionManager()
+        manager.loadFor(pubkey, remoteSigner = true)
+
+        assertEquals(listOf(current.publicKeyHex, recent.publicKeyHex), manager.heldKeys().map { it.publicKeyHex })
+    }
+
+    @Test
+    fun `no more than the cap of retired keys is kept`() {
+        val pubkey = account("ad")
+        val current = KeyPair.generate()
+        val now = epochSeconds()
+        val retired = (1..DmEncryptionManager.MAX_RETIRED_KEYS + 5).map {
+            Nip4eStoredKey(KeyPair.generate().privateKeyHex, retiredAt = now - it)
+        }
+        SecureStorage.saveNip4eAnnouncedFor(pubkey, true)
+        SecureStorage.saveNip4eKeysFor(pubkey, listOf(Nip4eStoredKey(current.privateKeyHex)) + retired)
+
+        val manager = DmEncryptionManager()
+        manager.loadFor(pubkey, remoteSigner = true)
+
+        assertEquals(DmEncryptionManager.MAX_RETIRED_KEYS + 1, manager.heldKeys().size)
+        assertEquals(current.publicKeyHex, manager.heldKeys().first().publicKeyHex, "the current key is never pruned")
+    }
+
+    @Test
+    fun `rotating stamps the replaced key so its window starts now`() {
+        val manager = freshManager(account("ae"))
+        val first = manager.generateKey()
+        manager.setAnnounced(true)
+        val second = manager.generateKey()
+
+        assertEquals(listOf(second, first), manager.heldKeys().map { it.publicKeyHex })
+        val stored = SecureStorage.loadNip4eKeysFor(account("ae"))
+        assertEquals(0L, stored.first().retiredAt, "the current key carries no retirement stamp")
+        assertTrue(stored[1].retiredAt > 0L, "the replaced key starts its retention window")
     }
 
     @Test

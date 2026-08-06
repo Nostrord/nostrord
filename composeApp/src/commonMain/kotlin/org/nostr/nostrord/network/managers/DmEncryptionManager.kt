@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip4e
+import org.nostr.nostrord.storage.Nip4eStoredKey
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.loadNip4eAnnouncedAtFor
 import org.nostr.nostrord.storage.loadNip4eAnnouncedFor
@@ -50,7 +51,7 @@ class DmEncryptionManager {
 
     private var accountPubkey: String = ""
     private var remoteSigner: Boolean = false
-    private var keys: List<KeyPair> = emptyList()
+    private var keys: List<Nip4eStoredKey> = emptyList()
     private var announced: Boolean = false
     private var announcedAt: Long = 0L
 
@@ -61,7 +62,7 @@ class DmEncryptionManager {
     fun loadFor(pubkey: String, remoteSigner: Boolean) {
         accountPubkey = pubkey
         this.remoteSigner = remoteSigner
-        keys = SecureStorage.loadNip4eKeysFor(pubkey).mapNotNull { hex -> runCatching { KeyPair.fromPrivateKeyHex(hex) }.getOrNull() }
+        keys = prune(SecureStorage.loadNip4eKeysFor(pubkey))
         announced = SecureStorage.loadNip4eAnnouncedFor(pubkey)
         announcedAt = SecureStorage.loadNip4eAnnouncedAtFor(pubkey)
         foreignAnnouncedKey = null
@@ -69,14 +70,20 @@ class DmEncryptionManager {
     }
 
     /** All held keys, current first. Receive tries each, so a retired key still opens its history. */
-    fun heldKeys(): List<KeyPair> = keys
+    fun heldKeys(): List<KeyPair> = keys.mapNotNull { it.keyPair() }
 
-    fun currentEncPubkeyOrNull(): String? = keys.firstOrNull()?.publicKeyHex
+    fun currentEncPubkeyOrNull(): String? = keys.firstOrNull()?.keyPair()?.publicKeyHex
 
-    /** Generate and hold a new key, making it current. Returns its pubkey. */
+    /**
+     * Generate and hold a new key, making it current and retiring the previous one. Returns its
+     * pubkey. Retired keys are pruned here, so rotating is also what bounds the number of live
+     * decryption capabilities sitting on this device.
+     */
     fun generateKey(): String {
         val fresh = KeyPair.generate()
-        keys = listOf(fresh) + keys.filter { it.publicKeyHex != fresh.publicKeyHex }
+        val now = epochSeconds()
+        val retired = keys.map { if (it.retiredAt == 0L) it.copy(retiredAt = now) else it }
+        keys = prune(listOf(Nip4eStoredKey(fresh.privateKeyHex)) + retired.filter { it.privateKeyHex != fresh.privateKeyHex })
         persistKeys()
         recompute()
         return fresh.publicKeyHex
@@ -90,7 +97,9 @@ class DmEncryptionManager {
         val kp = runCatching { KeyPair.fromPrivateKeyHex(privateKeyHex.trim()) }.getOrNull() ?: return false
         val expected = foreignAnnouncedKey
         if (expected != null && kp.publicKeyHex != expected) return false
-        keys = listOf(kp) + keys.filter { it.publicKeyHex != kp.publicKeyHex }
+        val now = epochSeconds()
+        val retired = keys.map { if (it.retiredAt == 0L) it.copy(retiredAt = now) else it }
+        keys = prune(listOf(Nip4eStoredKey(kp.privateKeyHex)) + retired.filter { it.privateKeyHex != kp.privateKeyHex })
         persistKeys()
         if (expected != null) {
             foreignAnnouncedKey = null
@@ -134,10 +143,10 @@ class DmEncryptionManager {
                 foreignAnnouncedKey = null
                 if (announced) setAnnounced(false) else recompute()
             }
-            keys.any { it.publicKeyHex == announcedKey } -> {
+            keys.any { it.keyPair()?.publicKeyHex == announcedKey } -> {
                 foreignAnnouncedKey = null
                 // Make the announced key current so sends tag the key senders are addressing.
-                keys = keys.sortedByDescending { it.publicKeyHex == announcedKey }
+                keys = keys.sortedByDescending { it.keyPair()?.publicKeyHex == announcedKey }
                 persistKeys()
                 if (!announced) setAnnounced(true) else recompute()
             }
@@ -164,11 +173,29 @@ class DmEncryptionManager {
     }
 
     private fun persistKeys() {
-        SecureStorage.saveNip4eKeysFor(accountPubkey, keys.map { it.privateKeyHex })
+        SecureStorage.saveNip4eKeysFor(accountPubkey, keys)
+    }
+
+    private fun Nip4eStoredKey.keyPair(): KeyPair? = runCatching { KeyPair.fromPrivateKeyHex(privateKeyHex) }.getOrNull()
+
+    /**
+     * Drop retired keys past the retention window or beyond the cap. The current key (retiredAt 0)
+     * is never dropped. A pruned key's messages stop opening on this device, which is the point:
+     * a rotated-away key is a decryption capability we no longer want lying around. Archive the
+     * history to the new key before rotating if it needs to outlive the window.
+     */
+    private fun prune(all: List<Nip4eStoredKey>): List<Nip4eStoredKey> {
+        val now = epochSeconds()
+        val current = all.filter { it.retiredAt == 0L }
+        val retired = all.filter { it.retiredAt != 0L }
+            .filter { now - it.retiredAt < RETENTION_SECONDS }
+            .sortedByDescending { it.retiredAt }
+            .take(MAX_RETIRED_KEYS)
+        return current + retired
     }
 
     private fun recompute() {
-        val current = keys.firstOrNull()?.publicKeyHex
+        val current = currentEncPubkeyOrNull()
         _state.value =
             when {
                 !remoteSigner -> State.Unavailable
@@ -177,5 +204,12 @@ class DmEncryptionManager {
                 announced -> State.Active(current)
                 else -> State.HeldNotAnnounced(current)
             }
+    }
+
+    companion object {
+        /** Matches Jumble so a key rotated on either client behaves the same. */
+        const val RETENTION_SECONDS = 90L * 24 * 60 * 60
+
+        const val MAX_RETIRED_KEYS = 10
     }
 }
