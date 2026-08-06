@@ -306,21 +306,6 @@ actual class Nip46Client actual constructor(
 
     actual suspend fun nip44Decrypt(peerPubkey: String, ciphertext: String): String = sendRequest(generateRequestId(), "nip44_decrypt", listOf(peerPubkey, ciphertext))
 
-    actual suspend fun nip44DecryptBatch(items: List<Pair<String, String>>): List<String?> {
-        val payload = buildJsonArray {
-            items.forEach { (peer, ciphertext) ->
-                addJsonArray {
-                    add(peer)
-                    add(ciphertext)
-                }
-            }
-        }.toString()
-        val raw = sendRequest(generateRequestId(), "nip44_decrypt_batch", listOf(payload))
-        return nip46Json.parseToJsonElement(raw).jsonArray.map { el ->
-            if (el is JsonNull) null else el.jsonPrimitive.content
-        }
-    }
-
     private suspend fun sendRequest(
         requestId: String,
         method: String,
