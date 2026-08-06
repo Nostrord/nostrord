@@ -10,6 +10,7 @@ import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.nostr.Crypto
 import org.nostr.nostrord.nostr.toHexString
+import org.nostr.nostrord.utils.epochSeconds
 
 // 128-bit (32 hex) SHA-256 prefix of the pubkey. Used as the storage subkey
 // for all per-account slots: hashCode is 32-bit (collision-feasible) and the
@@ -1191,20 +1192,37 @@ private fun nip4eKeysKey(pubkey: String): String = "nip4e_keys_${pubkeyDigest(pu
 
 private fun nip4eAnnouncedKey(pubkey: String): String = "nip4e_announced_${pubkeyDigest(pubkey)}"
 
-fun SecureStorage.loadNip4eKeysFor(pubkey: String): List<String> {
+/**
+ * One held encryption key. [retiredAt] is 0 for the current key and the epoch second it was
+ * replaced for the others, which is what bounds how long a retired key stays on disk.
+ */
+@Serializable
+data class Nip4eStoredKey(
+    val privateKeyHex: String,
+    val retiredAt: Long = 0L,
+)
+
+fun SecureStorage.loadNip4eKeysFor(pubkey: String): List<Nip4eStoredKey> {
     if (pubkey.isBlank()) return emptyList()
     val raw = getSensitive(nip4eKeysKey(pubkey)) ?: return emptyList()
     if (raw.isBlank()) return emptyList()
-    return runCatching { Json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
+    runCatching { return Json.decodeFromString<List<Nip4eStoredKey>>(raw) }
+    // Slots written before keys carried a retirement stamp: the first is current, and the rest
+    // start their retention window now rather than being pruned on the spot.
+    return runCatching {
+        Json.decodeFromString<List<String>>(raw).mapIndexed { index, hex ->
+            Nip4eStoredKey(hex, retiredAt = if (index == 0) 0L else org.nostr.nostrord.utils.epochSeconds())
+        }
+    }.getOrDefault(emptyList())
 }
 
 fun SecureStorage.saveNip4eKeysFor(
     pubkey: String,
-    privateKeysHex: List<String>,
+    keys: List<Nip4eStoredKey>,
 ) {
     if (pubkey.isBlank()) return
     try {
-        saveSensitive(nip4eKeysKey(pubkey), Json.encodeToString(privateKeysHex))
+        saveSensitive(nip4eKeysKey(pubkey), Json.encodeToString(keys))
     } catch (_: Exception) {
     }
 }
