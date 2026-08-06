@@ -56,6 +56,8 @@ import org.nostr.nostrord.auth.AuthMethod
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.storage.hasNip4eKeyFor
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.badges.UnreadBadge
@@ -247,6 +249,7 @@ fun MeMenu(
             isActive = isActiveTarget,
             fallbackLabel = fallbackLabel,
             isBusy = isBusy,
+            holdsDmEncryptionKey = SecureStorage.hasNip4eKeyFor(target.pubkey),
             onDismiss = { if (!isBusy) removeTarget = null },
             onConfirm = {
                 if (isBusy) return@RemoveAccountDialog
@@ -487,6 +490,7 @@ private fun RemoveAccountDialog(
     isActive: Boolean,
     fallbackLabel: String?,
     isBusy: Boolean,
+    holdsDmEncryptionKey: Boolean,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -494,7 +498,14 @@ private fun RemoveAccountDialog(
     // body branches on `method` so Bunker / NIP-07 users see accurate wording —
     // the LOCAL "Credentials and local data" line was misleading for them.
     val title = org.nostr.nostrord.auth.removeAccountDialogTitle(isActive, accountLabel)
-    val body = org.nostr.nostrord.auth.removeAccountDialogBody(isActive, accountLabel, fallbackLabel, method)
+    val body =
+        org.nostr.nostrord.auth.removeAccountDialogBody(
+            isActive,
+            accountLabel,
+            fallbackLabel,
+            method,
+            holdsDmEncryptionKey = holdsDmEncryptionKey,
+        )
     val confirmLabel = org.nostr.nostrord.auth.removeAccountConfirmLabel(isActive)
     val busyLabel = org.nostr.nostrord.auth.removeAccountBusyLabel(isActive)
     ConfirmDialog(

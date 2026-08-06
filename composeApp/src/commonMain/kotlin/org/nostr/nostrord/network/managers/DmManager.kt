@@ -165,11 +165,35 @@ class DmManager(
      * never want to retry), false on a TRANSIENT failure (e.g. a bunker decrypt timeout) so the
      * caller can leave it un-acked and retry it on a later backfill.
      */
-    suspend fun ingestGiftWrap(giftWrap: Event, myPubkey: String, signer: NostrSigner): Boolean {
-        val unwrapped = Nip17.unwrap(giftWrap, signer)
+    suspend fun ingestGiftWrap(giftWrap: Event, myPubkey: String, signer: NostrSigner): Boolean = ingestGiftWrap(
+        giftWrap,
+        myPubkey,
+        listOf(Nip17.Nip44Decryptor { peer, ciphertext -> signer.nip44Decrypt(peer, ciphertext) }),
+    )
+
+    /**
+     * Decrypt and file a received gift wrap. [decryptors] are tried in order on both layers, so a
+     * caller holding NIP-4e keys puts them ahead of the signer and pays no round-trip.
+     *
+     * [verifyLegacySender] authenticates the NIP-4e legacy shape, where the seal is signed by the
+     * sender's encryption key and therefore proves nothing on its own: it must confirm that seal
+     * pubkey is the encryption key the rumor's author announced. Returning false leaves the wrap
+     * unhandled, which our pipeline retries later, so an unreachable kind:10044 defers the message
+     * rather than deciding it wrongly.
+     */
+    suspend fun ingestGiftWrap(
+        giftWrap: Event,
+        myPubkey: String,
+        decryptors: List<Nip17.Nip44Decryptor>,
+        verifyLegacySender: suspend (authorPubkey: String, sealPubkey: String) -> Boolean = { _, _ -> false },
+    ): Boolean {
+        val unwrapped = Nip17.unwrap(giftWrap, myPubkey, decryptors)
         if (unwrapped == null) {
             // Decrypt/verify failed. On a bunker this is usually a transient timeout under load;
             // report not-handled so the wrap is retried instead of being permanently skipped.
+            return false
+        }
+        if (!unwrapped.sealSignedByIdentity && !verifyLegacySender(unwrapped.rumor.pubkey, unwrapped.sealPubkey)) {
             return false
         }
         val rumor = unwrapped.rumor

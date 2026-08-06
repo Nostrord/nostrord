@@ -17,14 +17,13 @@ import kotlin.random.Random
  *   rumor (kind 14, unsigned) -> seal (kind 13, identity-signed, NIP-44 to the recipient)
  *   -> gift wrap (kind 1059, ephemeral-signed, NIP-44 to the recipient, randomized timestamp)
  *
- * The seal is encrypted/decrypted with the account's identity key through [NostrSigner.nip44Encrypt]
- * / [nip44Decrypt] so remote signers can plug in; the gift wrap is encrypted under a throwaway key
- * we generate and own.
+ * The gift wrap is encrypted under a throwaway key we generate and own. The seal goes through
+ * [NostrSigner.nip44Encrypt] / [nip44Decrypt] so remote signers plug in.
  *
  * Both layers address the recipient's identity key by default (standard, interoperable NIP-17,
- * single `p` tag). A recipient who announced a NIP-4e encryption key is addressed at that key
- * instead: see [Nip4e] and the `encryptTo` parameters. Only the ECDH peer changes; authorship,
- * signatures and `p` routing stay on identity keys.
+ * single `p` tag). NIP-4e recipients are addressed at their announced encryption key instead:
+ * see [Nip4e], `encryptTo`, and the shape taxonomy on [unwrap]. Only the ECDH peer changes;
+ * authorship, signatures and `p` routing stay on identity keys.
  */
 object Nip17 {
     const val KIND_CHAT = 14
@@ -75,8 +74,16 @@ object Nip17 {
         createdAt: Long = rumor.createdAt,
         encryptTo: String = recipientPubkey,
         senderEncTag: String? = null,
+        encryptWith: String? = null,
     ): Event {
-        val encrypted = signer.nip44Encrypt(encryptTo, rumor.toJsonString())
+        // Holding an encryption key turns the seal's NIP-44 into a local operation; only the
+        // signature still needs the signer.
+        val encrypted =
+            if (encryptWith != null) {
+                Nip44.encrypt(rumor.toJsonString(), encryptWith, encryptTo)
+            } else {
+                signer.nip44Encrypt(encryptTo, rumor.toJsonString())
+            }
         val unsigned =
             Event(
                 pubkey = signer.pubkey,
@@ -86,6 +93,29 @@ object Nip17 {
                 content = encrypted,
             )
         return signer.signEvent(unsigned)
+    }
+
+    /**
+     * NIP-4e legacy seal: signed by the encryption key itself, so `seal.pubkey` is that key and
+     * there is no `n` tag. Deployed readers that predate the identity-signed shape only accept
+     * this one, and it costs no signer call. A recipient must authenticate it by checking
+     * `seal.pubkey` against the author's announced kind:10044.
+     */
+    fun legacySeal(
+        rumor: Event,
+        encryptionPrivateKeyHex: String,
+        encryptTo: String,
+        createdAt: Long = rumor.createdAt,
+    ): Event {
+        val encryptionKey = KeyPair.fromPrivateKeyHex(encryptionPrivateKeyHex)
+        val unsigned =
+            Event(
+                pubkey = encryptionKey.publicKeyHex,
+                createdAt = createdAt,
+                kind = KIND_SEAL,
+                content = Nip44.encrypt(rumor.toJsonString(), encryptionPrivateKeyHex, encryptTo),
+            )
+        return unsigned.sign(encryptionKey)
     }
 
     /**
@@ -134,36 +164,93 @@ object Nip17 {
         wrapCreatedAt: Long = randomizedWrapTime(),
         encryptTo: String = recipientPubkey,
         senderEncTag: String? = null,
+        encryptWith: String? = null,
     ): Event = giftWrap(
-        seal(rumor, recipientPubkey, signer, sealCreatedAt, encryptTo, senderEncTag),
+        seal(rumor, recipientPubkey, signer, sealCreatedAt, encryptTo, senderEncTag, encryptWith),
         recipientPubkey,
         wrapCreatedAt,
         encryptTo,
     )
 
+    /** One way of running a NIP-44 decrypt: a locally held key, or a round-trip to the signer. */
+    fun interface Nip44Decryptor {
+        suspend fun decrypt(peerPubkeyHex: String, ciphertext: String): String
+    }
+
     data class Unwrapped(
         val rumor: Event,
         val senderPubkey: String,
         val giftWrapId: String?,
+        /** The `n` value on the seal, when the sender named their NIP-4e encryption key. */
+        val senderEncryptionPubkey: String? = null,
+        val sealPubkey: String = senderPubkey,
+        /**
+         * False for a seal signed by the sender's encryption key rather than their identity: the
+         * sender is unauthenticated here, and the caller MUST check [sealPubkey] against the
+         * author's announced kind:10044 before showing the message.
+         */
+        val sealSignedByIdentity: Boolean = true,
     )
 
     /**
-     * Unwrap a received kind:1059 with [signer] (the recipient): gift wrap -> seal -> rumor.
+     * Unwrap a received kind:1059 for [myPubkey]: gift wrap -> seal -> rumor, trying each of
+     * [decryptors] in turn on both layers. Order matters: locally held keys fail in microseconds
+     * on a bad HMAC, a remote signer costs a network round-trip, so put local keys first.
+     *
      * Returns null if anything is malformed, the seal signature is invalid, or the rumor author
-     * differs from the seal author (NIP-59 forgery guard).
+     * differs from the seal author on a shape where they must match (NIP-59 forgery guard).
+     *
+     * Four shapes are accepted, all of which are live on relays today:
+     * - classic NIP-17: no `n`, seal identity-signed, both layers addressed to the identity key;
+     * - NIP-4e modern: `n` names the sender's encryption key, seal still identity-signed;
+     * - NIP-4e legacy: seal signed by the sender's ENCRYPTION key, no `n`, so
+     *   `seal.pubkey != rumor.pubkey` and the caller authenticates via kind:10044;
+     * - our own seal over someone else's rumor: only our signer can produce our signature, so the
+     *   author guard is relaxed for it (self-archive).
      */
-    suspend fun unwrap(giftWrap: Event, signer: NostrSigner): Unwrapped? {
+    suspend fun unwrap(giftWrap: Event, myPubkey: String, decryptors: List<Nip44Decryptor>): Unwrapped? {
         if (giftWrap.kind != KIND_GIFT_WRAP) return null
-        val seal =
-            runCatching { parseEvent(signer.nip44Decrypt(giftWrap.pubkey, giftWrap.content)) }
-                .getOrNull() ?: return null
+        val sealJson = tryDecrypt(decryptors, giftWrap.pubkey, giftWrap.content) ?: return null
+        val seal = runCatching { parseEvent(sealJson) }.getOrNull() ?: return null
         if (seal.kind != KIND_SEAL || !seal.verify()) return null
-        val rumor =
-            runCatching { parseEvent(signer.nip44Decrypt(seal.pubkey, seal.content)) }
-                .getOrNull() ?: return null
-        if (rumor.pubkey != seal.pubkey) return null
-        return Unwrapped(rumor = rumor, senderPubkey = seal.pubkey, giftWrapId = giftWrap.id)
+        // The seal names the key its content is encrypted against; without it the peer is the
+        // seal's own author, which is both the classic and the legacy behavior.
+        val senderEncPubkey = Nip4e.encryptionKeyFromTags(seal.tags)
+        val rumorJson = tryDecrypt(decryptors, senderEncPubkey ?: seal.pubkey, seal.content) ?: return null
+        val rumor = runCatching { parseEvent(rumorJson) }.getOrNull() ?: return null
+
+        return when {
+            seal.pubkey == myPubkey ->
+                Unwrapped(rumor, rumor.pubkey, giftWrap.id, senderEncPubkey, seal.pubkey, sealSignedByIdentity = true)
+            senderEncPubkey != null || seal.pubkey == rumor.pubkey -> {
+                if (rumor.pubkey != seal.pubkey) return null
+                Unwrapped(rumor, seal.pubkey, giftWrap.id, senderEncPubkey, seal.pubkey, sealSignedByIdentity = true)
+            }
+            else ->
+                Unwrapped(rumor, rumor.pubkey, giftWrap.id, senderEncPubkey, seal.pubkey, sealSignedByIdentity = false)
+        }
     }
+
+    /** Unwrap with a single signer, the classic path. */
+    suspend fun unwrap(giftWrap: Event, signer: NostrSigner): Unwrapped? = unwrap(giftWrap, signer.pubkey, listOf(Nip44Decryptor { peer, ciphertext -> signer.nip44Decrypt(peer, ciphertext) }))
+
+    private suspend fun tryDecrypt(decryptors: List<Nip44Decryptor>, peerPubkeyHex: String, ciphertext: String): String? {
+        for (decryptor in decryptors) {
+            val plaintext =
+                try {
+                    decryptor.decrypt(peerPubkeyHex, ciphertext)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    null
+                }
+            if (plaintext != null) return plaintext
+        }
+        return null
+    }
+
+    /** Parse a stored kind:14 rumor back into an [Event]; null when the JSON is unusable. */
+    fun parseRumor(json: String): Event? = runCatching { parseEvent(json) }.getOrNull()?.takeIf { it.kind == KIND_CHAT }
 
     private val lenientJson = Json { ignoreUnknownKeys = true }
 

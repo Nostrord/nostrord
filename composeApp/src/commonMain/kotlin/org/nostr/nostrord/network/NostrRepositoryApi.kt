@@ -5,8 +5,11 @@ import kotlinx.serialization.Serializable
 import org.nostr.nostrord.auth.Account
 import org.nostr.nostrord.network.livekit.LiveKitCredentials
 import org.nostr.nostrord.network.managers.ConnectionManager
+import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
+import org.nostr.nostrord.network.managers.DmEncryptionManager
 import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.ZapManager
@@ -199,6 +202,51 @@ interface NostrRepositoryApi {
 
     /** Fetch a peer's kind:10050 so [dmRelaysByPubkey] gains its entry (fire-and-forget). */
     fun requestPeerDmRelays(pubkey: String)
+
+    /** Whether this account holds and advertises a NIP-4e encryption key (see DmEncryptionManager). */
+    val dmEncryptionState: StateFlow<DmEncryptionManager.State>
+
+    /** Announce a NIP-4e encryption key so inbound DMs decrypt without the signer. */
+    suspend fun enableDmEncryption(): Result<Unit>
+
+    /** Stop advertising the encryption key. The key is kept, or its history becomes unreadable. */
+    suspend fun disableDmEncryption(): Result<Unit>
+
+    /** Advertise a fresh encryption key. The previous one stays held so its history keeps opening. */
+    suspend fun rotateDmEncryptionKey(): Result<Unit>
+
+    /** Hold the encryption key exported from another device. False when it is not the announced one. */
+    fun importDmEncryptionKey(privateKeyHex: String): Boolean
+
+    /** The current encryption private key, for moving it to another device. */
+    fun exportDmEncryptionKey(): String?
+
+    /** Progress of the self-archive republish (see DmArchiveManager). */
+    val dmArchiveProgress: StateFlow<DmArchiveManager.Progress>
+
+    /** How many stored messages still need an archive copy; drives the confirmation copy. */
+    suspend fun countDmArchivableMessages(): Int
+
+    /** Republish decrypted history to ourselves addressed to the encryption key. Resumable. */
+    suspend fun archiveDmHistory(): Result<Unit>
+
+    /** Stop an archive run in progress; already-published copies stay. */
+    fun cancelDmArchive()
+
+    /** NIP-4e device pairing: request the key, or answer another device asking for it. */
+    val dmPairingState: StateFlow<DmPairingManager.State>
+
+    /** Ask another device of this account for the encryption key (kind:4454). */
+    suspend fun requestDmEncryptionKey(): Result<Unit>
+
+    /** Send our encryption key to the device that asked (kind:4455). */
+    suspend fun approveDmPairing(): Result<Unit>
+
+    /** Refuse the pending request; the asking device keeps waiting. */
+    fun declineDmPairing()
+
+    /** Clear a finished or failed pairing back to idle. */
+    fun dismissDmPairing()
 
     /** Send a NIP-17 direct message to [recipientPubkey]. */
     suspend fun sendDm(recipientPubkey: String, content: String): Result<Unit>

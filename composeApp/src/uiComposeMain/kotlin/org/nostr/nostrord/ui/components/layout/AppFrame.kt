@@ -118,6 +118,7 @@ import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.startup.ExternalLaunchContext
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.storage.hasNip4eKeyFor
 import org.nostr.nostrord.ui.components.BunkerStatusBanner
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.accounts.AddAccountSheet
@@ -1374,6 +1375,7 @@ private fun AccountBar(onOpenSettings: () -> Unit, onViewProfile: (String) -> Un
                 accountLabel = signOutLabel,
                 fallbackLabel = fallbackLabel,
                 method = active.authMethod,
+                holdsDmEncryptionKey = SecureStorage.hasNip4eKeyFor(active.pubkey),
             ),
             confirmLabel =
             if (isBusy) removeAccountBusyLabel(isActive = true) else removeAccountConfirmLabel(isActive = true),

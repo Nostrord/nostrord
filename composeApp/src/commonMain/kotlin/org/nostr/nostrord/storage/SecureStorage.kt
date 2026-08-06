@@ -1184,6 +1184,91 @@ fun SecureStorage.saveDmEncKeys(
     }
 }
 
+// Our own NIP-4e encryption keys, newest first. A rotation retires a key but never deletes it:
+// messages already addressed to it only ever open with it. Held like the identity key (sensitive
+// slot), and cleared only when the account is removed from this device.
+private fun nip4eKeysKey(pubkey: String): String = "nip4e_keys_${pubkeyDigest(pubkey)}"
+
+private fun nip4eAnnouncedKey(pubkey: String): String = "nip4e_announced_${pubkeyDigest(pubkey)}"
+
+fun SecureStorage.loadNip4eKeysFor(pubkey: String): List<String> {
+    if (pubkey.isBlank()) return emptyList()
+    val raw = getSensitive(nip4eKeysKey(pubkey)) ?: return emptyList()
+    if (raw.isBlank()) return emptyList()
+    return runCatching { Json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
+}
+
+fun SecureStorage.saveNip4eKeysFor(
+    pubkey: String,
+    privateKeysHex: List<String>,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveSensitive(nip4eKeysKey(pubkey), Json.encodeToString(privateKeysHex))
+    } catch (_: Exception) {
+    }
+}
+
+/** Whether the key we hold is the one currently advertised in our kind:10044. */
+fun SecureStorage.clearNip4eKeysFor(pubkey: String) {
+    if (pubkey.isBlank()) return
+    try {
+        saveSensitive(nip4eKeysKey(pubkey), "")
+        saveBooleanPref(nip4eAnnouncedKey(pubkey), false)
+    } catch (_: Exception) {
+    }
+}
+
+private fun nip4eAnnouncedAtKey(pubkey: String): String = "nip4e_announced_at_${pubkeyDigest(pubkey)}"
+
+/**
+ * When we started advertising the current key. Messages older than this predate NIP-4e addressing
+ * and are the only ones the self-archive needs to republish.
+ */
+fun SecureStorage.loadNip4eAnnouncedAtFor(pubkey: String): Long = if (pubkey.isBlank()) 0L else getStringPref(nip4eAnnouncedAtKey(pubkey), "")?.toLongOrNull() ?: 0L
+
+fun SecureStorage.saveNip4eAnnouncedAtFor(
+    pubkey: String,
+    epochSeconds: Long,
+) {
+    if (pubkey.isBlank()) return
+    saveStringPref(nip4eAnnouncedAtKey(pubkey), epochSeconds.toString())
+}
+
+private fun dmArchivedRumorIdsKey(pubkey: String): String = "dm_archived_rumors_${pubkeyDigest(pubkey)}"
+
+/** Rumor ids whose archive copy a relay accepted, so a re-run resumes instead of republishing. */
+fun SecureStorage.loadDmArchivedRumorIdsFor(pubkey: String): Set<String> {
+    if (pubkey.isBlank()) return emptySet()
+    val raw = getStringPref(dmArchivedRumorIdsKey(pubkey), "") ?: ""
+    if (raw.isBlank()) return emptySet()
+    return runCatching { Json.decodeFromString<List<String>>(raw).toSet() }.getOrDefault(emptySet())
+}
+
+fun SecureStorage.saveDmArchivedRumorIdsFor(
+    pubkey: String,
+    ids: Set<String>,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveStringPref(dmArchivedRumorIdsKey(pubkey), Json.encodeToString<List<String>>(ids.toList()))
+    } catch (_: Exception) {
+    }
+}
+
+/** Whether this account holds a NIP-4e key on this device; drives the removal warning. */
+fun SecureStorage.hasNip4eKeyFor(pubkey: String): Boolean = loadNip4eKeysFor(pubkey).isNotEmpty()
+
+fun SecureStorage.loadNip4eAnnouncedFor(pubkey: String): Boolean = pubkey.isNotBlank() && getBooleanPref(nip4eAnnouncedKey(pubkey), default = false)
+
+fun SecureStorage.saveNip4eAnnouncedFor(
+    pubkey: String,
+    announced: Boolean,
+) {
+    if (pubkey.isBlank()) return
+    saveBooleanPref(nip4eAnnouncedKey(pubkey), announced)
+}
+
 // Notification history — persisted feed of cross-relay notifications shown in
 // the notification center. Scoped by pubkey so multi-account devices stay isolated.
 private fun notificationHistoryKey(pubkey: String): String = "notification_history_${pubkeyDigest(pubkey)}"
@@ -1492,6 +1577,9 @@ fun SecureStorage.clearAllCredentialsForAccount(pubkey: String) {
     clearPomegranateCentralFor(pubkey)
     clearPomegranateDisconnectedFor(pubkey)
     clearNip55SignerPackageFor(pubkey)
+    // The NIP-4e key decrypts this account's DMs, so it cannot outlive the account on the device.
+    // The removal dialog warns to export it first, since its message history goes with it.
+    clearNip4eKeysFor(pubkey)
 }
 
 private fun droppedGroupsForAccountKey(pubkey: String) = "dropped_groups_${pubkeyDigest(pubkey)}"

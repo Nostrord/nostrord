@@ -161,6 +161,98 @@ class Nip17Test {
         assertNull(Nip17.unwrap(wrap, bob))
     }
 
+    private fun keyDecryptor(kp: KeyPair) = Nip17.Nip44Decryptor { peer, ciphertext -> Nip44.decrypt(ciphertext, kp.privateKeyHex, peer) }
+
+    @Test
+    fun `a legacy seal is reported unauthenticated for the caller to check`() = runTest {
+        val alice = signer()
+        val aliceEnc = KeyPair.generate()
+        val bob = signer()
+        val bobEnc = KeyPair.generate()
+        val rumor = Nip17.buildRumor(alice.pubkey, bob.pubkey, "legacy shape")
+        // Seal signed by the sender's ENCRYPTION key: proves nothing about who sent it.
+        val seal = Nip17.legacySeal(rumor, aliceEnc.privateKeyHex, bobEnc.publicKeyHex)
+        val wrap = Nip17.giftWrap(seal, bob.pubkey, encryptTo = bobEnc.publicKeyHex)
+
+        val out = Nip17.unwrap(wrap, bob.pubkey, listOf(keyDecryptor(bobEnc)))
+        assertNotNull(out)
+        assertEquals("legacy shape", out.rumor.content)
+        assertEquals(alice.pubkey, out.senderPubkey, "the claimed sender is the rumor author")
+        assertEquals(aliceEnc.publicKeyHex, out.sealPubkey)
+        assertTrue(!out.sealSignedByIdentity, "caller must verify this against the author's kind:10044")
+    }
+
+    @Test
+    fun `a modern seal cannot claim someone else's rumor`() = runTest {
+        val alice = signer()
+        val mallory = signer()
+        val bobEnc = KeyPair.generate()
+        // Mallory seals a rumor attributed to Alice and tags it as NIP-4e.
+        val rumor = Nip17.buildRumor(alice.pubkey, mallory.pubkey, "forged")
+        val seal = Nip17.seal(rumor, mallory.pubkey, mallory, encryptTo = bobEnc.publicKeyHex, senderEncTag = mallory.pubkey)
+        val wrap = Nip17.giftWrap(seal, mallory.pubkey, encryptTo = bobEnc.publicKeyHex)
+
+        assertNull(Nip17.unwrap(wrap, "00".repeat(32), listOf(keyDecryptor(bobEnc))))
+    }
+
+    @Test
+    fun `our own seal may carry someone else's rumor`() = runTest {
+        // The self-archive shape: only our signer can produce our signature, so the author guard
+        // is relaxed for it.
+        val me = signer()
+        val alice = signer()
+        val myEnc = KeyPair.generate()
+        val rumor = Nip17.buildRumor(alice.pubkey, me.pubkey, "archived")
+        // Seal content encrypted locally with our encryption key to our own identity, so the seal
+        // needs no `n`: the reader's peer is seal.pubkey, and we hold the other half.
+        val seal = Nip17.seal(rumor, me.pubkey, me, encryptTo = me.pubkey, encryptWith = myEnc.privateKeyHex)
+        val wrap = Nip17.giftWrap(seal, me.pubkey, encryptTo = myEnc.publicKeyHex)
+
+        val out = Nip17.unwrap(wrap, me.pubkey, listOf(keyDecryptor(myEnc)))
+        assertNotNull(out)
+        assertEquals("archived", out.rumor.content)
+        assertEquals(alice.pubkey, out.senderPubkey, "the original author survives archiving")
+    }
+
+    @Test
+    fun `a retired key still opens its own history`() = runTest {
+        val alice = signer()
+        val bob = signer()
+        val retired = KeyPair.generate()
+        val current = KeyPair.generate()
+        val wrap =
+            Nip17.wrap(
+                Nip17.buildRumor(alice.pubkey, bob.pubkey, "old message"),
+                bob.pubkey,
+                alice,
+                encryptTo = retired.publicKeyHex,
+                senderEncTag = alice.pubkey,
+            )
+
+        // Current key first, exactly as the receive path orders them.
+        val out = Nip17.unwrap(wrap, bob.pubkey, listOf(keyDecryptor(current), keyDecryptor(retired)))
+        assertNotNull(out)
+        assertEquals("old message", out.rumor.content)
+    }
+
+    @Test
+    fun `the signer is only reached after the local keys miss`() = runTest {
+        val alice = signer()
+        val bob = signer()
+        var signerCalls = 0
+        val wrap = Nip17.wrap(Nip17.buildRumor(alice.pubkey, bob.pubkey, "classic"), bob.pubkey, alice)
+        val counting =
+            Nip17.Nip44Decryptor { peer, ciphertext ->
+                signerCalls++
+                bob.nip44Decrypt(peer, ciphertext)
+            }
+
+        val out = Nip17.unwrap(wrap, bob.pubkey, listOf(keyDecryptor(KeyPair.generate()), counting))
+        assertNotNull(out)
+        assertEquals("classic", out.rumor.content)
+        assertEquals(2, signerCalls, "one round-trip per layer, and only after the local key failed")
+    }
+
     @Test
     fun `a signer without NIP-44 support rejects encryption`() = runTest {
         val stub =
