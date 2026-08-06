@@ -105,7 +105,7 @@ fun MessageInput(
     groupName: String?,
     messageInput: String,
     onSendMessage: (String) -> Unit,
-    onJoinGroup: (inviteCode: String?, listPrivately: Boolean) -> Unit,
+    onJoinGroup: (inviteCode: String?) -> Unit,
     groupMembers: List<MemberInfo> = emptyList(),
     mentions: Map<String, String> = emptyMap(), // displayName -> pubkey
     onMentionsChange: (Map<String, String>) -> Unit = {},
@@ -465,62 +465,36 @@ fun MessageInput(
                 .background(NostrordColors.SurfaceVariant)
                 .padding(horizontal = Spacing.lg, vertical = Spacing.md),
         ) {
-            // The privacy choice is made here, at the join, so a group the user wants hidden is
-            // never published in the clear even once (a replaceable event keeps that version).
-            var joinPrivately by remember { mutableStateOf(false) }
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Join the group to send messages",
+                    color = NostrordColors.TextSecondary,
+                    style = NostrordTypography.MessageBody,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(modifier = Modifier.width(Spacing.md))
+                // Filled primary button on the right (web .composer-join-btn): icon + label,
+                // "Request to Join" for closed groups, "Join Now" for open. The public/private
+                // choice lives in the confirm dialog this opens, not here.
+                Button(
+                    onClick = { onJoinGroup(null) },
+                    colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Primary),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                    shape = NostrordShapes.shapeMedium,
                 ) {
-                    Text(
-                        text = "Join the group to send messages",
-                        color = NostrordColors.TextSecondary,
-                        style = NostrordTypography.MessageBody,
-                        modifier = Modifier.weight(1f, fill = false),
+                    Icon(
+                        Icons.Default.PersonAdd,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
                     )
-                    Spacer(modifier = Modifier.width(Spacing.md))
-                    // Filled primary button on the right (web .composer-join-btn): icon + label,
-                    // "Request to Join" for closed groups, "Join Now" for open.
-                    Button(
-                        onClick = { onJoinGroup(null, joinPrivately) },
-                        colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Primary),
-                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-                        shape = NostrordShapes.shapeMedium,
-                    ) {
-                        Icon(
-                            Icons.Default.PersonAdd,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            if (isGroupClosed) "Request to Join" else "Join Now",
-                            style = NostrordTypography.Button,
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(Spacing.sm))
-                Row(
-                    modifier = Modifier
-                        .clip(NostrordShapes.shapeSmall)
-                        .clickable { joinPrivately = !joinPrivately }
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .padding(vertical = Spacing.xs, horizontal = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = joinPrivately,
-                        onCheckedChange = { joinPrivately = it },
-                        colors = CheckboxDefaults.colors(checkedColor = NostrordColors.Primary),
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.sm))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Add privately, so nobody can see you are in this group",
-                        color = NostrordColors.TextMuted,
-                        style = NostrordTypography.Caption,
+                        if (isGroupClosed) "Request to Join" else "Join Now",
+                        style = NostrordTypography.Button,
                     )
                 }
             }

@@ -43,6 +43,7 @@ import org.nostr.nostrord.web.components.reactionBadges
 import org.nostr.nostrord.web.components.sendStateIcon
 import org.nostr.nostrord.web.components.uploadBlob
 import org.nostr.nostrord.web.modals.CreateThreadModal
+import org.nostr.nostrord.web.modals.JoinGroupConfirmModal
 import org.nostr.nostrord.web.modals.UserProfileModal
 import react.ChildrenBuilder
 import react.FC
@@ -127,6 +128,9 @@ val ThreadsScreen =
         val vm = useViewModel("${route.relayUrl}|${route.groupId}") {
             ThreadsViewModel(AppModule.nostrRepository, route.groupId, route.relayUrl)
         }
+        // Same confirm step as the chat screen, so the public/private choice is never skipped
+        // depending on which affordance the user reached the join from.
+        val (showJoinConfirm, setShowJoinConfirm) = useState { false }
         val threads = useStateFlow(vm.threads)
         val isLoading = useStateFlow(vm.isLoading)
         val openThread = useStateFlow(vm.openThread)
@@ -318,7 +322,7 @@ val ThreadsScreen =
                             membership.status == GroupMembership.NONE ->
                                 button {
                                     className = ClassName("chat-join-btn")
-                                    onClick = { vm.joinGroup() }
+                                    onClick = { setShowJoinConfirm { true } }
                                     icon(Ic.PersonAdd)
                                     span { +(if (groupAccess.isOpen) "Join" else "Request to Join") }
                                 }
@@ -767,9 +771,20 @@ val ThreadsScreen =
                     onDismiss = { vm.clearReactionError() },
                     onJoin = {
                         vm.clearReactionError()
-                        vm.joinGroup()
+                        setShowJoinConfirm { true }
                     },
                 )
+            }
+            if (showJoinConfirm) {
+                JoinGroupConfirmModal {
+                    this.groupName = AppModule.nostrRepository.groups.value.firstOrNull { it.id == props.route.groupId }?.name
+                    this.isGroupClosed = !groupAccess.isOpen
+                    onConfirm = { listPrivately ->
+                        setShowJoinConfirm { false }
+                        vm.joinGroup(listPrivately)
+                    }
+                    onClose = { setShowJoinConfirm { false } }
+                }
             }
             uploadError?.let { uploadErrorDialog(it) { setUploadError(null) } }
         }

@@ -77,6 +77,7 @@ import org.nostr.nostrord.web.modals.AddMemberModal
 import org.nostr.nostrord.web.modals.GroupInfoModal
 import org.nostr.nostrord.web.modals.GroupInviteModal
 import org.nostr.nostrord.web.modals.InviteCodesModal
+import org.nostr.nostrord.web.modals.JoinGroupConfirmModal
 import org.nostr.nostrord.web.modals.JoinWithCodeModal
 import org.nostr.nostrord.web.modals.ManageGroupModal
 import org.nostr.nostrord.web.modals.ReportUserModal
@@ -109,10 +110,11 @@ import web.cssom.ClassName
 import web.dom.ElementId
 import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
-import web.html.InputType
-import web.html.checkbox
 import kotlin.math.abs
 import org.nostr.nostrord.ui.screens.group.pendingJoinRequests as computePendingJoinRequests
+
+/** A join awaiting its confirm step. [inviteCode] rides along from an invite link or code. */
+private data class JoinIntent(val inviteCode: String?)
 
 external interface ChatScreenProps : Props {
     var group: GroupMetadata
@@ -310,7 +312,7 @@ private external interface ChatComposerProps : Props {
 
     /** Cleared after a successful publish so the parent can drop the reply target. */
     var onSent: () -> Unit
-    var onJoin: (listPrivately: Boolean) -> Unit
+    var onJoin: () -> Unit
 
     /** When the request to join a closed group is pending: the time it was sent (for the
      *  "Requested ..." line) and the action to cancel it (mirrors native MessageInput). */
@@ -542,9 +544,6 @@ private val ChatComposer =
         // Markdown toolbar (prototype Composer): wraps the selection via execCommand
         // so edits join the textarea's NATIVE undo stack (Ctrl+Z works).
         val (toolbarOpen, setToolbarOpen) = useState { false }
-        // The privacy choice is made at the join, so a group the user wants hidden is never
-        // published in the clear even once (a replaceable event keeps that version).
-        val (joinPrivately, setJoinPrivately) = useState { false }
         // Hints popup (keyboard shortcuts on desktop, mention triggers on touch).
         // Opened by Ctrl+/ or the footer pill; Esc, typing, or clicking outside
         // closes it. Never triggered by a typed character, so every glyph
@@ -664,7 +663,7 @@ private val ChatComposer =
         } else if (!props.canPost) {
             // Not a member — prompt to join (or show pending) instead of the composer.
             div {
-                className = ClassName(if (props.isPending) "composer-join" else "composer-join stacked")
+                className = ClassName("composer-join")
                 if (props.isPending) {
                     div {
                         className = ClassName("composer-pending-text")
@@ -685,24 +684,13 @@ private val ChatComposer =
                         +"Cancel request"
                     }
                 } else {
-                    div {
-                        className = ClassName("composer-join-row")
-                        span { +"Join the group to send messages" }
-                        button {
-                            className = ClassName("composer-join-btn")
-                            onClick = { props.onJoin(joinPrivately) }
-                            icon(Ic.PersonAdd)
-                            span { +(if (!props.groupIsOpen) "Request to Join" else "Join Now") }
-                        }
-                    }
-                    label {
-                        className = ClassName("composer-join-private")
-                        input {
-                            type = InputType.checkbox
-                            checked = joinPrivately
-                            onChange = { setJoinPrivately(it.target.checked) }
-                        }
-                        span { +"Add privately, so nobody can see you are in this group" }
+                    span { +"Join the group to send messages" }
+                    button {
+                        className = ClassName("composer-join-btn")
+                        // The public/private choice lives in the confirm modal this opens.
+                        onClick = { props.onJoin() }
+                        icon(Ic.PersonAdd)
+                        span { +(if (!props.groupIsOpen) "Request to Join" else "Join Now") }
                     }
                 }
             }
@@ -1252,6 +1240,8 @@ val ChatScreen =
         val (highlightId, setHighlightId) = useState<String?> { null }
         // moderation modal: edit | share | members | addmember | invite | requests | subgroup | children
         val (modal, setModal) = useState<String?> { null }
+        // Non-null while a join is awaiting its confirm step (see `join` below).
+        val (pendingJoin, setPendingJoin) = useState<JoinIntent?> { null }
         // Message id pending delete confirmation. Native pops an AlertDialog
         // first (GroupScreen.kt:523); the web used to call repo.deleteMessage
         // straight from the onDelete callback — one stray click on the
@@ -1752,8 +1742,11 @@ val ChatScreen =
             setSearchingOlder(false)
         }
 
-        fun join(listPrivately: Boolean = false) {
-            vm.joinGroup(listPrivately = listPrivately)
+        // Every join opens the same confirm step, so the public/private choice is offered the
+        // same way from the composer bar, the header button and an invite code. The value is the
+        // pending invite code (null = plain join); `undefined` = nothing pending.
+        fun join(inviteCode: String? = null) {
+            setPendingJoin { JoinIntent(inviteCode) }
         }
 
         // Scroll a loaded message into view and flash it (used by reply-preview clicks).
@@ -2425,7 +2418,7 @@ val ChatScreen =
                             // history (native parity: AutoScrollEffect's ownAppend).
                             setJumpNonce { it + 1 }
                         }
-                        this.onJoin = { listPrivately -> join(listPrivately) }
+                        this.onJoin = { join() }
                         this.pendingRequestedAtSeconds = pendingRequestedAt
                         this.membersResolving = membersResolving
                         // Cancel a pending join request = leave the group, then navigate away.
@@ -2615,7 +2608,10 @@ val ChatScreen =
                 "joincode" ->
                     JoinWithCodeModal {
                         initialCode = null
-                        onJoin = { code -> vm.joinGroup(code) }
+                        onJoin = { code ->
+                            setModal(null)
+                            join(code)
+                        }
                         onClose = { setModal(null) }
                     }
                 "requests" ->
@@ -2684,6 +2680,17 @@ val ChatScreen =
                         join()
                     },
                 )
+            }
+            pendingJoin?.let { intent ->
+                JoinGroupConfirmModal {
+                    this.groupName = group.name
+                    this.isGroupClosed = !group.isOpen
+                    onConfirm = { listPrivately ->
+                        setPendingJoin { null }
+                        launchApp { repo.joinGroup(group.id, intent.inviteCode, listPrivately) }
+                    }
+                    onClose = { setPendingJoin { null } }
+                }
             }
             // Relay rejected the join request — show the reason instead of a silent no-op.
             joinError?.let { error ->

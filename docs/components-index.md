@@ -132,6 +132,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `IdentifierRow` | webMain/kotlin/org/nostr/nostrord/web/components/IdentifierField.kt | Cycling identifier field (prototype IdentifierField, the .identifier-* OOCSS |
 | `ImageViewerHost` | webMain/kotlin/org/nostr/nostrord/web/components/ImageViewer.kt | Place once at the app root. Renders the fullscreen overlay whenever an image is open. |
 | `InviteCodesModal` | webMain/kotlin/org/nostr/nostrord/web/modals/InviteCodesModal.kt | Invite-codes modal — real port of the Compose InviteCodesModal (admin): active codes |
+| `JoinGroupConfirmModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinGroupConfirmModal.kt | The single confirm step every join goes through, so the public/private choice is offered the |
 | `JoinGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinGroupModal.kt | Join-group modal — mirrors the Compose flow (App.kt onJoin): paste an invite link or a NIP-29 |
 | `JoinWithCodeModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinWithCodeModal.kt | Join-with-invite-code modal — web port of the Compose InviteCodeJoinModal |
 | `LiveSpaceBar` | webMain/kotlin/org/nostr/nostrord/web/components/LiveSpaceBar.kt | In-chat banner for a NIP-29 AV space: participant count, a stack of the first few faces and |

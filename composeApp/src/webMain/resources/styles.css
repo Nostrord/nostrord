@@ -8982,6 +8982,33 @@ body {
     background: var(--color-divider);
 }
 
+/* "Add privately" choice in the join confirm modal: checkbox beside a label and its
+   consequence line. */
+.join-private-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 16px;
+    cursor: pointer;
+}
+
+.join-private-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.join-private-label {
+    font-size: 14px;
+    color: var(--color-text-primary);
+}
+
+.join-private-desc {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
 /* Note under the "Private on my list" toggle when the encrypted section was written by
    another app: its entries are preserved but cannot be shown here. */
 .info-private-note {
@@ -9259,30 +9286,6 @@ body {
     border-radius: 8px;
     color: var(--color-text-secondary);
     font-size: 14px;
-}
-
-/* The join bar stacks when it carries the public/private choice: the prompt row on top,
-   the "add privately" checkbox under it. */
-.composer-join.stacked {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-}
-
-.composer-join-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.composer-join-private {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: var(--color-text-muted);
-    cursor: pointer;
 }
 
 .composer-join-btn {

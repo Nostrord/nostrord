@@ -374,9 +374,12 @@ class ThreadsViewModel(
         _reactionError.value = null
     }
 
-    /** Join the group (offered by the reaction-error dialog when the relay wants a member). */
-    fun joinGroup() {
-        viewModelScope.launch { repo.joinGroup(groupId) }
+    /**
+     * Join the group. [listPrivately] is the choice made on the join confirm step, the same one
+     * the chat screen offers.
+     */
+    fun joinGroup(listPrivately: Boolean = false) {
+        viewModelScope.launch { repo.joinGroup(groupId, listPrivately = listPrivately) }
     }
 
     /** React (kind:7) to a thread root or reply; dedupes an in-flight send of the same emoji. */
