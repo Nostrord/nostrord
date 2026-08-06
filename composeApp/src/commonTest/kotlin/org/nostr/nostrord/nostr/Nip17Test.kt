@@ -90,6 +90,78 @@ class Nip17Test {
     }
 
     @Test
+    fun `classic wrap keeps a single p tag and no n tag`() = runTest {
+        val alice = signer()
+        val bob = signer()
+        val rumor = Nip17.buildRumor(alice.pubkey, bob.pubkey, "x")
+        val seal = Nip17.seal(rumor, bob.pubkey, alice)
+        val wrap = Nip17.giftWrap(seal, bob.pubkey)
+
+        assertTrue(seal.tags.isEmpty(), "classic seal carries no NIP-4e n tag")
+        assertEquals(listOf(listOf("p", bob.pubkey)), wrap.tags)
+    }
+
+    @Test
+    fun `NIP-4e wrap addresses the encryption key and round-trips with it`() = runTest {
+        val alice = signer()
+        val bob = signer()
+        // Bob announced this key; only he holds its private half.
+        val bobEnc = KeyPair.generate()
+        val rumor = Nip17.buildRumor(alice.pubkey, bob.pubkey, "hi via nip4e")
+        val wrap =
+            Nip17.wrap(
+                rumor,
+                bob.pubkey,
+                alice,
+                encryptTo = bobEnc.publicKeyHex,
+                senderEncTag = alice.pubkey,
+            )
+
+        // Encryption key leads so readers taking p[0] find it; the identity p tag must remain,
+        // because that is what relays route on and what every inbox REQ filters by.
+        assertEquals(listOf(listOf("p", bobEnc.publicKeyHex), listOf("p", bob.pubkey)), wrap.tags)
+
+        val out = Nip17.unwrap(wrap, NostrSigner.Local(bobEnc))
+        assertNotNull(out)
+        assertEquals("hi via nip4e", out.rumor.content)
+        assertEquals(alice.pubkey, out.senderPubkey, "sender is still the identity that signed the seal")
+    }
+
+    @Test
+    fun `NIP-4e seal names the key it was encrypted against`() = runTest {
+        val alice = signer()
+        val bob = signer()
+        val bobEnc = KeyPair.generate()
+        val seal =
+            Nip17.seal(
+                Nip17.buildRumor(alice.pubkey, bob.pubkey, "x"),
+                bob.pubkey,
+                alice,
+                encryptTo = bobEnc.publicKeyHex,
+                senderEncTag = alice.pubkey,
+            )
+        // Without this tag a reader falls back to a kind:10044 lookup and flags us unverified.
+        assertEquals(alice.pubkey, Nip4e.encryptionKeyFromTags(seal.tags))
+        assertEquals(alice.pubkey, seal.pubkey, "the seal is still identity-signed")
+    }
+
+    @Test
+    fun `an encryption-key-addressed wrap does not open with the identity key alone`() = runTest {
+        val alice = signer()
+        val bob = signer()
+        val bobEnc = KeyPair.generate()
+        val wrap =
+            Nip17.wrap(
+                Nip17.buildRumor(alice.pubkey, bob.pubkey, "secret"),
+                bob.pubkey,
+                alice,
+                encryptTo = bobEnc.publicKeyHex,
+                senderEncTag = alice.pubkey,
+            )
+        assertNull(Nip17.unwrap(wrap, bob))
+    }
+
+    @Test
     fun `a signer without NIP-44 support rejects encryption`() = runTest {
         val stub =
             object : NostrSigner {

@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
 import org.nostr.nostrord.auth.NostrSigner
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip17
+import org.nostr.nostrord.nostr.Nip4e
 
 /** One decrypted NIP-17 chat message, scoped to a conversation with [peerPubkey]. */
 @Serializable
@@ -42,6 +43,17 @@ data class PendingDmWrap(
     val wrapId: String,
     val wrapJson: String,
     val relays: List<String>,
+    val createdAt: Long,
+)
+
+/**
+ * A peer's announced NIP-4e encryption key (kind:10044). [key] is null when their latest
+ * announcement carries none, which withdraws it and puts them back on identity-addressed
+ * encryption. [createdAt] keeps replaceable latest-wins across relays.
+ */
+@Serializable
+data class DmEncKey(
+    val key: String?,
     val createdAt: Long,
 )
 
@@ -111,6 +123,11 @@ class DmManager(
     // Recipient/own DM relay lists from kind:10050, keyed by pubkey.
     private val _dmRelaysByPubkey = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val dmRelaysByPubkey: StateFlow<Map<String, List<String>>> = _dmRelaysByPubkey.asStateFlow()
+
+    // NIP-4e encryption keys announced by peers (kind:10044), keyed by identity pubkey. created_at
+    // is kept so a copy of an older announcement arriving from a slower relay cannot regress a
+    // newer key; a record with a null key is a withdrawal, which must also win by created_at.
+    private val _encKeyByPubkey = MutableStateFlow<Map<String, DmEncKey>>(emptyMap())
 
     // Send status of our own optimistic messages, keyed by rumor id (in-memory, like GroupManager).
     // Sending until a relay OKs the wrap or the self-copy echoes back; then Delivered. Reuses the
@@ -234,6 +251,9 @@ class DmManager(
     /** Set by NostrRepository to persist the seen-on + wrap-to-rumor maps when they grow. */
     var onSeenRelaysChanged: (() -> Unit)? = null
 
+    /** Set by NostrRepository to persist the peer encryption-key cache when it changes. */
+    var onEncKeysChanged: (() -> Unit)? = null
+
     /** Record that [wrapId] was delivered by [relayUrl] (normalized). Safe pre-decrypt. */
     fun recordWrapRelay(wrapId: String, relayUrl: String) {
         if (relayUrl.isBlank()) return
@@ -303,7 +323,11 @@ class DmManager(
         lastRead: Map<String, Long>,
         seenRelays: Map<String, List<String>> = emptyMap(),
         wrapToRumor: Map<String, String> = emptyMap(),
+        encKeys: Map<String, DmEncKey> = emptyMap(),
     ) {
+        // Restored before the first send so a cold-start message to a NIP-4e peer is addressed to
+        // their encryption key instead of racing the kind:10044 fetch and falling back to identity.
+        if (encKeys.isNotEmpty()) _encKeyByPubkey.update { it + encKeys }
         relaysByRumor.update { it + seenRelays.mapValues { (_, relays) -> relays.toSet() } }
         // Restore the wrap->rumor links so a re-streamed, already-processed wrap can attach its
         // relay on the decrypt-skip path (recordWrapRelay) instead of being dropped.
@@ -339,6 +363,27 @@ class DmManager(
 
     fun dmRelaysFor(pubkey: String): List<String> = _dmRelaysByPubkey.value[pubkey].orEmpty()
 
+    /**
+     * Parse a kind:10044 into the author's NIP-4e encryption key. Replaceable latest-wins; an
+     * announcement without a valid `n` tag withdraws the key, so the author goes back to
+     * identity-addressed encryption.
+     */
+    fun ingestEncryptionKey(event: Event) {
+        if (event.kind != Nip4e.KIND_ENCRYPTION_KEY) return
+        val known = _encKeyByPubkey.value[event.pubkey]
+        if (known != null && known.createdAt >= event.createdAt) return
+        val record = DmEncKey(key = Nip4e.encryptionKeyFrom(event), createdAt = event.createdAt)
+        _encKeyByPubkey.update { it + (event.pubkey to record) }
+        // A re-announcement of the same key only refreshes created_at; nothing to rewrite on disk.
+        if (known?.key != record.key) onEncKeysChanged?.invoke()
+    }
+
+    /** [pubkey]'s announced encryption key, or null when they have not announced one. */
+    fun encryptionKeyFor(pubkey: String): String? = _encKeyByPubkey.value[pubkey]?.key
+
+    /** Snapshot of the peer encryption-key cache, for persistence. */
+    fun encKeysSnapshot(): Map<String, DmEncKey> = _encKeyByPubkey.value
+
     /** Drop all state on account switch. */
     fun clear() {
         seenRumorIds.value = emptySet()
@@ -349,6 +394,7 @@ class DmManager(
         _messageStatus.value = emptyMap()
         _messagesByPeer.value = emptyMap()
         _dmRelaysByPubkey.value = emptyMap()
+        _encKeyByPubkey.value = emptyMap()
         _lastReadByPeer.value = emptyMap()
     }
 }

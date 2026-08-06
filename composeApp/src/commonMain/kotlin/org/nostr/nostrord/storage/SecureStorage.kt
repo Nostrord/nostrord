@@ -1160,6 +1160,30 @@ fun SecureStorage.saveDmWrapRumor(
     }
 }
 
+// Peer NIP-4e encryption keys (kind:10044), so the first send after a cold start addresses a
+// peer's encryption key instead of racing the announcement fetch and falling back to identity.
+private fun dmEncKeysKey(pubkey: String): String = "dm_enc_keys_${pubkeyDigest(pubkey)}"
+
+fun SecureStorage.loadDmEncKeys(pubkey: String): Map<String, org.nostr.nostrord.network.managers.DmEncKey> {
+    if (pubkey.isBlank()) return emptyMap()
+    val raw = getStringPref(dmEncKeysKey(pubkey), "") ?: ""
+    if (raw.isBlank()) return emptyMap()
+    return runCatching {
+        Json.decodeFromString<Map<String, org.nostr.nostrord.network.managers.DmEncKey>>(raw)
+    }.getOrDefault(emptyMap())
+}
+
+fun SecureStorage.saveDmEncKeys(
+    pubkey: String,
+    keys: Map<String, org.nostr.nostrord.network.managers.DmEncKey>,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveStringPref(dmEncKeysKey(pubkey), Json.encodeToString(keys))
+    } catch (_: Exception) {
+    }
+}
+
 // Notification history — persisted feed of cross-relay notifications shown in
 // the notification center. Scoped by pubkey so multi-account devices stay isolated.
 private fun notificationHistoryKey(pubkey: String): String = "notification_history_${pubkeyDigest(pubkey)}"
