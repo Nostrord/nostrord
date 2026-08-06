@@ -16,6 +16,7 @@ import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
 import org.nostr.nostrord.network.outbox.buildKind10009Publish
+import org.nostr.nostrord.network.outbox.mergeGroupOrder
 import org.nostr.nostrord.network.outbox.rebuildPrivateGroupTags
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip51
@@ -934,8 +935,17 @@ class OutboxManager(
             allRelayGroups = immutableRelayGroups
         }
         // Ahead of the contentUnchanged short-circuit below: a reorder published from another
-        // device changes only the tag sequence, and would otherwise never reach the rail.
-        applyGroupOrder(pubKey, taggedOrder)
+        // device changes only the tag sequence, and would otherwise never reach the rail. The
+        // private entries are not in that sequence, so they keep their local position instead of
+        // being appended (which would undo the user's drag on every fetch).
+        applyGroupOrder(
+            pubKey,
+            mergeGroupOrder(
+                publicOrder = taggedOrder.filterNot { it in privateEntries },
+                privateEntries = privateEntries,
+                localOrder = _groupOrder.value,
+            ),
+        )
         // Every connected relay re-delivers the applied event on each fetch (and
         // equal-createdAt now re-applies): identical content with the relay set already
         // in place changes nothing — skip the storage rewrites and callback refires.

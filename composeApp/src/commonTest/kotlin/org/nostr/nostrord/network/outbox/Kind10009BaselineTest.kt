@@ -328,6 +328,49 @@ class Kind10009BaselineTest {
     }
 
     @Test
+    fun `a private group keeps its place instead of falling to the end`() {
+        val a = "wss://r" to "a"
+        val b = "wss://r" to "b"
+        val c = "wss://r" to "c"
+        val secret = "wss://r" to "secret"
+        // The user dragged the private group between a and b.
+        val local = listOf(a, secret, b, c)
+
+        assertEquals(listOf(a, secret, b, c), mergeGroupOrder(listOf(a, b, c), listOf(secret), local))
+    }
+
+    @Test
+    fun `a private group follows its neighbour when another device reorders`() {
+        val a = "wss://r" to "a"
+        val b = "wss://r" to "b"
+        val c = "wss://r" to "c"
+        val secret = "wss://r" to "secret"
+        val local = listOf(a, secret, b, c)
+
+        // Another device moved `a` to the end; the private entry travels with it rather than
+        // staying at an absolute index that no longer means anything.
+        assertEquals(listOf(b, c, a, secret), mergeGroupOrder(listOf(b, c, a), listOf(secret), local))
+    }
+
+    @Test
+    fun `a private group above everything stays on top`() {
+        val a = "wss://r" to "a"
+        val secret = "wss://r" to "secret"
+
+        assertEquals(listOf(secret, a), mergeGroupOrder(listOf(a), listOf(secret), listOf(secret, a)))
+    }
+
+    @Test
+    fun `a private group with no local position goes last`() {
+        val a = "wss://r" to "a"
+        val b = "wss://r" to "b"
+        val fresh = "wss://r" to "fresh"
+
+        // Added privately on another device: nothing here knows where the user wants it.
+        assertEquals(listOf(a, b, fresh), mergeGroupOrder(listOf(a, b), listOf(fresh), listOf(a, b)))
+    }
+
+    @Test
     fun `another author's list is not adopted as our baseline`() = runTest {
         val scope = TestScope(testScheduler)
         val outbox = manager(scope)

@@ -87,6 +87,53 @@ fun kind10009Tags(
     return tags
 }
 
+/**
+ * Rail order of a kind:10009, merging the wire order with the local placement of the private
+ * entries.
+ *
+ * The public tag sequence is the only order that crosses devices, and it cannot carry the private
+ * entries: they live in the encrypted section, which has no place in that sequence. Appending them
+ * would drop every private group to the end of the rail on each fetch, undoing the user's drag.
+ *
+ * So each private entry keeps the position it holds in [localOrder], expressed as "right after the
+ * public entry it currently follows". A reorder published from another device then moves the
+ * private entry along with its neighbour instead of stranding it: an absolute index would be wrong
+ * the moment anything above it moved. An entry with no local position yet (first sight of a group
+ * added elsewhere) goes last.
+ */
+fun mergeGroupOrder(
+    publicOrder: List<Pair<String, String>>,
+    privateEntries: Collection<Pair<String, String>>,
+    localOrder: List<Pair<String, String>>,
+): List<Pair<String, String>> {
+    if (privateEntries.isEmpty()) return publicOrder
+    val publicSet = publicOrder.toSet()
+    val localIndex = localOrder.withIndex().associate { (index, entry) -> entry to index }
+    // Grouped by the public entry each one follows; null = above every public entry.
+    val followers = mutableMapOf<Pair<String, String>?, MutableList<Pair<String, String>>>()
+    val unplaced = mutableListOf<Pair<String, String>>()
+
+    // In local order, so entries sharing an anchor keep their relative positions.
+    privateEntries.sortedBy { localIndex[it] ?: Int.MAX_VALUE }.forEach { entry ->
+        val index = localIndex[entry]
+        if (index == null) {
+            unplaced.add(entry)
+            return@forEach
+        }
+        val anchor = localOrder.take(index).lastOrNull { it in publicSet }
+        followers.getOrPut(anchor) { mutableListOf() }.add(entry)
+    }
+
+    val merged = mutableListOf<Pair<String, String>>()
+    merged.addAll(followers[null].orEmpty())
+    publicOrder.forEach { entry ->
+        merged.add(entry)
+        merged.addAll(followers[entry].orEmpty())
+    }
+    merged.addAll(unplaced)
+    return merged
+}
+
 /** What a kind:10009 publish writes in the clear, and what goes into the encrypted section. */
 data class Kind10009Publish(
     val tags: List<List<String>>,
