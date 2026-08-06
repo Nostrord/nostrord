@@ -77,6 +77,7 @@ import org.nostr.nostrord.web.modals.AddMemberModal
 import org.nostr.nostrord.web.modals.GroupInfoModal
 import org.nostr.nostrord.web.modals.GroupInviteModal
 import org.nostr.nostrord.web.modals.InviteCodesModal
+import org.nostr.nostrord.web.modals.JoinGroupConfirmModal
 import org.nostr.nostrord.web.modals.JoinWithCodeModal
 import org.nostr.nostrord.web.modals.ManageGroupModal
 import org.nostr.nostrord.web.modals.ReportUserModal
@@ -95,6 +96,7 @@ import react.dom.html.ReactHTML.em
 import react.dom.html.ReactHTML.img
 import react.dom.html.ReactHTML.input
 import react.dom.html.ReactHTML.kbd
+import react.dom.html.ReactHTML.label
 import react.dom.html.ReactHTML.pre
 import react.dom.html.ReactHTML.s
 import react.dom.html.ReactHTML.span
@@ -110,6 +112,9 @@ import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
 import kotlin.math.abs
 import org.nostr.nostrord.ui.screens.group.pendingJoinRequests as computePendingJoinRequests
+
+/** A join awaiting its confirm step. [inviteCode] rides along from an invite link or code. */
+private data class JoinIntent(val inviteCode: String?)
 
 external interface ChatScreenProps : Props {
     var group: GroupMetadata
@@ -682,6 +687,7 @@ private val ChatComposer =
                     span { +"Join the group to send messages" }
                     button {
                         className = ClassName("composer-join-btn")
+                        // The public/private choice lives in the confirm modal this opens.
                         onClick = { props.onJoin() }
                         icon(Ic.PersonAdd)
                         span { +(if (!props.groupIsOpen) "Request to Join" else "Join Now") }
@@ -1234,6 +1240,8 @@ val ChatScreen =
         val (highlightId, setHighlightId) = useState<String?> { null }
         // moderation modal: edit | share | members | addmember | invite | requests | subgroup | children
         val (modal, setModal) = useState<String?> { null }
+        // Non-null while a join is awaiting its confirm step (see `join` below).
+        val (pendingJoin, setPendingJoin) = useState<JoinIntent?> { null }
         // Message id pending delete confirmation. Native pops an AlertDialog
         // first (GroupScreen.kt:523); the web used to call repo.deleteMessage
         // straight from the onDelete callback — one stray click on the
@@ -1734,8 +1742,11 @@ val ChatScreen =
             setSearchingOlder(false)
         }
 
-        fun join() {
-            vm.joinGroup()
+        // Every join opens the same confirm step, so the public/private choice is offered the
+        // same way from the composer bar, the header button and an invite code. The value is the
+        // pending invite code (null = plain join); `undefined` = nothing pending.
+        fun join(inviteCode: String? = null) {
+            setPendingJoin { JoinIntent(inviteCode) }
         }
 
         // Scroll a loaded message into view and flash it (used by reply-preview clicks).
@@ -2597,7 +2608,10 @@ val ChatScreen =
                 "joincode" ->
                     JoinWithCodeModal {
                         initialCode = null
-                        onJoin = { code -> vm.joinGroup(code) }
+                        onJoin = { code ->
+                            setModal(null)
+                            join(code)
+                        }
                         onClose = { setModal(null) }
                     }
                 "requests" ->
@@ -2666,6 +2680,17 @@ val ChatScreen =
                         join()
                     },
                 )
+            }
+            pendingJoin?.let { intent ->
+                JoinGroupConfirmModal {
+                    this.groupName = group.name
+                    this.isGroupClosed = !group.isOpen
+                    onConfirm = { listPrivately ->
+                        setPendingJoin { null }
+                        launchApp { repo.joinGroup(group.id, intent.inviteCode, listPrivately) }
+                    }
+                    onClose = { setPendingJoin { null } }
+                }
             }
             // Relay rejected the join request — show the reason instead of a silent no-op.
             joinError?.let { error ->

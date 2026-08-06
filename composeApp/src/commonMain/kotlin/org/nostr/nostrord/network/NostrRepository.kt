@@ -426,6 +426,8 @@ class NostrRepository(
     override val threadsLoaded: StateFlow<Set<String>> = groupManager.threadsLoaded
     override val joinedGroups: StateFlow<Set<String>> = groupManager.joinedGroups
     override val joinedGroupsByRelay: StateFlow<Map<String, Set<String>>> = groupManager.joinedGroupsByRelay
+    override val privateGroupEntries: StateFlow<Set<Pair<String, String>>> = outboxManager.privateGroupEntries
+    override val privateListSectionOpaque: StateFlow<Boolean> = outboxManager.privateSectionOpaque
     override val loadingRelays: StateFlow<Set<String>> = groupManager.loadingRelays
     private val _restrictedRelays = MutableStateFlow<Map<String, String>>(emptyMap())
     override val restrictedRelays: StateFlow<Map<String, String>> = _restrictedRelays.asStateFlow()
@@ -3072,9 +3074,13 @@ class NostrRepository(
     override suspend fun ensureBunkerConnected(): Boolean = sessionManager.ensureBunkerConnected()
 
     // Group operations
-    override suspend fun joinGroup(groupId: String, inviteCode: String?): Result<Unit> {
+    override suspend fun joinGroup(groupId: String, inviteCode: String?, listPrivately: Boolean): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val joinRelay = connectionManager.currentRelayUrl.value
+        // Before the join publishes the list, not after: a group marked private afterwards would
+        // already have gone out in the clear once, and relays keep that version.
+        if (listPrivately) outboxManager.setGroupPrivate(joinRelay, groupId, true)
         val result = groupManager.joinGroup(
             groupId = groupId,
             pubKey = pubKey,
@@ -3088,6 +3094,8 @@ class NostrRepository(
             // connected with a chat sub so notifications fire even when the user is
             // browsing a different focused.
             scope.launch { ensureJoinedRelaysConnected(connectionManager.currentRelayUrl.value) }
+        } else if (listPrivately) {
+            outboxManager.setGroupPrivate(joinRelay, groupId, false)
         }
         return result
     }
@@ -3183,6 +3191,21 @@ class NostrRepository(
             signEvent = { sessionManager.signEvent(it) },
             publishJoinedGroups = { publishJoinedGroupsList() },
         )
+    }
+
+    override suspend fun setGroupListedPrivately(
+        groupId: String,
+        relayUrl: String,
+        listedPrivately: Boolean,
+    ): Result<Unit> {
+        val pubKey = sessionManager.getPublicKey()
+            ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        outboxManager.setGroupPrivate(relayUrl, groupId, listedPrivately)
+        val result = publishJoinedGroupsListWith(pubKey)
+        // A publish the signer refused (it will not encrypt the private section) leaves the
+        // published list as it was, so the local side must go back too.
+        if (result is Result.Error) outboxManager.setGroupPrivate(relayUrl, groupId, !listedPrivately)
+        return result
     }
 
     override suspend fun forgetGroup(groupId: String, relayUrl: String): Result<Unit> {
@@ -4484,7 +4507,37 @@ class NostrRepository(
             signEvent = { sessionManager.signEvent(it) },
             messageHandler = { msg, client -> handleRelayMessage(msg, client) },
             orderOverride = orderOverride,
+            encryptPrivate = { plaintext -> encryptOwnListSection(plaintext) },
         )
+    }
+
+    /**
+     * Read the private section of one of our own NIP-51 lists (self-encrypted to our own key).
+     * Null when the signer can't or won't: the caller then leaves the section untouched.
+     */
+    private suspend fun decryptOwnListSection(ciphertext: String): String? {
+        val pubKey = sessionManager.getPublicKey() ?: return null
+        val signer = ActiveAccountManager.session.value?.signer ?: return null
+        return try {
+            signer.nip44Decrypt(pubKey, ciphertext)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** Write side of [decryptOwnListSection]. NIP-44 only: a list this client rewrites is upgraded. */
+    private suspend fun encryptOwnListSection(plaintext: String): String? {
+        val pubKey = sessionManager.getPublicKey() ?: return null
+        val signer = ActiveAccountManager.session.value?.signer ?: return null
+        return try {
+            signer.nip44Encrypt(pubKey, plaintext)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     override suspend fun reorderGroups(order: List<Pair<String, String>>): Result<Unit> {
@@ -4643,6 +4696,7 @@ class NostrRepository(
                         },
                         messageHandler = { m, c -> enqueueToRelayPipeline(m, c) },
                         isGroupDropped = { groupManager.isLocallyDropped(it) },
+                        decryptPrivate = { ciphertext -> decryptOwnListSection(ciphertext) },
                     )
                 }
                 return
@@ -5319,6 +5373,7 @@ class NostrRepository(
                             },
                             messageHandler = { m, c -> enqueueToRelayPipeline(m, c) },
                             isGroupDropped = { groupManager.isLocallyDropped(it) },
+                            decryptPrivate = { ciphertext -> decryptOwnListSection(ciphertext) },
                         )
                     }
                     return

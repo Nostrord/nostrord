@@ -478,7 +478,8 @@ fun MessageInput(
                 )
                 Spacer(modifier = Modifier.width(Spacing.md))
                 // Filled primary button on the right (web .composer-join-btn): icon + label,
-                // "Request to Join" for closed groups, "Join Now" for open.
+                // "Request to Join" for closed groups, "Join Now" for open. The public/private
+                // choice lives in the confirm dialog this opens, not here.
                 Button(
                     onClick = { onJoinGroup(null) },
                     colors = ButtonDefaults.buttonColors(containerColor = NostrordColors.Primary),

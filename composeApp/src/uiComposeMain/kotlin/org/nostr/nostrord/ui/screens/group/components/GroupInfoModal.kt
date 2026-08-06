@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -67,6 +68,9 @@ fun GroupInfoModal(
     // LocalFrameNavigator does not propagate into the Dialog's composition.
     onOpenRelay: ((String) -> Unit)? = null,
     onLeave: () -> Unit = {},
+    isListedPrivately: Boolean = false,
+    onListedPrivatelyChange: (Boolean) -> Unit = {},
+    privateListSectionOpaque: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     Dialog(
@@ -287,12 +291,32 @@ fun GroupInfoModal(
                             Spacer(modifier = Modifier.height(Spacing.md))
                         }
 
-                        // Leave group: danger row swapped for an inline confirm box (prototype).
                         if (isMember) {
                             Spacer(modifier = Modifier.height(Spacing.lg))
                             HorizontalDivider(color = NostrordColors.Divider, thickness = 1.dp)
                             Spacer(modifier = Modifier.height(Spacing.lg))
 
+                            SectionHead("YOUR LIST")
+                            PrivateOnListRow(
+                                checked = isListedPrivately,
+                                onCheckedChange = onListedPrivatelyChange,
+                            )
+                            if (privateListSectionOpaque) {
+                                Spacer(modifier = Modifier.height(Spacing.sm))
+                                Text(
+                                    text =
+                                    "Part of your private list was written by another app and cannot be read here. " +
+                                        "It is kept untouched.",
+                                    style = NostrordTypography.Caption,
+                                    color = NostrordColors.TextMuted,
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(Spacing.lg))
+                            HorizontalDivider(color = NostrordColors.Divider, thickness = 1.dp)
+                            Spacer(modifier = Modifier.height(Spacing.lg))
+
+                            // Leave group: danger row swapped for an inline confirm box (prototype).
                             var confirmLeave by remember { mutableStateOf(false) }
                             if (confirmLeave) {
                                 Column(
@@ -372,6 +396,52 @@ private fun SectionHead(text: String) {
         color = NostrordColors.TextMuted,
     )
     Spacer(modifier = Modifier.height(Spacing.sm))
+}
+
+/**
+ * Keep this group in the encrypted section of the kind:10009 list. Mirrors the web
+ * `privateOnList` row in `web/modals/GroupInfoModal.kt`.
+ */
+@Composable
+private fun PrivateOnListRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            tint = if (checked) NostrordColors.Primary else NostrordColors.TextMuted,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(Spacing.md))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Private on my list",
+                fontSize = 14.sp,
+                color = NostrordColors.TextPrimary,
+            )
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = "Encrypted, so nobody can see you are in this group. People who follow you stop discovering it.",
+                style = NostrordTypography.Caption,
+                color = NostrordColors.TextMuted,
+            )
+        }
+        Spacer(modifier = Modifier.width(Spacing.md))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors =
+            SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = NostrordColors.Primary,
+                uncheckedThumbColor = NostrordColors.TextMuted,
+                uncheckedTrackColor = NostrordColors.InputBackground,
+            ),
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        )
+    }
 }
 
 /** Prototype InfoBadge: 11sp semibold pill, tone-tinted background when [tinted]. */

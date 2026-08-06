@@ -7,6 +7,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.nostr.nostrord.network.managers.PendingGroupInvite
+import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.nostr.Crypto
 import org.nostr.nostrord.nostr.toHexString
 
@@ -860,6 +861,29 @@ fun SecureStorage.saveKind10009RepublishPendingFor(
 }
 
 fun SecureStorage.isKind10009RepublishPendingFor(pubkey: String): Boolean = getStringPref(kind10009RepublishPendingKey(pubkey), "") == "true"
+
+// ── kind:10009 preserved baseline ────────────────────────────────────────────
+// The `content` (another client's self-encrypted private entries) and the tags this client
+// does not model, from the newest own kind:10009 seen. Persisted so a publish made before
+// the network fetch lands still carries them forward instead of wiping them.
+private fun kind10009BaselineKey(pubkey: String) = "kind10009_baseline_${pubkeyDigest(pubkey)}"
+
+fun SecureStorage.saveKind10009BaselineFor(
+    pubkey: String,
+    baseline: Kind10009Baseline,
+) {
+    saveStringPref(kind10009BaselineKey(pubkey), Json.encodeToString(baseline))
+}
+
+fun SecureStorage.loadKind10009BaselineFor(pubkey: String): Kind10009Baseline {
+    val raw = getStringPref(kind10009BaselineKey(pubkey), "")
+    if (raw.isBlank()) return Kind10009Baseline.EMPTY
+    return try {
+        Json.decodeFromString(raw)
+    } catch (_: Exception) {
+        Kind10009Baseline.EMPTY
+    }
+}
 
 // ── Pending group invites ────────────────────────────────────────────────────
 // External adds (an admin's kind:9000) the user hasn't accepted or declined yet. One JSON

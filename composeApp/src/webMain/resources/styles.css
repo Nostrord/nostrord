@@ -8982,6 +8982,42 @@ body {
     background: var(--color-divider);
 }
 
+/* "Add privately" choice in the join confirm modal: checkbox beside a label and its
+   consequence line. */
+.join-private-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 16px;
+    cursor: pointer;
+}
+
+.join-private-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.join-private-label {
+    font-size: 14px;
+    color: var(--color-text-primary);
+}
+
+.join-private-desc {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
+/* Note under the "Private on my list" toggle when the encrypted section was written by
+   another app: its entries are preserved but cannot be shown here. */
+.info-private-note {
+    margin-top: var(--space-sm);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
 /* Leave group: danger row, swapped for an inline confirm box (prototype). */
 .info-leave-row {
     display: flex;

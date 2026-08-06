@@ -45,6 +45,66 @@ class GroupViewModelTest {
     private fun vm(fake: FakeNostrRepository = FakeNostrRepository()) = GroupViewModel(fake, "test-group")
 
     // -------------------------------------------------------------------------
+    // Private listing (NIP-51 encrypted section of the kind:10009)
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `private listing is scoped to the relay the group is listed under`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._privateGroupEntries.value = setOf("wss://b" to "dev")
+        val onA = GroupViewModel(fake, "dev", "wss://a")
+        val onB = GroupViewModel(fake, "dev", "wss://b")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // The same id listed privately on another relay is a different group.
+        assertFalse(onA.isListedPrivately.value)
+        assertTrue(onB.isListedPrivately.value)
+    }
+
+    @Test
+    fun `toggling private publishes for the relay the group is joined on`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("test-group"))
+        val vm = vm(fake)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setListedPrivately(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(fake.calls.contains("setGroupListedPrivately:test-group:wss://a:true"))
+        assertTrue(vm.isListedPrivately.value)
+    }
+
+    @Test
+    fun `a refused publish leaves the group public`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("test-group"))
+        // The signer will not encrypt the private section, so nothing was published.
+        fake.privateToggleFails = true
+        val vm = vm(fake)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setListedPrivately(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.isListedPrivately.value, "the toggle must not claim a privacy change no relay has")
+    }
+
+    @Test
+    fun `joining privately is decided at the join, not after it`() = runTest {
+        val fake = FakeNostrRepository()
+        val vm = vm(fake)
+
+        vm.joinGroup(listPrivately = true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // One call carrying the choice: a join that published publicly first and flipped after
+        // would leave a public version on the relays forever.
+        assertTrue(fake.calls.contains("joinGroup:test-group:true"))
+        assertFalse(fake.calls.any { it == "setGroupListedPrivately:test-group:wss://relay.example.com:true" })
+    }
+
+    // -------------------------------------------------------------------------
     // Host-relay scoping: the same id on two relays is two independent groups
     // -------------------------------------------------------------------------
 

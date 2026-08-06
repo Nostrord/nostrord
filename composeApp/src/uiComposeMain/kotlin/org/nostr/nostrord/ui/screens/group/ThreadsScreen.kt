@@ -95,6 +95,7 @@ import org.nostr.nostrord.ui.navigation.HashRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
+import org.nostr.nostrord.ui.screens.group.components.JoinGroupConfirmDialog
 import org.nostr.nostrord.ui.screens.group.components.UserProfileModal
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
@@ -197,6 +198,21 @@ fun ThreadsScreen(
     }
 
     var showCompose by remember { mutableStateOf(false) }
+
+    // Same confirm step as the chat screen, so the public/private choice is never skipped
+    // depending on which affordance the user reached the join from.
+    var showJoinConfirm by remember { mutableStateOf(false) }
+    if (showJoinConfirm) {
+        JoinGroupConfirmDialog(
+            groupName = AppModule.nostrRepository.groups.value.firstOrNull { it.id == route.groupId }?.name,
+            isGroupClosed = !groupAccess.isOpen,
+            onConfirm = { listPrivately ->
+                showJoinConfirm = false
+                vm.joinGroup(listPrivately)
+            },
+            onDismiss = { showJoinConfirm = false },
+        )
+    }
     // Message pending delete confirmation (the root or any reply, from the header or the menu).
     var deleteTarget by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
     var reply by remember { mutableStateOf(TextFieldValue("")) }
@@ -432,7 +448,7 @@ fun ThreadsScreen(
                         membership.status == GroupMembership.NONE ->
                             AppButton(
                                 text = if (groupAccess.isOpen) "Join" else "Request to Join",
-                                onClick = { vm.joinGroup() },
+                                onClick = { showJoinConfirm = true },
                                 icon = Icons.Default.PersonAdd,
                                 size = AppButtonSize.Small,
                             )
@@ -619,7 +635,7 @@ fun ThreadsScreen(
             cancelLabel = if (isUnknownMember) "Cancel" else null,
             onConfirm = {
                 vm.clearReactionError()
-                if (isUnknownMember) vm.joinGroup()
+                if (isUnknownMember) showJoinConfirm = true
             },
             onDismiss = { vm.clearReactionError() },
         )

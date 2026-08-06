@@ -31,6 +31,7 @@ import org.nostr.nostrord.ui.components.chat.LocalAnimatedImageHidden
 import org.nostr.nostrord.ui.screens.group.components.GroupInfoModal
 import org.nostr.nostrord.ui.screens.group.components.InviteCode
 import org.nostr.nostrord.ui.screens.group.components.InviteCodesModal
+import org.nostr.nostrord.ui.screens.group.components.JoinGroupConfirmDialog
 import org.nostr.nostrord.ui.screens.group.components.ManageGroupModal
 import org.nostr.nostrord.ui.screens.group.components.ManageTab
 import org.nostr.nostrord.ui.screens.group.components.OrphanedGroupContent
@@ -47,6 +48,9 @@ import org.nostr.nostrord.utils.shortNpub
 // Unit separator — safe field delimiter for encoding GroupInfo into the platform-agnostic
 // String values the shared MessageDraftStore holds. It cannot appear in ids, names or URLs.
 private const val DRAFT_FIELD_SEP = "\u001f"
+
+/** A join awaiting the confirm dialog. [inviteCode] rides along from an invite link. */
+private data class PendingJoin(val inviteCode: String?)
 
 private fun encodeGroupMentions(groupMentions: Map<String, GroupInfo>): Map<String, String> = groupMentions.mapValues { (_, g) ->
     listOf(g.id, g.name, g.picture ?: "", g.relay).joinToString(DRAFT_FIELD_SEP)
@@ -237,6 +241,10 @@ fun GroupScreen(
 
     var autoJoinFired by remember { mutableStateOf(false) }
 
+    // Every join goes through one confirm step, so the public/private choice is offered the same
+    // way from the composer bar, the header button and an invite link. Null = no join pending.
+    var pendingJoin by remember { mutableStateOf<PendingJoin?>(null) }
+
     // Auto-join waits for relay connection before firing
     LaunchedEffect(pendingInviteCode, isConnected) {
         val code = pendingInviteCode ?: return@LaunchedEffect
@@ -244,7 +252,7 @@ fun GroupScreen(
         onInviteCodeConsumed()
         if (!autoJoinFired) {
             autoJoinFired = true
-            vm.joinGroup(code)
+            pendingJoin = PendingJoin(code)
         }
     }
 
@@ -302,6 +310,8 @@ fun GroupScreen(
     // Our own kind:10009 entry for THIS relay (the flat view answers for a same-id group
     // elsewhere): gates Leave and the "Add to my groups" way back in.
     val isJoinedHere by vm.isJoinedHere.collectAsState()
+    val isListedPrivately by vm.isListedPrivately.collectAsState()
+    val privateListSectionOpaque by vm.privateListSectionOpaque.collectAsState()
     val canAddToMyList by vm.canAddToMyList.collectAsState()
     // Participation gate (composer + header Join), same rule as the web canPost: the relay's
     // member list decides. A member missing from our own list keeps writing while the header
@@ -496,6 +506,18 @@ fun GroupScreen(
         }
     }
 
+    pendingJoin?.let { join ->
+        JoinGroupConfirmDialog(
+            groupName = currentGroupMetadata?.name ?: groupName,
+            isGroupClosed = currentGroupMetadata?.isOpen == false,
+            onConfirm = { listPrivately ->
+                pendingJoin = null
+                vm.joinGroup(join.inviteCode, listPrivately)
+            },
+            onDismiss = { pendingJoin = null },
+        )
+    }
+
     // Group info modal
     if (showGroupInfoModal) {
         GroupInfoModal(
@@ -517,6 +539,9 @@ fun GroupScreen(
                 showGroupInfoModal = false
                 vm.leaveGroup { onNavigateHome() }
             },
+            isListedPrivately = isListedPrivately,
+            onListedPrivatelyChange = { vm.setListedPrivately(it) },
+            privateListSectionOpaque = privateListSectionOpaque,
             onDismiss = { showGroupInfoModal = false },
         )
     }
@@ -703,7 +728,7 @@ fun GroupScreen(
             onConfirm = {
                 vm.clearReactionError()
                 // Closed groups surface the invite-code modal elsewhere; only open groups join here.
-                if (isUnknownMember && currentGroupMetadata?.isOpen != false) vm.joinGroup()
+                if (isUnknownMember && currentGroupMetadata?.isOpen != false) pendingJoin = PendingJoin(null)
             },
             onDismiss = { vm.clearReactionError() },
         )
@@ -977,7 +1002,7 @@ fun GroupScreen(
                             },
                         )
                     },
-                    onJoinGroup = { inviteCode -> vm.joinGroup(inviteCode) },
+                    onJoinGroup = { inviteCode -> pendingJoin = PendingJoin(inviteCode) },
                     onLeaveGroup = { showLeaveDialog = true },
                     onShowGroupInfo = { showGroupInfoModal = true },
                     onEditGroup = { showEditGroupModal = true },
@@ -1123,7 +1148,7 @@ fun GroupScreen(
                             },
                         )
                     },
-                    onJoinGroup = { inviteCode -> vm.joinGroup(inviteCode) },
+                    onJoinGroup = { inviteCode -> pendingJoin = PendingJoin(inviteCode) },
                     onLeaveGroup = { showLeaveDialog = true },
                     onShowGroupInfo = { showGroupInfoModal = true },
                     onEditGroup = { showEditGroupModal = true },
