@@ -2784,6 +2784,14 @@ class NostrRepository(
             groupManager.loadRestrictedGroupsFromStorage(pubkey, relays)
         }
         connect(focusedRelay)
+        // This path is the ONLY bootstrap for a login with no local cache: the relay list
+        // arrives with the kind:10009, so the login branch skipped its own
+        // ensureJoinedRelaysConnected (focusedRelay was still blank) and initialize()'s two
+        // call sites never ran either. Without this the whole session holds a single socket,
+        // so every joined group on another relay has no kind:39000 and no chat until the app
+        // is restarted. joinedGroupsByRelay is already populated here: the parser fires
+        // onRelayGroupsUpdated before onRelaysRestored.
+        scope.launch { ensureJoinedRelaysConnected(focusedRelay) }
     }
 
     override suspend fun switchRelay(newRelayUrl: String) {

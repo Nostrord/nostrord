@@ -840,6 +840,10 @@ class OutboxManager(
         }
         _kind10009Relays.value = emptySet()
         _groupTagRelays.value = emptySet()
+        // Per-account, like the relay list above: [restoreGroupOrder] declines to seed over a
+        // non-empty order, so an order surviving the swap would lock the incoming account out
+        // of its own persisted one until its kind:10009 arrived over the network.
+        _groupOrder.value = emptyList()
         kind10009SubId = null
         kind10009Received = false
     }
