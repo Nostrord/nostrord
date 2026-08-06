@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import org.nostr.nostrord.network.livekit.AvMediaBridge
 import org.nostr.nostrord.network.upload.ShareMediaQueue
 import org.nostr.nostrord.nostr.Nip55AndroidBridge
 import org.nostr.nostrord.startup.ExternalLaunchContext
@@ -42,6 +43,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // NIP-55 (Amber) requests round-trip through this activity's result launcher.
         Nip55AndroidBridge.register(this)
+        // Mic / camera grants for NIP-29 AV spaces round-trip through this activity too.
+        AvMediaBridge.register(this)
         handleDeepLink(intent)
         handleShareIntent(intent)
         setContent {

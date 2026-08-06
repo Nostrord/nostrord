@@ -21,6 +21,8 @@ import org.nostr.nostrord.network.NostrGroupClient.NostrMessage
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.ui.components.chat.AvOnlyComposerNote
+import org.nostr.nostrord.ui.components.chat.LiveSpaceSection
 import org.nostr.nostrord.ui.components.chat.LocalAnimatedImageHidden
 import org.nostr.nostrord.ui.components.layout.FrameMenuButton
 import org.nostr.nostrord.ui.components.sidebars.MemberDrawerOverlay
@@ -244,6 +246,9 @@ fun GroupScreenMobile(
                         },
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
+                        // Live NIP-29 AV space (kind:39004); self-hiding when there is no room.
+                        LiveSpaceSection(groupId = groupId)
+
                         Box(
                             modifier =
                             Modifier
@@ -296,33 +301,38 @@ fun GroupScreenMobile(
                             )
                         }
 
-                        MessageInput(
-                            isPendingApproval = isPendingApproval,
-                            pendingRequestedAtSeconds = pendingRequestedAtSeconds,
-                            onCancelJoinRequest = onCancelJoinRequest,
-                            isJoined = isJoined,
-                            isGroupClosed = isClosed,
-                            selectedChannel = selectedChannel,
-                            groupId = groupId,
-                            groupName = groupName,
-                            messageInput = messageInput,
-                            onSendMessage = onSendMessage,
-                            onJoinGroup = onJoinGroup,
-                            groupMembers = groupMembers,
-                            mentions = mentions,
-                            onMentionsChange = onMentionsChange,
-                            availableGroups = availableGroups,
-                            groupMentions = groupMentions,
-                            onGroupMentionsChange = onGroupMentionsChange,
-                            replyingToMessage = replyingToMessage,
-                            replyNonce = replyNonce,
-                            replyingToMetadata = replyingToMessage?.let { userMetadata[it.pubkey] },
-                            userMetadata = userMetadata,
-                            onCancelReply = onCancelReply,
-                            isSending = isSending,
-                            onMediaUploaded = onMediaUploaded,
-                            onOverlayVisibilityChange = onInputOverlayVisibilityChange,
-                        )
+                        // AV-only group: the relay accepts no text events, so there is nothing to compose.
+                        if (groupMetadata?.isAvOnly == true) {
+                            AvOnlyComposerNote()
+                        } else {
+                            MessageInput(
+                                isPendingApproval = isPendingApproval,
+                                pendingRequestedAtSeconds = pendingRequestedAtSeconds,
+                                onCancelJoinRequest = onCancelJoinRequest,
+                                isJoined = isJoined,
+                                isGroupClosed = isClosed,
+                                selectedChannel = selectedChannel,
+                                groupId = groupId,
+                                groupName = groupName,
+                                messageInput = messageInput,
+                                onSendMessage = onSendMessage,
+                                onJoinGroup = onJoinGroup,
+                                groupMembers = groupMembers,
+                                mentions = mentions,
+                                onMentionsChange = onMentionsChange,
+                                availableGroups = availableGroups,
+                                groupMentions = groupMentions,
+                                onGroupMentionsChange = onGroupMentionsChange,
+                                replyingToMessage = replyingToMessage,
+                                replyNonce = replyNonce,
+                                replyingToMetadata = replyingToMessage?.let { userMetadata[it.pubkey] },
+                                userMetadata = userMetadata,
+                                onCancelReply = onCancelReply,
+                                isSending = isSending,
+                                onMediaUploaded = onMediaUploaded,
+                                onOverlayVisibilityChange = onInputOverlayVisibilityChange,
+                            )
+                        }
                     }
                 }
             }

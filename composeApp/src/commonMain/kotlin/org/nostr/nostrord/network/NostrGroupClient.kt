@@ -11,6 +11,7 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
+import org.nostr.nostrord.network.livekit.isHexPubkey
 import org.nostr.nostrord.utils.epochMillis
 
 @Serializable
@@ -34,7 +35,20 @@ data class GroupMetadata(
      * and validated, so a listed child is authoritative.
      */
     val children: List<String> = emptyList(),
+    /** NIP-29 `livekit`: presence-only tag marking a group with a relay-hosted AV room. */
+    val hasLiveKit: Boolean = false,
+    /**
+     * NIP-29 `supported_kinds`: event kinds the group accepts. Null when the tag is absent,
+     * which means every kind is supported. An empty list is an AV-only group: no text chat.
+     */
+    val supportedKinds: List<Int>? = null,
 ) {
+    /** AV-only group: the `supported_kinds` tag is present and lists nothing. */
+    val isAvOnly: Boolean get() = supportedKinds?.isEmpty() == true
+
+    /** Whether [kind] may be published to this group. A missing `supported_kinds` allows all. */
+    fun supportsKind(kind: Int): Boolean = supportedKinds?.contains(kind) ?: true
+
     companion object
 }
 
@@ -77,6 +91,16 @@ data class GroupRoles(
 data class RoleDefinition(
     val name: String,
     val description: String = "",
+)
+
+/**
+ * Live AV participants from a kind 39004 event, published by the relay hosting the LiveKit
+ * room. Zero `participant` tags is a valid state and means the room is empty.
+ */
+@Immutable
+data class LiveKitParticipants(
+    val groupId: String,
+    val participants: List<String>, // lowercase hex pubkeys
 )
 
 @Serializable
@@ -1364,11 +1388,13 @@ class NostrGroupClient(
             )
         }
 
-        // Group metadata + members + admins (kinds 39000, 39001, 39002) for all joined groups.
-        // All three are addressable (replaceable), so the relay always returns the latest
-        // state. No `since` filter — avoids massive backfill traffic on relays with many groups.
-        // Including 39001/39002 here makes member/admin lists arrive reliably via the mux
-        // instead of depending solely on individual per-group requests that can fail silently.
+        // Group metadata + members + admins + live AV participants (kinds 39000, 39001, 39002,
+        // 39004) for all joined groups. All are addressable (replaceable), so the relay always
+        // returns the latest state. No `since` filter — avoids massive backfill traffic on
+        // relays with many groups. Including 39001/39002 here makes member/admin lists arrive
+        // reliably via the mux instead of depending solely on individual per-group requests
+        // that can fail silently. 39004 rides along so a room going live shows up without the
+        // group being open; relays that don't host AV simply never publish it.
         if (metadataGroupIds.isNotEmpty()) {
             send(
                 buildJsonArray {
@@ -1380,6 +1406,7 @@ class NostrGroupClient(
                                 add(39000)
                                 add(39001)
                                 add(39002)
+                                add(39004)
                             }
                             putJsonArray("#d") { metadataGroupIds.forEach { add(it) } }
                         },
@@ -1512,6 +1539,15 @@ class NostrGroupClient(
                 arr[1].jsonPrimitive.content.takeIf { it.isNotBlank() }
             }
 
+            // `["supported_kinds", "9", "11"]` — stringified kinds from index 1 on. The tag being
+            // absent and the tag being empty mean different things (all kinds vs. AV-only), so
+            // the distinction is carried as null vs. emptyList. Non-numeric entries are dropped.
+            val supportedKinds = tags
+                .firstOrNull { it.jsonArray.firstOrNull()?.jsonPrimitive?.content == "supported_kinds" }
+                ?.jsonArray
+                ?.drop(1)
+                ?.mapNotNull { it.jsonPrimitive.content.toIntOrNull() }
+
             GroupMetadata(
                 id = tagMap["d"] ?: "unknown",
                 name = tagMap["name"],
@@ -1523,6 +1559,8 @@ class NostrGroupClient(
                 isHidden = tagNames.contains("hidden"),
                 parent = parent,
                 children = children,
+                hasLiveKit = tagNames.contains("livekit"),
+                supportedKinds = supportedKinds,
             )
         } catch (e: Exception) {
             null
@@ -1630,6 +1668,58 @@ class NostrGroupClient(
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * Parse a kind 39004 (livekit participants) event.
+     * Tags: ["d", groupId], ["participant", "<lowercase hex pubkey>"]
+     *
+     * Only well-formed 64-char lowercase hex keys are kept — the tag feeds avatar lookups and
+     * a malformed entry would render as a permanently unresolvable profile.
+     */
+    fun parseLiveKitParticipants(event: JsonObject): LiveKitParticipants? {
+        return try {
+            if (event["kind"]?.jsonPrimitive?.int != 39004) return null
+
+            val tags = event["tags"]?.jsonArray ?: return null
+
+            val groupId = tags
+                .firstOrNull { it.jsonArray.size >= 2 && it.jsonArray[0].jsonPrimitive.content == "d" }
+                ?.jsonArray?.get(1)?.jsonPrimitive?.content
+                ?: return null
+
+            val participants = tags
+                .filter { it.jsonArray.size >= 2 && it.jsonArray[0].jsonPrimitive.content == "participant" }
+                .map { it.jsonArray[1].jsonPrimitive.content }
+                .filter { isHexPubkey(it) }
+                .distinct()
+
+            LiveKitParticipants(groupId = groupId, participants = participants)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Request live AV participants (kind 39004) for a specific group.
+     *
+     * Same deterministic ID rationale as requestGroupAdmins.
+     */
+    suspend fun requestLiveKitParticipants(groupId: String): String {
+        val subId = "avlive_${groupId.take(8)}"
+        trySendClose(subId)
+        val req = buildJsonArray {
+            add("REQ")
+            add(subId)
+            add(
+                buildJsonObject {
+                    putJsonArray("kinds") { add(39004) }
+                    put("#d", buildJsonArray { add(groupId) })
+                },
+            )
+        }
+        sendJson(req)
+        return subId
     }
 
     /**

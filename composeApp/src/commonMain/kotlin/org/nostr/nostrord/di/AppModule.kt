@@ -652,6 +652,11 @@ object AppModule {
 
     val dmSettings: DmSettings by lazy { DmSettings() }
 
+    /** Holds an open AV room across screen changes; see [org.nostr.nostrord.ui.screens.avspace.AvSpaceHost]. */
+    val avSpaceHost: org.nostr.nostrord.ui.screens.avspace.AvSpaceHost by lazy {
+        org.nostr.nostrord.ui.screens.avspace.AvSpaceHost(nostrRepository)
+    }
+
     val nostrRepository: NostrRepository by lazy {
         NostrRepository(
             connectionManager = connectionManager,

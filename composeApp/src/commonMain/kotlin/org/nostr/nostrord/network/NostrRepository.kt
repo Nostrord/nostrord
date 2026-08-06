@@ -38,6 +38,8 @@ import org.nostr.nostrord.auth.ActiveAccountManager
 import org.nostr.nostrord.auth.NostrSigner
 import org.nostr.nostrord.auth.parseSignedEventJson
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.livekit.LiveKitCredentials
+import org.nostr.nostrord.network.livekit.LiveKitTokenClient
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.ConnectionStats
 import org.nostr.nostrord.network.managers.DmConversation
@@ -1575,6 +1577,9 @@ class NostrRepository(
      * stay dark until an app restart. Single source of truth so the two paths cannot drift.
      */
     private suspend fun resetSessionScopedCaches() {
+        // A live AV room belongs to the account that joined it: it must not survive the swap,
+        // and the microphone least of all.
+        AppModule.avSpaceHost.release()
         lastRequestGroupsAt.clear()
         relaysNeedingResubscribe.clear()
         muxRestrictedRetryJobs.values.forEach { it.cancel() }
@@ -3260,6 +3265,29 @@ class NostrRepository(
         groupManager.requestGroupRoles(groupId)
     }
 
+    override val liveKitParticipants: StateFlow<Map<String, List<String>>> = groupManager.liveKitParticipants
+
+    /** NIP-29 AV spaces. Signs the NIP-98 token request with the active account's signer. */
+    private val liveKitTokenClient = LiveKitTokenClient { url, method -> buildNip98AuthHeader(url, method) }
+
+    override suspend fun requestLiveKitParticipants(groupId: String) {
+        if (connectionManager.getFocusedClient() == null) {
+            connect()
+        }
+        groupManager.requestLiveKitParticipants(groupId)
+    }
+
+    override suspend fun relaySupportsAv(groupId: String): Boolean {
+        val relayUrl = groupManager.getRelayForGroup(groupId) ?: return false
+        return liveKitTokenClient.relaySupportsAv(relayUrl)
+    }
+
+    override suspend fun fetchLiveKitCredentials(groupId: String): Result<LiveKitCredentials> {
+        val relayUrl = groupManager.getRelayForGroup(groupId)
+            ?: return Result.Error(AppError.Network.Disconnected("unknown relay for group $groupId"))
+        return liveKitTokenClient.fetchCredentials(relayUrl, groupId)
+    }
+
     override val childrenByParent: StateFlow<Map<String, Set<String>>> = groupManager.childrenByParent
 
     override suspend fun refreshGroupMetadata(groupId: String) {
@@ -3379,6 +3407,7 @@ class NostrRepository(
         isHidden: Boolean,
         picture: String?,
         parentOp: GroupManager.ParentOp?,
+        hasLiveKit: Boolean?,
     ): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
@@ -3395,6 +3424,7 @@ class NostrRepository(
             currentRelayUrl = connectionManager.currentRelayUrl.value,
             signEvent = { sessionManager.signEvent(it) },
             parentOp = parentOp,
+            hasLiveKit = hasLiveKit,
         )
         if (result is Result.Success) refreshGroupMetadata(groupId)
         return result
@@ -4186,20 +4216,9 @@ class NostrRepository(
      * failure (bunker timeout, extension denial) propagates so the caller can surface
      * the real cause instead of a false "not authenticated".
      */
-    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     suspend fun buildNip98AuthHeader(url: String, method: String): String? {
         val pubKey = sessionManager.getPublicKey() ?: return null
-        val event = org.nostr.nostrord.nostr.Event(
-            pubkey = pubKey,
-            createdAt = org.nostr.nostrord.utils.epochMillis() / 1000,
-            kind = 27235,
-            tags = listOf(listOf("u", url), listOf("method", method)),
-            content = "",
-        )
-        val signed = sessionManager.signEvent(event)
-        val json = signed.toJsonObject().toString()
-        val encoded = kotlin.io.encoding.Base64.encode(json.encodeToByteArray())
-        return "Nostr $encoded"
+        return org.nostr.nostrord.nostr.Nip98.buildAuthHeader(pubKey, url, method) { sessionManager.signEvent(it) }
     }
 
     /**
@@ -5126,6 +5145,17 @@ class NostrRepository(
                         val groupRoles = client.parseGroupRoles(event) ?: return
                         val createdAt = event["created_at"]?.jsonPrimitive?.long ?: 0L
                         groupManager.handleGroupRoles(groupRoles, createdAt, client.getRelayUrl())
+                    }
+
+                    39004 -> {
+                        val live = client.parseLiveKitParticipants(event) ?: return
+                        val createdAt = event["created_at"]?.jsonPrimitive?.long ?: 0L
+                        groupManager.handleLiveKitParticipants(live, createdAt)
+                        // Names and avatars for the room tiles; cached pubkeys are filtered out.
+                        val needMetadata = live.participants.filter { !metadataManager.hasMetadata(it) }
+                        if (needMetadata.isNotEmpty()) {
+                            scope.launch { requestUserMetadata(needMetadata.toSet()) }
+                        }
                     }
 
                     9008 -> {

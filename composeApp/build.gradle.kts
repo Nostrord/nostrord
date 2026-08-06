@@ -91,6 +91,9 @@ kotlin {
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             // Animated GIF support: provides AnimatedImageDecoder (API 28+) and GifDecoder (API < 28)
             implementation("io.coil-kt.coil3:coil-gif:3.3.0")
+            // LiveKit for NIP-29 AV spaces. Android has an official SDK (WebRTC included),
+            // so unlike the desktop target this does not go through livekit-kmp.
+            implementation("io.livekit:livekit-android:2.27.0")
             // Media3 ExoPlayer for video playback (same stack as Amethyst)
             implementation("androidx.media3:media3-exoplayer:1.6.0")
             implementation("androidx.media3:media3-ui:1.6.0")
@@ -174,6 +177,21 @@ kotlin {
             implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-jvm:0.14.0")
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             implementation("org.slf4j:slf4j-nop:2.0.9")
+
+            // LiveKit for NIP-29 AV spaces. The natives are separate artifacts (~25 MB each),
+            // so a packaged installer carries only its own platform; all six are listed here
+            // because a dev build runs on whatever machine is at hand.
+            implementation("io.github.nostrord:livekit-kmp:0.1.0-SNAPSHOT")
+            listOf(
+                "linux-x86-64",
+                "linux-aarch64",
+                "darwin-x86-64",
+                "darwin-aarch64",
+                "win32-x86-64",
+                "win32-aarch64",
+            ).forEach { platform ->
+                implementation("io.github.nostrord:livekit-kmp-natives-$platform:0.1.0-SNAPSHOT")
+            }
             // Inline video player (GStreamer on Linux, MediaFoundation on Win, AVPlayer on Mac)
             implementation("io.github.kdroidfilter:composemediaplayer:0.8.3")
             // JavaFX WebView for YouTube iframe on desktop
@@ -237,6 +255,11 @@ kotlin {
 
             // Pure-JS QR generator for the NIP-46 nostrconnect login (no canvas needed).
             implementation(npm("qrcode-generator", "1.4.4"))
+
+            // WebRTC transport for NIP-29 AV spaces (kind:39004 rooms). The imperative SDK
+            // only — @livekit/components-react would need externals for a whole component
+            // tree, and the room UI is our own React anyway.
+            implementation(npm("livekit-client", "2.17.2"))
 
             // FROST trusted dealer for pomegranate (Login with Google). Hosted on JSR;
             // the npm: alias + the @jsr registry mapping (root build.gradle.kts) resolve it.

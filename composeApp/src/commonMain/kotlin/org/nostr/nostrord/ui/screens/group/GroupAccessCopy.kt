@@ -24,4 +24,12 @@ object GroupAccessCopy {
 
     const val HIDDEN_LABEL = "Hidden"
     const val HIDDEN_DESC = "Hidden from non-members, not discoverable"
+
+    /**
+     * NIP-29 `livekit`. Not an access flag: it adds a relay-hosted audio/video room any member
+     * can join. Only offered when the relay advertises support at `/.well-known/nip29/livekit`.
+     */
+    const val LIVEKIT_LABEL = "Live audio and video"
+    const val LIVEKIT_DESC = "Members can join a voice and video room hosted by the relay"
+    const val LIVEKIT_UNSUPPORTED = "This relay does not host audio or video rooms"
 }

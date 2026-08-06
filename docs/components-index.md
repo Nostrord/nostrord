@@ -19,6 +19,8 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `AppSegmentedTabs` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/forms/AppForms.kt | Segmented pill tabs (web `.tab-strip` + `.tab`): floating container, brand pill on |
 | `AppTextField` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/forms/AppForms.kt | Prototype-styled input (web `.input-group` + `.input`): floating surface, |
 | `AvatarPlaceholder` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/avatars/AvatarPlaceholder.kt | — |
+| `AvOnlyComposerNote` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/AvOnlyComposerNote.kt | Replaces the composer in an AV-only group (`supported_kinds` present and empty): the relay |
+| `AvSpaceRoom` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/LiveSpaceSection.kt | Standalone room entry for callers outside the chat pane (the sidebar's voice row). Shares |
 | `BunkerStatusBanner` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/BunkerStatusBanner.kt | Floating warning shown when the active account signs through a NIP-46 bunker |
 | `ConfirmDialog` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/ConfirmDialog.kt | The single confirm dialog for the native UI (Compose counterpart of the web `confirmDialog` |
 | `DateSeparator` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/DateSeparator.kt | — |
@@ -54,6 +56,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `IdentifierRow` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/IdentifierField.kt | Cycling identifier field (prototype IdentifierField): the swap button rotates |
 | `ImageViewerModal` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ImageViewerModal.kt | — |
 | `InfoCard` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/cards/InfoCard.kt | — |
+| `LiveSpaceSection` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/LiveSpaceSection.kt | Live NIP-29 AV space banner for [groupId], opening the room dialog. |
 | `MemberSidebar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/sidebars/MemberSidebar.kt | Enhanced member sidebar with online/offline status, avatars, role badges, and search. |
 | `MemberSkeleton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/loading/SkeletonLoader.kt | Skeleton loader for member list items. |
 | `MeMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/accounts/MeMenu.kt | Sheet/popup that opens from the user avatar. Lists every signed-in account |
@@ -105,6 +108,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `AddMemberModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AddMemberModal.kt | Add-member modal — real port of the Compose AddMemberModal: a searchable friend picker |
 | `AddRelayModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AddRelayModal.kt | Add-relay modal — layout-first React port of the Compose [AddRelayModal]: a Suggested |
 | `AppLoading` | webMain/kotlin/org/nostr/nostrord/web/components/AppLoading.kt | Full-screen bootstrap / loading screen (brand spinner over a label): the React analogue of the |
+| `AvSpaceModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AvSpaceModal.kt | The live audio/video room for a NIP-29 group (spec: relay-hosted LiveKit, kind 39004). |
 | `BunkerStatusBanner` | webMain/kotlin/org/nostr/nostrord/web/components/BunkerStatusBanner.kt | Floating banner shown when the active account signs through a NIP-46 bunker the |
 | `ChatAudio` | webMain/kotlin/org/nostr/nostrord/web/components/ChatAudio.kt | A chat inline audio clip. Renders the native <audio controls> element, which gives |
 | `ChatImage` | webMain/kotlin/org/nostr/nostrord/web/components/ChatImage.kt | A chat inline image. Opens fullscreen on click. For images that have transparency it samples |
@@ -129,6 +133,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `InviteCodesModal` | webMain/kotlin/org/nostr/nostrord/web/modals/InviteCodesModal.kt | Invite-codes modal — real port of the Compose InviteCodesModal (admin): active codes |
 | `JoinGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinGroupModal.kt | Join-group modal — mirrors the Compose flow (App.kt onJoin): paste an invite link or a NIP-29 |
 | `JoinWithCodeModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinWithCodeModal.kt | Join-with-invite-code modal — web port of the Compose InviteCodeJoinModal |
+| `LiveSpaceBar` | webMain/kotlin/org/nostr/nostrord/web/components/LiveSpaceBar.kt | In-chat banner for a NIP-29 AV space: participant count, a stack of the first few faces and |
 | `ManageGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ManageGroupModal.kt | Unified admin "Manage group" modal (port of the prototype GroupManage): a left tab |
 | `MembersModal` | webMain/kotlin/org/nostr/nostrord/web/modals/MembersModal.kt | Read-only member roster (port of the prototype GroupPanels "Members" panel): avatar + |
 | `PomegranateDisconnectModal` | webMain/kotlin/org/nostr/nostrord/web/modals/PomegranateDisconnectModal.kt | Confirmation for unlinking a Login-with-Google account from its central server. The |

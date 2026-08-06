@@ -1,0 +1,179 @@
+package org.nostr.nostrord.ui.screens.avspace
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.nostr.nostrord.network.FakeNostrRepository
+import org.nostr.nostrord.network.GroupMetadata
+import org.nostr.nostrord.network.livekit.AvConnectionState
+import org.nostr.nostrord.utils.AppError
+import org.nostr.nostrord.utils.Result
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class AvSpaceViewModelTest {
+    private val testDispatcher = StandardTestDispatcher()
+
+    @BeforeTest
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+    }
+
+    @AfterTest
+    fun tearDown() {
+        testDispatcher.scheduler.advanceUntilIdle()
+        Dispatchers.resetMain()
+    }
+
+    private val groupId = "grp"
+    private val me = "a".repeat(64)
+    private val other = "b".repeat(64)
+
+    private fun metadata(hasLiveKit: Boolean, supportedKinds: List<Int>?) = GroupMetadata(
+        id = groupId,
+        name = "Test",
+        about = null,
+        picture = null,
+        isPublic = true,
+        isOpen = true,
+        hasLiveKit = hasLiveKit,
+        supportedKinds = supportedKinds,
+    )
+
+    private fun viewModel(repo: FakeNostrRepository) = AvSpaceViewModel(repo, groupId, me)
+
+    @Test
+    fun `space is offered only when the group carries the livekit tag`() = runTest {
+        val repo = FakeNostrRepository()
+        repo._groups.value = listOf(metadata(hasLiveKit = false, supportedKinds = null))
+        assertFalse(viewModel(repo).hasSpace.value)
+
+        repo._groups.value = listOf(metadata(hasLiveKit = true, supportedKinds = null))
+        assertTrue(viewModel(repo).hasSpace.value)
+    }
+
+    @Test
+    fun `AV-only is empty supported_kinds, not a missing tag`() = runTest {
+        val repo = FakeNostrRepository()
+        repo._groups.value = listOf(metadata(hasLiveKit = true, supportedKinds = null))
+        assertFalse(viewModel(repo).isAvOnly.value)
+
+        repo._groups.value = listOf(metadata(hasLiveKit = true, supportedKinds = listOf(9)))
+        assertFalse(viewModel(repo).isAvOnly.value)
+
+        repo._groups.value = listOf(metadata(hasLiveKit = true, supportedKinds = emptyList()))
+        assertTrue(viewModel(repo).isAvOnly.value)
+    }
+
+    @Test
+    fun `roster comes from kind 39004 and marks the local user`() = runTest {
+        val repo = FakeNostrRepository()
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(other, me))
+        val vm = viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Seated, not in arrival order: the local user leads and the rest follow by pubkey.
+        assertContentEquals(listOf(me, other), vm.participants.value.map { it.pubkey })
+        assertTrue(vm.participants.value.single { it.pubkey == me }.isSelf)
+        assertFalse(vm.participants.value.single { it.pubkey == other }.isSelf)
+    }
+
+    @Test
+    fun `seating does not depend on the order the roster arrives in`() = runTest {
+        val third = "c".repeat(64)
+        val repo = FakeNostrRepository()
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(third, other, me))
+        val vm = viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+        val first = vm.participants.value.map { it.pubkey }
+
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(me, third, other))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertContentEquals(first, vm.participants.value.map { it.pubkey })
+    }
+
+    @Test
+    fun `a listener stays a listener while speaking`() = runTest {
+        val repo = FakeNostrRepository()
+        repo._liveKitParticipants.value = mapOf(groupId to listOf(me, other))
+        val vm = viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Nobody publishes, so the stage is empty however loud the room gets: speaking alone
+        // must never move a person between sections, or the layout reflows as they talk.
+        assertEquals(emptyList(), vm.onStage.value)
+        assertContentEquals(listOf(me, other), vm.listeners.value.map { it.pubkey })
+        assertFalse(vm.hasVideo.value)
+    }
+
+    @Test
+    fun `roster ignores other groups`() = runTest {
+        val repo = FakeNostrRepository()
+        repo._liveKitParticipants.value = mapOf("another" to listOf(other))
+        val vm = viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(emptyList(), vm.participants.value)
+    }
+
+    @Test
+    fun `the roster is requested on open`() = runTest {
+        val repo = FakeNostrRepository()
+        viewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertContentEquals(listOf(groupId), repo.requestedLiveKitParticipants)
+    }
+
+    @Test
+    fun `a second press while the token is being minted is ignored`() = runTest {
+        val repo = FakeNostrRepository()
+        val vm = viewModel(repo)
+
+        // Minting signs a NIP-98 header, which over a bunker waits on a human tapping approve.
+        // Both taps land inside that window, and only one may go through.
+        vm.join()
+        vm.join()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, repo.liveKitCredentialRequests)
+    }
+
+    @Test
+    fun `leaving cancels a join that is still minting its token`() = runTest {
+        val repo = FakeNostrRepository()
+        val vm = viewModel(repo)
+
+        vm.join()
+        vm.leave()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(AvConnectionState.Disconnected, vm.connectionState.value)
+    }
+
+    @Test
+    fun `a token failure surfaces its cause instead of connecting`() = runTest {
+        val repo = FakeNostrRepository()
+        repo.liveKitCredentials = Result.Error(AppError.Unknown("relay refused the token (403)"))
+        val vm = viewModel(repo)
+
+        vm.join()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(AvConnectionState.Disconnected, vm.connectionState.value)
+        assertNotNull(vm.error.value)
+        vm.dismissError()
+        assertEquals(null, vm.error.value)
+    }
+}

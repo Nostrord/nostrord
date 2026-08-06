@@ -10834,3 +10834,444 @@ button.hierarchy-crumb-item:hover {
 .nside-toggle.on .nside-toggle-thumb {
     left: 16px;
 }
+
+/* ---------------------------------------------------------------------------
+   NIP-29 AV spaces: the in-chat live bar and the room overlay.
+   --------------------------------------------------------------------------- */
+
+.live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xxs);
+    flex-shrink: 0;
+    padding: 2px var(--space-xs);
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--color-error) 15%, transparent);
+    color: var(--color-error);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-full);
+    background: var(--color-error);
+    animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+/* Motion-sensitive users get the dot without the pulse. */
+@media (prefers-reduced-motion: reduce) {
+    .live-dot {
+        animation: none;
+    }
+}
+
+.live-space-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    width: 100%;
+    padding: var(--space-sm) var(--space-lg);
+    border: none;
+    border-bottom: 1px solid var(--color-line);
+    background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.live-space-bar:hover {
+    background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.live-space-icon {
+    display: inline-flex;
+    color: var(--color-primary);
+}
+
+.live-space-text {
+    min-width: 0;
+    flex: 1;
+}
+
+.live-space-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.live-space-sub {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.live-space-avatars {
+    display: flex;
+    flex-shrink: 0;
+}
+
+.live-space-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-full);
+    border: 2px solid var(--color-surface);
+    margin-left: -8px;
+}
+
+.live-space-join {
+    flex-shrink: 0;
+    padding: var(--space-xs) var(--space-lg);
+    border-radius: var(--radius-full);
+    background: var(--color-primary);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.chat-av-only-note {
+    padding: var(--space-md) var(--space-lg);
+    border-top: 1px solid var(--color-line);
+    color: var(--color-text-muted);
+    font-size: 13px;
+    text-align: center;
+}
+
+/*
+ * Fixed height on purpose. The roster changes constantly (people join, mute, start talking), and
+ * a content-sized shell resizes under the cursor every time. The body scrolls instead.
+ */
+.av-space-card {
+    display: flex;
+    flex-direction: column;
+    max-width: 640px;
+    width: 100%;
+    height: min(560px, 85vh);
+}
+
+.av-space-header {
+    gap: var(--space-md);
+}
+
+.av-space-error {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-lg);
+    background: color-mix(in srgb, var(--color-error) 12%, transparent);
+    color: var(--color-error);
+    font-size: 13px;
+}
+
+.av-space-error-close {
+    margin-left: auto;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.av-space-audio-unlock {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-lg);
+    background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+    color: var(--color-warning);
+    font-size: 13px;
+}
+
+.av-space-audio-unlock-btn {
+    margin-left: auto;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--color-warning);
+    color: var(--color-background-dark);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.av-space-body {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-lg);
+}
+
+.av-section-empty {
+    margin-bottom: var(--space-xl);
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+.av-section-label {
+    margin-bottom: var(--space-sm);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+/* auto-fit: a handful of tiles grow to fill the row, many wrap at a sane minimum. */
+.av-audio-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    gap: var(--space-md);
+    margin-bottom: var(--space-xl);
+}
+
+.av-audio-grid-small {
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+}
+
+.av-audio-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-xs);
+    text-align: center;
+}
+
+.av-audio-ring {
+    position: relative;
+    border-radius: var(--radius-full);
+}
+
+.av-audio-ring.av-speaking {
+    box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-success);
+}
+
+.av-avatar {
+    width: 60px;
+    height: 60px;
+    border-radius: var(--radius-full);
+}
+
+.av-avatar-small {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-full);
+}
+
+.av-audio-badge {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-full);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+}
+
+.av-audio-badge svg {
+    width: 12px;
+    height: 12px;
+}
+
+.av-audio-name {
+    max-width: 76px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+}
+
+.av-video-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--space-sm);
+}
+
+.av-video-tile {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    background: #000;
+}
+
+.av-video-tile.av-speaking {
+    border-color: var(--color-success);
+}
+
+.av-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.av-video-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background: var(--color-floating);
+}
+
+.av-video-label {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: var(--space-xs) var(--space-sm);
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.av-video-label svg {
+    width: 14px;
+    height: 14px;
+}
+
+/*
+ * Never wraps and never changes height: the bar is the one thing that has to sit still while the
+ * roster churns above it, since Leave lives here.
+ */
+.av-space-controls {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    min-height: 72px;
+    padding: var(--space-md) var(--space-lg);
+    border-top: 1px solid var(--color-line);
+}
+
+.av-space-note {
+    color: var(--color-text-muted);
+    font-size: 13px;
+    text-align: center;
+}
+
+.av-ctrl {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--color-input);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+
+.av-ctrl:hover {
+    background: var(--color-hover);
+}
+
+.av-ctrl.av-ctrl-on {
+    background: var(--color-primary);
+    color: #fff;
+}
+
+.av-join-btn {
+    padding: var(--space-sm) var(--space-xxl);
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--color-primary);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.av-join-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.av-leave-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    margin-left: var(--space-sm);
+    padding: var(--space-sm) var(--space-lg);
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--color-error);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/*
+ * Phone: the room takes the screen, the way WhatsApp and Telegram treat a call in progress. A
+ * live room is the task, not a sheet over one, and the tile grid wants every pixel.
+ */
+@media (max-width: 599px) {
+    .av-space-overlay {
+        padding: 0;
+    }
+
+    .av-space-card {
+        max-width: none;
+        width: 100%;
+        /* dvh, not vh: the mobile URL bar collapsing must not leave the controls off-screen. */
+        height: 100dvh;
+        max-height: 100dvh;
+        border-radius: 0;
+    }
+
+    .av-space-controls {
+        padding-bottom: max(var(--space-md), env(safe-area-inset-bottom));
+    }
+
+    .av-video-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+}
+
+/* Empty room: no LIVE badge, so the bar reads as an invitation rather than an alert. */
+.live-space-bar.live-space-idle {
+    background: var(--color-surface-variant);
+}
+
+.live-space-bar.live-space-idle:hover {
+    background: var(--color-hover);
+}
+
+/* Relay without LiveKit configured: explain instead of showing a dead toggle. */
+.access-unsupported {
+    padding: var(--space-sm) 0;
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+/* Sidebar voice-room row: live participant count with the pulsing dot. */
+.group-side-live-count {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xxs);
+    margin-left: auto;
+    color: var(--color-error);
+    font-size: 11px;
+    font-weight: 700;
+}

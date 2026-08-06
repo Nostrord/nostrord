@@ -24,6 +24,19 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # livekit-kmp (desktop AV) is not on Maven Central yet; the JVM target resolves it
+      # from mavenLocal, so build it first. Pinned to a commit so lib changes can't break
+      # this repo's CI silently — bump the ref together with a tested app change.
+      - name: Checkout livekit-kmp
+        uses: actions/checkout@v5
+        with:
+          repository: nostrord/livekit-kmp
+          ref: 37095f807922b8ecf3d88c8ae931a824a7b8661f
+          path: livekit-kmp
+
+      - name: Publish livekit-kmp to mavenLocal
+        run: cd livekit-kmp && ./gradlew publishToMavenLocal -q
+
       - name: Spotless check
         run: ./gradlew spotlessCheck
 
