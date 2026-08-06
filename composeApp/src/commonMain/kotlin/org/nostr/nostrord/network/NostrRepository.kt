@@ -426,6 +426,8 @@ class NostrRepository(
     override val threadsLoaded: StateFlow<Set<String>> = groupManager.threadsLoaded
     override val joinedGroups: StateFlow<Set<String>> = groupManager.joinedGroups
     override val joinedGroupsByRelay: StateFlow<Map<String, Set<String>>> = groupManager.joinedGroupsByRelay
+    override val privateGroupEntries: StateFlow<Set<Pair<String, String>>> = outboxManager.privateGroupEntries
+    override val privateListSectionOpaque: StateFlow<Boolean> = outboxManager.privateSectionOpaque
     override val loadingRelays: StateFlow<Set<String>> = groupManager.loadingRelays
     private val _restrictedRelays = MutableStateFlow<Map<String, String>>(emptyMap())
     override val restrictedRelays: StateFlow<Map<String, String>> = _restrictedRelays.asStateFlow()
@@ -3183,6 +3185,21 @@ class NostrRepository(
             signEvent = { sessionManager.signEvent(it) },
             publishJoinedGroups = { publishJoinedGroupsList() },
         )
+    }
+
+    override suspend fun setGroupListedPrivately(
+        groupId: String,
+        relayUrl: String,
+        listedPrivately: Boolean,
+    ): Result<Unit> {
+        val pubKey = sessionManager.getPublicKey()
+            ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        outboxManager.setGroupPrivate(relayUrl, groupId, listedPrivately)
+        val result = publishJoinedGroupsListWith(pubKey)
+        // A publish the signer refused (it will not encrypt the private section) leaves the
+        // published list as it was, so the local side must go back too.
+        if (result is Result.Error) outboxManager.setGroupPrivate(relayUrl, groupId, !listedPrivately)
+        return result
     }
 
     override suspend fun forgetGroup(groupId: String, relayUrl: String): Result<Unit> {

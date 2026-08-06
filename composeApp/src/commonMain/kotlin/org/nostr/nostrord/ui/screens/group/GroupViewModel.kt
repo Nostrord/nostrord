@@ -473,6 +473,31 @@ class GroupViewModel(
         }
     }
 
+    /**
+     * Relay this group is listed under: the route's when it carried one, else wherever the joined
+     * list has it. The private/public choice is per (relay, group), like every other list entry.
+     */
+    private val listedRelay: StateFlow<String?> =
+        repo.joinedGroupsByRelay
+            .map { byRelay -> hostRelay ?: byRelay.entries.firstOrNull { groupId in it.value }?.key }
+            .distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, hostRelay)
+
+    /** Is this group kept in the encrypted section of the user's kind:10009 instead of its public tags. */
+    val isListedPrivately: StateFlow<Boolean> =
+        combine(repo.privateGroupEntries, listedRelay) { entries, relay ->
+            relay != null && (relay to groupId) in entries
+        }.distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Part of the list was written by another app and cannot be read here; it is kept untouched. */
+    val privateListSectionOpaque: StateFlow<Boolean> = repo.privateListSectionOpaque
+
+    fun setListedPrivately(listedPrivately: Boolean) {
+        val relay = listedRelay.value ?: return
+        viewModelScope.launch { repo.setGroupListedPrivately(groupId, relay, listedPrivately) }
+    }
+
     fun leaveGroup(onSuccess: () -> Unit) {
         viewModelScope.launch {
             repo.leaveGroup(groupId)

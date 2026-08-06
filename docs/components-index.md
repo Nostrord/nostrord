@@ -20,7 +20,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `AppTextField` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/forms/AppForms.kt | Prototype-styled input (web `.input-group` + `.input`): floating surface, |
 | `AvatarPlaceholder` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/avatars/AvatarPlaceholder.kt | — |
 | `AvOnlyComposerNote` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/AvOnlyComposerNote.kt | Replaces the composer in an AV-only group (`supported_kinds` present and empty): the relay |
-| `AvSpaceRoom` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/LiveSpaceSection.kt | Standalone room entry for callers outside the chat pane (the sidebar's voice row). Shares |
+| `AvSpaceRoomHost` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/LiveSpaceSection.kt | The one place the AV room renders. Mounted once from `App`, like [PomegranateAuthHost]. |
 | `BunkerStatusBanner` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/BunkerStatusBanner.kt | Floating warning shown when the active account signs through a NIP-46 bunker |
 | `ConfirmDialog` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/ConfirmDialog.kt | The single confirm dialog for the native UI (Compose counterpart of the web `confirmDialog` |
 | `DateSeparator` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/DateSeparator.kt | — |
@@ -108,6 +108,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `AddMemberModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AddMemberModal.kt | Add-member modal — real port of the Compose AddMemberModal: a searchable friend picker |
 | `AddRelayModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AddRelayModal.kt | Add-relay modal — layout-first React port of the Compose [AddRelayModal]: a Suggested |
 | `AppLoading` | webMain/kotlin/org/nostr/nostrord/web/components/AppLoading.kt | Full-screen bootstrap / loading screen (brand spinner over a label): the React analogue of the |
+| `AvSpaceModalHost` | webMain/kotlin/org/nostr/nostrord/web/modals/AvSpaceModalHost.kt | The one place the AV room renders. |
 | `AvSpaceModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AvSpaceModal.kt | The live audio/video room for a NIP-29 group (spec: relay-hosted LiveKit, kind 39004). |
 | `BunkerStatusBanner` | webMain/kotlin/org/nostr/nostrord/web/components/BunkerStatusBanner.kt | Floating banner shown when the active account signs through a NIP-46 bunker the |
 | `ChatAudio` | webMain/kotlin/org/nostr/nostrord/web/components/ChatAudio.kt | A chat inline audio clip. Renders the native <audio controls> element, which gives |

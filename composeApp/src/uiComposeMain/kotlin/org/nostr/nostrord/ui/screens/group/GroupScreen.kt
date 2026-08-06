@@ -302,6 +302,8 @@ fun GroupScreen(
     // Our own kind:10009 entry for THIS relay (the flat view answers for a same-id group
     // elsewhere): gates Leave and the "Add to my groups" way back in.
     val isJoinedHere by vm.isJoinedHere.collectAsState()
+    val isListedPrivately by vm.isListedPrivately.collectAsState()
+    val privateListSectionOpaque by vm.privateListSectionOpaque.collectAsState()
     val canAddToMyList by vm.canAddToMyList.collectAsState()
     // Participation gate (composer + header Join), same rule as the web canPost: the relay's
     // member list decides. A member missing from our own list keeps writing while the header
@@ -517,6 +519,9 @@ fun GroupScreen(
                 showGroupInfoModal = false
                 vm.leaveGroup { onNavigateHome() }
             },
+            isListedPrivately = isListedPrivately,
+            onListedPrivatelyChange = { vm.setListedPrivately(it) },
+            privateListSectionOpaque = privateListSectionOpaque,
             onDismiss = { showGroupInfoModal = false },
         )
     }

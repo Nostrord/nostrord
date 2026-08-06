@@ -8982,6 +8982,15 @@ body {
     background: var(--color-divider);
 }
 
+/* Note under the "Private on my list" toggle when the encrypted section was written by
+   another app: its entries are preserved but cannot be shown here. */
+.info-private-note {
+    margin-top: var(--space-sm);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
 /* Leave group: danger row, swapped for an inline confirm box (prototype). */
 .info-leave-row {
     display: flex;

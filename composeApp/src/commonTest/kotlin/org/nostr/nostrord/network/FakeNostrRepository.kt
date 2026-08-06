@@ -109,6 +109,13 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     override val joinedGroups: StateFlow<Set<String>> = _joinedGroups
     override val joinedGroupsByRelay: StateFlow<Map<String, Set<String>>> = _joinedGroupsByRelay
+    val _privateGroupEntries = MutableStateFlow<Set<Pair<String, String>>>(emptySet())
+    override val privateGroupEntries: StateFlow<Set<Pair<String, String>>> = _privateGroupEntries
+    val _privateListSectionOpaque = MutableStateFlow(false)
+    override val privateListSectionOpaque: StateFlow<Boolean> = _privateListSectionOpaque
+
+    /** Set to fail the next [setGroupListedPrivately], as a signer refusing to encrypt would. */
+    var privateToggleFails: Boolean = false
     override val isLoadingMore: StateFlow<Map<String, Boolean>> = _isLoadingMore
     override val hasMoreMessages: StateFlow<Map<String, Boolean>> = _hasMoreMessages
     val _groupStates =
@@ -324,6 +331,19 @@ class FakeNostrRepository : NostrRepositoryApi {
         groupId: String,
         reason: String?,
     ): Result<Unit> = leaveGroupAction(groupId, reason)
+
+    override suspend fun setGroupListedPrivately(
+        groupId: String,
+        relayUrl: String,
+        listedPrivately: Boolean,
+    ): Result<Unit> {
+        calls += "setGroupListedPrivately:$groupId:$relayUrl:$listedPrivately"
+        if (privateToggleFails) return Result.Error(org.nostr.nostrord.utils.AppError.Unknown("refused", null))
+        val entry = relayUrl to groupId
+        _privateGroupEntries.value =
+            if (listedPrivately) _privateGroupEntries.value + entry else _privateGroupEntries.value - entry
+        return Result.Success(Unit)
+    }
 
     override suspend fun forgetGroup(
         groupId: String,

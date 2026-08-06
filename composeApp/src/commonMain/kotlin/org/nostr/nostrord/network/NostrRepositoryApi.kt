@@ -69,6 +69,18 @@ interface NostrRepositoryApi {
     val threadsLoaded: StateFlow<Set<String>>
     val joinedGroups: StateFlow<Set<String>>
     val joinedGroupsByRelay: StateFlow<Map<String, Set<String>>>
+
+    /**
+     * (relayUrl, groupId) the user keeps in the encrypted section of their kind:10009 instead of
+     * its public tags. Private groups still work exactly the same; they are just not advertised.
+     */
+    val privateGroupEntries: StateFlow<Set<Pair<String, String>>>
+
+    /**
+     * The kind:10009 has an encrypted section this client cannot read (another app's encryption,
+     * or a signer that won't decrypt). Its entries are preserved untouched on every publish.
+     */
+    val privateListSectionOpaque: StateFlow<Boolean>
     val loadingRelays: StateFlow<Set<String>>
 
     /** Relays (in LAZY mode) whose full group list has been fetched this session. */
@@ -418,6 +430,17 @@ interface NostrRepositoryApi {
     suspend fun leaveGroup(
         groupId: String,
         reason: String? = null,
+    ): Result<Unit>
+
+    /**
+     * Move a joined group between the public tags and the encrypted section of the kind:10009,
+     * republishing the list. Errors leave the previous state in place, so the toggle never claims
+     * a change no relay has.
+     */
+    suspend fun setGroupListedPrivately(
+        groupId: String,
+        relayUrl: String,
+        listedPrivately: Boolean,
     ): Result<Unit>
 
     /**

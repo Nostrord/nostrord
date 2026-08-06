@@ -62,6 +62,8 @@ val GroupInfoModal =
         // confirmed. Gating on "can post" would hide the only exit from a broken relay; matching
         // the id across all relays offered Leave for a same-id group joined somewhere else.
         val isJoined = useStateFlow(vm.isJoinedHere)
+        val isListedPrivately = useStateFlow(vm.isListedPrivately)
+        val privateSectionOpaque = useStateFlow(vm.privateListSectionOpaque)
         val focusedRelay = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
         val relayUrl = props.relayUrl ?: focusedRelay
         val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)
@@ -208,6 +210,29 @@ val GroupInfoModal =
                     }
 
                     if (isJoined) {
+                        div { className = ClassName("info-divider") }
+                        div {
+                            className = ClassName("settings-section-head")
+                            +"YOUR LIST"
+                        }
+                        accessToggle(
+                            ic = Ic.Lock,
+                            label = "Private on my list",
+                            description =
+                            "Encrypted, so nobody can see you are in this group. " +
+                                "People who follow you stop discovering it.",
+                            checked = isListedPrivately,
+                            onToggle = { vm.setListedPrivately(!isListedPrivately) },
+                        )
+                        if (privateSectionOpaque) {
+                            div {
+                                className = ClassName("info-private-note")
+                                +(
+                                    "Part of your private list was written by another app and cannot be read here. " +
+                                        "It is kept untouched."
+                                    )
+                            }
+                        }
                         div { className = ClassName("info-divider") }
                         if (confirmLeave) {
                             div {
