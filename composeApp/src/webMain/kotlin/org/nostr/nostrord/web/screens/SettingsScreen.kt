@@ -3,6 +3,9 @@ package org.nostr.nostrord.web.screens
 import org.nostr.nostrord.auth.AuthMethod
 import org.nostr.nostrord.auth.logoutConfirmBody
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.managers.DmArchiveManager
+import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
 import org.nostr.nostrord.network.upload.MediaUploadService
@@ -20,6 +23,7 @@ import org.nostr.nostrord.ui.screens.backup.BackupViewModel
 import org.nostr.nostrord.ui.screens.backup.MIN_BACKUP_PASSWORD
 import org.nostr.nostrord.ui.screens.backup.backupSecurityTips
 import org.nostr.nostrord.ui.screens.profile.EditProfileViewModel
+import org.nostr.nostrord.ui.screens.settings.DmEncryptionViewModel
 import org.nostr.nostrord.ui.screens.settings.DmRelaySettingsViewModel
 import org.nostr.nostrord.ui.screens.settings.MutedGroupsViewModel
 import org.nostr.nostrord.ui.screens.settings.MutedUsersViewModel
@@ -54,6 +58,7 @@ import web.cssom.ClassName
 import web.html.InputType
 import web.html.checkbox
 import web.html.password
+import web.html.text
 
 external interface SettingsScreenProps : Props {
     var onClose: () -> Unit
@@ -684,6 +689,10 @@ private val DmRelaysPanel =
             ) { dm.setDmEnabled(!dmEnabled) }
         }
 
+        if (dmEnabled) {
+            DmEncryptionPanel()
+        }
+
         // Relay editor only matters while DMs are on; hidden with the rest of the feature when off.
         if (dmEnabled) {
             div {
@@ -1266,6 +1275,235 @@ private val BlossomServerList =
             }
         }
     }
+
+// ── NIP-4e fast decryption key ───────────────────────────────────────────────
+
+private val DmEncryptionPanel =
+    FC<Props> {
+        val vm = useViewModel { DmEncryptionViewModel(AppModule.nostrRepository) }
+        val state = useStateFlow(vm.state)
+        val busy = useStateFlow(vm.busy)
+        val error = useStateFlow(vm.error)
+        val revealedKey = useStateFlow(vm.revealedKey)
+        val importInput = useStateFlow(vm.importInput)
+        val archiveProgress = useStateFlow(vm.archiveProgress)
+        val archiveConfirmOpen = useStateFlow(vm.archiveConfirmOpen)
+        val archivableCount = useStateFlow(vm.archivableCount)
+        val pairingState = useStateFlow(vm.pairingState)
+
+        // Nothing to offload when signing is already local.
+        if (state !is DmEncryptionManager.State.Unavailable) {
+            div {
+                className = ClassName("settings-card")
+                div {
+                    className = ClassName("settings-section-head")
+                    +"FAST DECRYPTION KEY"
+                }
+                div {
+                    className = ClassName("settings-tip")
+                    +(
+                        "Creates a separate encryption key stored on this device. New messages decrypt " +
+                            "instantly without contacting your signer."
+                        )
+                }
+
+                when (state) {
+                    is DmEncryptionManager.State.AnnouncedElsewhere -> {
+                        div {
+                            className = ClassName("settings-status-line")
+                            +(
+                                "This account already announced an encryption key from another device. " +
+                                    "Ask that device to send it, or paste it here from its Show key screen."
+                                )
+                        }
+                        when (pairingState) {
+                            is DmPairingManager.State.Requesting ->
+                                div {
+                                    className = ClassName("settings-status-line")
+                                    +"Waiting for your other device. Approve the request showing code ${pairingState.code} there."
+                                }
+                            is DmPairingManager.State.Failed ->
+                                div {
+                                    className = ClassName("settings-error")
+                                    +pairingState.reason
+                                }
+                            else ->
+                                button {
+                                    className = ClassName("settings-outline-btn")
+                                    onClick = { vm.requestKeyFromOtherDevice() }
+                                    +"Ask my other device"
+                                }
+                        }
+                        input {
+                            className = ClassName("modal-input")
+                            type = InputType.text
+                            value = importInput
+                            placeholder = "Encryption key"
+                            onChange = { vm.setImportInput(it.target.value) }
+                        }
+                        button {
+                            className = ClassName("settings-outline-btn")
+                            disabled = importInput.isBlank()
+                            onClick = { vm.importKey() }
+                            +"Import key"
+                        }
+                    }
+                    is DmEncryptionManager.State.Active -> {
+                        div {
+                            className = ClassName("settings-status-line")
+                            +"Active. Senders are addressing ${state.encPubkey.take(12)}…"
+                        }
+                        // Another device of this account is asking for the key. The code comes from
+                        // the request itself, so matching it proves which device asked.
+                        (pairingState as? DmPairingManager.State.IncomingRequest)?.let { request ->
+                            div {
+                                className = ClassName("settings-tip")
+                                +"Another device wants this key. Approve only if it is showing code ${request.code}."
+                            }
+                            button {
+                                className = ClassName("settings-outline-btn")
+                                onClick = { vm.declinePairing() }
+                                +"Decline"
+                            }
+                            button {
+                                className = ClassName("settings-outline-btn")
+                                onClick = { vm.approvePairing() }
+                                +"Send key"
+                            }
+                        }
+                        revealedKey?.let {
+                            div {
+                                className = ClassName("settings-status-line")
+                                +it
+                            }
+                        }
+                        button {
+                            className = ClassName("settings-outline-btn")
+                            onClick = { if (revealedKey == null) vm.revealKey() else vm.hideKey() }
+                            +(if (revealedKey == null) "Show key" else "Hide key")
+                        }
+                        button {
+                            className = ClassName("settings-outline-btn")
+                            disabled = busy
+                            onClick = { vm.rotate() }
+                            +"Replace key"
+                        }
+                        button {
+                            className = ClassName("settings-outline-btn")
+                            disabled = busy
+                            onClick = { vm.disable() }
+                            +(if (busy) "Working…" else "Turn off")
+                        }
+                        div {
+                            className = ClassName("settings-tip")
+                            +(
+                                "Replace the key if this device may have been compromised. Contacts start " +
+                                    "using the new one as they see it; the old key stays here so everything " +
+                                    "sent to it keeps opening."
+                                )
+                        }
+                        div {
+                            className = ClassName("settings-tip")
+                            +(
+                                "Turning this off sends new messages back to your signer key. The key stays " +
+                                    "saved on this device because messages already sent to it can only ever " +
+                                    "be opened with it. It is never deleted, only no longer advertised."
+                                )
+                        }
+                        dmArchiveSection(vm, archiveProgress, archiveConfirmOpen, archivableCount)
+                    }
+                    else -> {
+                        if (state is DmEncryptionManager.State.HeldNotAnnounced) {
+                            div {
+                                className = ClassName("settings-status-line")
+                                +"A key from an earlier session is still saved here. Turning this on advertises it again."
+                            }
+                        }
+                        button {
+                            className = ClassName("settings-outline-btn")
+                            disabled = busy
+                            onClick = { vm.enable() }
+                            +(if (busy) "Publishing…" else "Turn on")
+                        }
+                    }
+                }
+
+                error?.let {
+                    div {
+                        className = ClassName("settings-error")
+                        +it
+                    }
+                }
+            }
+        }
+    }
+
+/**
+ * Self-archive controls. Values are passed in rather than read here: this renders inside a
+ * conditional branch, so it must not call hooks.
+ */
+private fun react.ChildrenBuilder.dmArchiveSection(
+    vm: DmEncryptionViewModel,
+    progress: DmArchiveManager.Progress,
+    confirmOpen: Boolean,
+    count: Int?,
+) {
+    when {
+        progress.running -> {
+            div {
+                className = ClassName("settings-status-line")
+                +"Archiving ${progress.done} of ${progress.total}…"
+            }
+            button {
+                className = ClassName("settings-outline-btn")
+                onClick = { vm.cancelArchive() }
+                +"Stop"
+            }
+        }
+        confirmOpen -> {
+            div {
+                className = ClassName("settings-tip")
+                +(
+                    "This publishes ${count ?: 0} wrapped copies of your message history to your DM " +
+                        "relays, encrypted to your fast decryption key. New devices holding this key can " +
+                        "then load your history without contacting your signer. Publishing takes a few " +
+                        "minutes and reveals to your DM relays roughly how many messages you have."
+                    )
+            }
+            button {
+                className = ClassName("settings-outline-btn")
+                onClick = { vm.dismissArchiveConfirm() }
+                +"Cancel"
+            }
+            button {
+                className = ClassName("settings-outline-btn")
+                disabled = (count ?: 0) <= 0
+                onClick = { vm.confirmArchive() }
+                +"Publish archive"
+            }
+        }
+        else -> {
+            // Reported here rather than through the VM error: the run outlives this screen.
+            progress.error?.let {
+                div {
+                    className = ClassName("settings-error")
+                    +it
+                }
+            }
+            if (progress.done > 0 && progress.error == null) {
+                div {
+                    className = ClassName("settings-status-line")
+                    +"Archived ${progress.done} of ${progress.total}."
+                }
+            }
+            button {
+                className = ClassName("settings-outline-btn")
+                onClick = { vm.askToArchive() }
+                +"Archive history to this key"
+            }
+        }
+    }
+}
 
 // ── Security ─────────────────────────────────────────────────────────────────
 

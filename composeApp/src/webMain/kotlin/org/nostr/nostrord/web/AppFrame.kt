@@ -11,6 +11,8 @@ import org.nostr.nostrord.auth.signerLabel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.storage.SecureStorage
+import org.nostr.nostrord.storage.hasNip4eKeyFor
 import org.nostr.nostrord.ui.navigation.DmRoute
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
@@ -997,6 +999,7 @@ val AppFrame =
                         accountLabel = signOutLabel,
                         fallbackLabel = fallbackLabel,
                         method = active.authMethod,
+                        holdsDmEncryptionKey = SecureStorage.hasNip4eKeyFor(active.pubkey),
                     ),
                     confirmLabel =
                     if (logoutBusy) removeAccountBusyLabel(isActive = true) else removeAccountConfirmLabel(isActive = true),

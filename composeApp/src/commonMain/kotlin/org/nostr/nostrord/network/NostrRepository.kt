@@ -42,10 +42,14 @@ import org.nostr.nostrord.network.livekit.LiveKitCredentials
 import org.nostr.nostrord.network.livekit.LiveKitTokenClient
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.ConnectionStats
+import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
+import org.nostr.nostrord.network.managers.DmEncryptionManager
 import org.nostr.nostrord.network.managers.DmManager
 import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.network.managers.LegacySealVerifier
 import org.nostr.nostrord.network.managers.LiveCursorStore
 import org.nostr.nostrord.network.managers.MetadataManager
 import org.nostr.nostrord.network.managers.OutboxManager
@@ -58,9 +62,11 @@ import org.nostr.nostrord.network.managers.UnreadManager
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.nostr.Event
+import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip44
 import org.nostr.nostrord.nostr.Nip4e
 import org.nostr.nostrord.nostr.Nip78
 import org.nostr.nostrord.settings.NotificationLevel
@@ -73,6 +79,7 @@ import org.nostr.nostrord.storage.getLastActiveAt
 import org.nostr.nostrord.storage.isDmCacheMigratedFor
 import org.nostr.nostrord.storage.isGroupFetchLazy
 import org.nostr.nostrord.storage.isKind10009RepublishPendingFor
+import org.nostr.nostrord.storage.loadDmArchivedRumorIdsFor
 import org.nostr.nostrord.storage.loadDmEncKeys
 import org.nostr.nostrord.storage.loadDmLastRead
 import org.nostr.nostrord.storage.loadDmMessages
@@ -87,6 +94,7 @@ import org.nostr.nostrord.storage.loadKind30078TimestampFor
 import org.nostr.nostrord.storage.loadMuteListSnapshotFor
 import org.nostr.nostrord.storage.loadRelayListFor
 import org.nostr.nostrord.storage.saveCurrentRelayUrlFor
+import org.nostr.nostrord.storage.saveDmArchivedRumorIdsFor
 import org.nostr.nostrord.storage.saveDmEncKeys
 import org.nostr.nostrord.storage.saveDmLastRead
 import org.nostr.nostrord.storage.saveDmProcessedWrapIds
@@ -101,6 +109,7 @@ import org.nostr.nostrord.storage.saveKind30078TimestampFor
 import org.nostr.nostrord.storage.saveMuteListSnapshotFor
 import org.nostr.nostrord.storage.saveRelayListFor
 import org.nostr.nostrord.storage.setDmCacheMigratedFor
+import org.nostr.nostrord.ui.screens.dm.eventJson
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
@@ -245,6 +254,16 @@ class NostrRepository(
     // quiet gaps), wasting the work and stalling progress. 90s rides out a quiet gap while still
     // freeing the permit for the periodic retry when the signer is genuinely gone.
     private val DM_DECRYPT_TIMEOUT_MS = 90_000L
+
+    // How long to wait for a peer's kind:10044 after asking for it, when authenticating a NIP-4e
+    // legacy seal. Short: on a miss the wrap stays unhandled and the pipeline retries it later.
+    private val DM_ENC_KEY_FETCH_WAIT_MS = 3_000L
+
+    // Publish the legacy (encryption-key-signed) copy alongside the modern one, mirroring Jumble's
+    // migration. It is the only shape Coop and pre-migration builds read, it is signed locally so
+    // it costs no signer time, and the modern copy stays the delivery-tracked primary. Flip off
+    // once the deployed clients have dropped their legacy readers.
+    private val NIP4E_DUAL_SEND = true
 
     // Per-relay budget for a background event publish (connect + send). Bounds a dead socket so it
     // can't leak the publish job; delivery is best-effort and swallows failures anyway.
@@ -1215,6 +1234,16 @@ class NostrRepository(
             }
         }
 
+        // NIP-4e keys follow the session, not the DM inbox: whether the account signs remotely is
+        // only knowable once its signer is installed, which can land after the inbox opens.
+        scope.launch {
+            ActiveAccountManager.session.collect { session ->
+                dmPairingManager.clear()
+                pendingPairingRequestId = null
+                if (session == null) dmEncryptionManager.clear() else dmEncryptionManager.loadFor(session.pubkey, session.signer.isRemote)
+            }
+        }
+
         // Auto-forget confirmed orphan pins. A joined group still missing its kind:39000
         // after the hosting relay finished its group list (EOSE) was deleted, or was filed
         // under the wrong relay — it can never resolve, shows as a broken "No description"
@@ -1914,6 +1943,39 @@ class NostrRepository(
 
     private val dmManager = DmManager(scope, mutedPubkeys)
 
+    private val dmEncryptionManager = DmEncryptionManager()
+
+    private val dmArchiveManager = DmArchiveManager()
+
+    private val dmPairingManager = DmPairingManager()
+
+    /** Our own outstanding kind:4454, deleted once a device answers it. */
+    private var pendingPairingRequestId: String? = null
+
+    override val dmPairingState: StateFlow<DmPairingManager.State> = dmPairingManager.state
+
+    override val dmArchiveProgress: StateFlow<DmArchiveManager.Progress> = dmArchiveManager.progress
+
+    override val dmEncryptionState: StateFlow<DmEncryptionManager.State> = dmEncryptionManager.state
+
+    /**
+     * Decryptors for inbound wraps, held NIP-4e keys first: they fail in microseconds on a bad
+     * HMAC, so trying them costs nothing when the wrap is not ours, and it removes the signer from
+     * the read path entirely when it is.
+     */
+    private fun dmDecryptors(signer: NostrSigner): List<Nip17.Nip44Decryptor> = dmEncryptionManager.heldKeys().map { kp ->
+        Nip17.Nip44Decryptor { peer, ciphertext -> Nip44.decrypt(ciphertext, kp.privateKeyHex, peer) }
+    } + Nip17.Nip44Decryptor { peer, ciphertext -> signer.nip44Decrypt(peer, ciphertext) }
+
+    private val legacySealVerifier =
+        LegacySealVerifier(
+            fetchWaitMs = DM_ENC_KEY_FETCH_WAIT_MS,
+            announcedKeyFor = { author -> dmManager.encryptionKeyFor(author) },
+            requestAnnouncement = { author -> fetchDmRelays(author) },
+        )
+
+    private suspend fun verifyLegacyDmSender(authorPubkey: String, sealPubkey: String): Boolean = legacySealVerifier.verify(authorPubkey, sealPubkey)
+
     /** Conversations (most-recent first), derived from decrypted NIP-17 messages. */
     override val dmConversations: StateFlow<List<DmConversation>> get() = dmManager.conversations
 
@@ -1973,19 +2035,46 @@ class NostrRepository(
         return try {
             val rumor = Nip17.buildRumor(myPub, recipientPubkey, content)
             // NIP-4e: a recipient who announced an encryption key gets both NIP-44 layers addressed
-            // to it, tagged with the key they must ECDH the seal against. We hold no encryption key
-            // of our own yet, so that key is our identity pubkey, which is what makes this readable
-            // and verified by adopters without us publishing any state.
+            // to it, tagged with the key they must ECDH the seal against. Until we hold an
+            // encryption key of our own that key is our identity pubkey, which is what makes this
+            // readable by adopters without us publishing any state yet.
             val recipientEncKey = dmManager.encryptionKeyFor(recipientPubkey)
+            // Our own encryption key, when we hold one AND it is the announced one. It makes both
+            // seals a local NIP-44 op, so a send costs two signatures instead of two signatures
+            // plus two remote encrypts.
+            val myEncKey =
+                (dmEncryptionManager.state.value as? DmEncryptionManager.State.Active)
+                    ?.let { dmEncryptionManager.heldKeys().firstOrNull() }
             val recipientWrap =
                 if (recipientEncKey != null) {
-                    Nip17.wrap(rumor, recipientPubkey, signer, encryptTo = recipientEncKey, senderEncTag = myPub)
+                    Nip17.wrap(
+                        rumor,
+                        recipientPubkey,
+                        signer,
+                        encryptTo = recipientEncKey,
+                        // Until we hold a key of our own, our encryption key IS our identity key,
+                        // which is what makes this readable and verified without announcing state.
+                        senderEncTag = myEncKey?.publicKeyHex ?: myPub,
+                        encryptWith = myEncKey?.privateKeyHex,
+                    )
                 } else {
                     Nip17.wrap(rumor, recipientPubkey, signer)
                 }
-            // The self-copy stays identity-addressed: our own inbox path is unchanged and other
-            // devices on this account read it exactly as before.
-            val selfWrap = Nip17.wrap(rumor, myPub, signer)
+            // Self-copy: addressed to our encryption key once we hold one, so our other devices
+            // read it without the signer too; identity-addressed otherwise, exactly as before.
+            val selfWrap =
+                if (myEncKey != null) {
+                    Nip17.wrap(
+                        rumor,
+                        myPub,
+                        signer,
+                        encryptTo = myEncKey.publicKeyHex,
+                        senderEncTag = myEncKey.publicKeyHex,
+                        encryptWith = myEncKey.privateKeyHex,
+                    )
+                } else {
+                    Nip17.wrap(rumor, myPub, signer)
+                }
             dmManager.addOptimistic(rumor, recipientPubkey, myPub)
             val rumorId = rumor.id ?: return Result.Error(AppError.Unknown("Failed to build the message"))
             // Enqueue both wraps (recipient + self-copy) in the persisted send queue, then publish.
@@ -2000,6 +2089,35 @@ class NostrRepository(
                     PendingDmWrap(rumorId, selfWrap.id ?: "", selfWrap.toJsonObject().toString(), dmRelaysWithDefaults(myPub), now),
                 ),
             )
+            if (NIP4E_DUAL_SEND && myEncKey != null && recipientEncKey != null) {
+                // Best-effort copies in the encryption-key-signed shape, the only one deployed
+                // readers that predate the identity-signed seal accept. Both are signed locally,
+                // and the modern wraps above remain the delivery-tracked primaries, so a failure
+                // here never affects the message's state.
+                scope.launch {
+                    try {
+                        publishEventToRelays(
+                            dmRelaysWithDefaults(recipientPubkey),
+                            Nip17.giftWrap(
+                                Nip17.legacySeal(rumor, myEncKey.privateKeyHex, recipientEncKey),
+                                recipientPubkey,
+                                encryptTo = recipientEncKey,
+                            ),
+                        )
+                        publishEventToRelays(
+                            dmRelaysWithDefaults(myPub),
+                            Nip17.giftWrap(
+                                Nip17.legacySeal(rumor, myEncKey.privateKeyHex, myEncKey.publicKeyHex),
+                                myPub,
+                                encryptTo = myEncKey.publicKeyHex,
+                            ),
+                        )
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
             Result.Success(Unit)
         } catch (e: NostrSigner.SigningException) {
             Result.Error(AppError.Unknown("Your signer could not encrypt this message (NIP-44). It may not support direct messages."))
@@ -2007,6 +2125,290 @@ class NostrRepository(
             Result.Error(AppError.Unknown(e.message ?: "Failed to send the message"))
         }
     }
+
+    /**
+     * Announce a NIP-4e encryption key so senders address it and inbound DMs decrypt in-process.
+     * Reuses the held key when there is one, so re-enabling does not strand history behind a key
+     * nobody is told about any more.
+     */
+    override suspend fun enableDmEncryption(): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val state = dmEncryptionManager.state.value
+        if (state is DmEncryptionManager.State.AnnouncedElsewhere) {
+            return Result.Error(
+                AppError.Unknown("This account already announced an encryption key from another device. Import that key here first."),
+            )
+        }
+        val encPubkey = dmEncryptionManager.currentEncPubkeyOrNull() ?: dmEncryptionManager.generateKey()
+        return publishEncryptionAnnouncement(signer, myPub, encPubkey).also {
+            if (it is Result.Success) dmEncryptionManager.setAnnounced(true)
+        }
+    }
+
+    /**
+     * Replace the advertised key with a fresh one. The previous key stays held and keeps being
+     * tried on receive, both for its own history and for contacts who have not re-read our
+     * announcement yet and are still addressing it.
+     */
+    override suspend fun rotateDmEncryptionKey(): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        if (dmEncryptionManager.state.value !is DmEncryptionManager.State.Active) {
+            return Result.Error(AppError.Unknown("Turn on the fast decryption key first."))
+        }
+        val fresh = dmEncryptionManager.generateKey()
+        return publishEncryptionAnnouncement(signer, myPub, fresh).also {
+            if (it is Result.Success) dmEncryptionManager.setAnnounced(true)
+        }
+    }
+
+    /**
+     * Stop advertising our encryption key. The key itself is kept: messages already addressed to
+     * it can only ever be opened with it, so deleting it would destroy that history.
+     */
+    override suspend fun disableDmEncryption(): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        return publishEncryptionAnnouncement(signer, myPub, null).also {
+            if (it is Result.Success) dmEncryptionManager.setAnnounced(false)
+        }
+    }
+
+    private suspend fun publishEncryptionAnnouncement(signer: NostrSigner, myPub: String, encPubkey: String?): Result<Unit> = try {
+        val signed = signer.signEvent(Nip4e.buildAnnouncement(myPub, encPubkey, epochSeconds()))
+        // Same relay set as the DM relay list: senders look for both on our outbox, and our
+        // own DM relays are where another device of ours will read it.
+        val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays + dmRelaysWithDefaults(myPub)).distinct()
+        publishEventToRelays(targets, signed)
+        Result.Success(Unit)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Result.Error(AppError.Unknown(e.message ?: "Failed to publish the encryption key announcement"))
+    }
+
+    /**
+     * Rumors still missing an archive copy. Messages newer than the announcement are already
+     * addressed to the encryption key by the sender (inbound) or by our own send path (outbound).
+     */
+    private suspend fun pendingArchiveRumors(myPub: String): List<Event> {
+        val cached =
+            try {
+                cacheStore.loadByKind(myPub, DM_CACHE_KIND)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return emptyList()
+            }
+        val rumors =
+            cached.mapNotNull { row ->
+                Nip17.parseRumor(row.toDmMessage(myPub).eventJson())
+            }
+        return dmArchiveManager.pending(rumors, dmEncryptionManager.announcedAt())
+    }
+
+    override suspend fun countDmArchivableMessages(): Int {
+        val myPub = sessionManager.getPublicKey() ?: return 0
+        if (dmEncryptionManager.state.value !is DmEncryptionManager.State.Active) return 0
+        return pendingArchiveRumors(myPub).size
+    }
+
+    /**
+     * Republish decrypted history to ourselves, addressed to our encryption key, so a new device
+     * holding that key loads it without the signer. One signature per message, paced through the
+     * same gate as sends, and resumable: only relay-accepted copies advance the progress set.
+     */
+    override suspend fun archiveDmHistory(): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val encKey =
+            (dmEncryptionManager.state.value as? DmEncryptionManager.State.Active)
+                ?.let { dmEncryptionManager.heldKeys().firstOrNull() }
+                ?: return Result.Error(AppError.Unknown("Turn on the fast decryption key first."))
+
+        // Runs on the repository scope, not the caller's: archiving takes minutes and must survive
+        // the user leaving Settings. Progress and failures are reported through dmArchiveProgress.
+        scope.launch {
+            dmArchiveManager.run(
+                rumors = pendingArchiveRumors(myPub),
+                buildWrap = { rumor ->
+                    // One shape for both halves. Our own messages come out as ordinary NIP-17
+                    // self-wraps (seal.pubkey == rumor.pubkey); a peer's rumor makes the seal ours over
+                    // their rumor, which only our own unwrap accepts (see Nip17.unwrap) and which every
+                    // other client drops silently.
+                    bunkerPublishGate.withLock { delay(BUNKER_WRAP_ADMIT_INTERVAL_MS) }
+                    Nip17.wrap(
+                        rumor,
+                        myPub,
+                        signer,
+                        encryptTo = encKey.publicKeyHex,
+                        senderEncTag = encKey.publicKeyHex,
+                        encryptWith = encKey.privateKeyHex,
+                    )
+                },
+                // A new device's dm_inbox REQ looks exactly here.
+                publish = { wrap -> publishWrapJsonAwaitOk(dmRelaysWithDefaults(myPub), wrap.toJsonObject().toString(), wrap.id ?: "") },
+                persistProgress = { ids -> SecureStorage.saveDmArchivedRumorIdsFor(myPub, ids) },
+            )
+        }
+        return Result.Success(Unit)
+    }
+
+    override fun cancelDmArchive() {
+        dmArchiveManager.cancel()
+    }
+
+    /**
+     * Ask another device of this account for the encryption key (NIP-4e kind:4454). The reply is
+     * encrypted to a throwaway key only this device holds, so nothing usable is exposed by the
+     * request sitting on a relay.
+     */
+    override suspend fun requestDmEncryptionKey(): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        return try {
+            val throwaway = dmPairingManager.beginRequest()
+            val signed = signer.signEvent(Nip4e.buildClientKeyRequest(myPub, throwaway, epochSeconds()))
+            pendingPairingRequestId = signed.id
+            publishEventToRelays(pairingRelays(myPub), signed)
+            Result.Success(Unit)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            dmPairingManager.failed(e.message ?: "Could not publish the pairing request")
+            Result.Error(AppError.Unknown(e.message ?: "Could not publish the pairing request"))
+        }
+    }
+
+    /** Send our encryption key to the device that asked for it (NIP-4e kind:4455). */
+    override suspend fun approveDmPairing(): Result<Unit> {
+        val incoming =
+            dmPairingManager.state.value as? DmPairingManager.State.IncomingRequest
+                ?: return Result.Error(AppError.Unknown("There is no pairing request to approve."))
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val encKey =
+            dmEncryptionManager.heldKeys().firstOrNull()
+                ?: return Result.Error(AppError.Unknown("This device does not hold an encryption key."))
+        return try {
+            val throwaway = KeyPair.generate()
+            val encrypted = Nip44.encrypt(encKey.privateKeyHex, throwaway.privateKeyHex, incoming.throwawayPubkey)
+            val signed =
+                signer.signEvent(
+                    Nip4e.buildKeyShare(myPub, throwaway.publicKeyHex, incoming.throwawayPubkey, encrypted, epochSeconds()),
+                )
+            publishEventToRelays(pairingRelays(myPub), signed)
+            dmPairingManager.resolveIncoming(incoming.throwawayPubkey)
+            // The share is single-use: once the requester holds the key, leaving a copy of the
+            // ciphertext on relays only widens the window for offline attacks on the throwaway keys.
+            signed.id?.let { scope.launch { publishDeletion(myPub, signer, listOf(it)) } }
+            Result.Success(Unit)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.Error(AppError.Unknown(e.message ?: "Could not send the encryption key"))
+        }
+    }
+
+    override fun declineDmPairing() {
+        (dmPairingManager.state.value as? DmPairingManager.State.IncomingRequest)?.let {
+            dmPairingManager.resolveIncoming(it.throwawayPubkey)
+        }
+    }
+
+    override fun dismissDmPairing() {
+        dmPairingManager.reset()
+    }
+
+    /** A kind:4455 answering our own outstanding request: decrypt, validate, hold. */
+    private fun handleKeyShare(event: Event, myPub: String) {
+        val ours = dmPairingManager.requestThrowawayKey() ?: return
+        if (Nip4e.keyShareRecipientFrom(event) != ours.publicKeyHex) return
+        val senderThrowaway = Nip4e.throwawayPubkeyFrom(event) ?: return
+        val keyHex =
+            runCatching { Nip44.decrypt(event.content, ours.privateKeyHex, senderThrowaway) }.getOrNull()
+                ?: return dmPairingManager.failed("The key from the other device could not be read.")
+        // importKey rejects anything that is not the key this account announced, so a forged or
+        // stale share cannot leave us holding something senders are not addressing.
+        if (!dmEncryptionManager.importKey(keyHex)) {
+            dmPairingManager.failed("The other device sent a key that does not match this account's announcement.")
+            return
+        }
+        dmPairingManager.succeeded()
+        val signer = ActiveAccountManager.session.value?.signer ?: return
+        val ids = listOfNotNull(event.id, pendingPairingRequestId)
+        pendingPairingRequestId = null
+        if (ids.isNotEmpty()) scope.launch { publishDeletion(myPub, signer, ids) }
+    }
+
+    /** NIP-09 delete for our own pairing events; best effort, relays may keep them anyway. */
+    private suspend fun publishDeletion(myPub: String, signer: NostrSigner, eventIds: List<String>) {
+        try {
+            val deletion =
+                Event(
+                    pubkey = myPub,
+                    createdAt = epochSeconds(),
+                    kind = 5,
+                    tags = eventIds.map { listOf("e", it) },
+                    content = "",
+                )
+            publishEventToRelays(pairingRelays(myPub), signer.signEvent(deletion))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * Watch our own pairing events. Both kinds are authored by our identity, are rare, and only
+     * matter live, so this is a small `since`-now subscription rather than a history read.
+     */
+    private suspend fun sendPairingReq(myPub: String) {
+        val filter =
+            buildJsonObject {
+                putJsonArray("kinds") {
+                    add(Nip4e.KIND_CLIENT_KEY)
+                    add(Nip4e.KIND_KEY_SHARE)
+                }
+                putJsonArray("authors") { add(myPub) }
+                put("since", epochSeconds())
+            }
+        val req =
+            buildJsonArray {
+                add("REQ")
+                add("nip4e_pair")
+                add(filter)
+            }.toString()
+        pairingRelays(myPub).forEach { url ->
+            val client =
+                connectionManager.getClientForRelay(url)
+                    ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+            try {
+                client?.send(req)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun pairingRelays(myPub: String): List<String> = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays + dmRelaysWithDefaults(myPub)).distinct()
+
+    /** Hold a key exported from another device. Rejected unless it matches the announced one. */
+    override fun importDmEncryptionKey(privateKeyHex: String): Boolean = dmEncryptionManager.importKey(privateKeyHex)
+
+    override fun exportDmEncryptionKey(): String? = dmEncryptionManager.exportKey()
 
     private suspend fun publishEventToRelays(relays: List<String>, event: Event) {
         val json =
@@ -2113,6 +2515,9 @@ class NostrRepository(
         if (dmInboxStarted) return
         val myPub = sessionManager.getPublicKey() ?: return
         dmInboxStarted = true
+
+        dmArchiveManager.hydrate(SecureStorage.loadDmArchivedRumorIdsFor(myPub))
+        sendPairingReq(myPub)
 
         // Seed the follow set from its persisted cache before the DM list partitions, so
         // conversations land in Follows/Others immediately instead of all falling in Others until
@@ -2240,6 +2645,7 @@ class NostrRepository(
             }
         }
         dmManager.clear()
+        dmArchiveManager.clear()
         _myDmRelays.value = emptyList()
         dmInboxEosedRelays = emptySet()
         // Drop the in-memory send queue; the persisted per-account copy stays on disk and is
@@ -2554,6 +2960,9 @@ class NostrRepository(
         dmPersistenceJobs.forEach { it.cancel() }
         dmPersistenceJobs.clear()
         dmManager.clear()
+        // Not dmEncryptionManager: the session collector owns it, and clearing here would race a
+        // warm account switch that has already installed the new signer.
+        dmArchiveManager.clear()
         _myDmRelays.value = emptyList()
         dmInboxStarted = false
         dmPersistenceWired = false
@@ -5072,6 +5481,38 @@ class NostrRepository(
                     // backlog; anything after is a live incoming DM.
                     val liveWrap = dmInboxSubscribedRelays.isNotEmpty() &&
                         dmInboxEosedRelays.containsAll(dmInboxSubscribedRelays)
+                    // NIP-4e fast path: a wrap addressed to a key we hold decrypts in-process, so
+                    // it skips the boot hold, the trickle and the bunker gate entirely. This is
+                    // the payoff of announcing a key: an adopted-sender backlog drains at local
+                    // speed while the signer stays idle. A miss here costs two failed HMACs and
+                    // falls through to the paced signer path below, without counting as a failure.
+                    if (dmEncryptionManager.heldKeys().isNotEmpty() &&
+                        sessionManager.getPublicKey() == myPub &&
+                        AppModule.dmSettings.dmEnabled.value
+                    ) {
+                        val localOnly =
+                            dmEncryptionManager.heldKeys().map { kp ->
+                                Nip17.Nip44Decryptor { peer, ciphertext -> Nip44.decrypt(ciphertext, kp.privateKeyHex, peer) }
+                            }
+                        val handledLocally =
+                            try {
+                                dmManager.ingestGiftWrap(giftWrap, myPub, localOnly, ::verifyLegacyDmSender)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                false
+                            }
+                        if (handledLocally) {
+                            if (wrapId != null && wrapId !in dmProcessedWrapIds) {
+                                dmProcessedWrapIds = dmProcessedWrapIds + wrapId
+                                dmFailCounts = dmFailCounts - wrapId
+                                scheduleSaveProcessedWrapIds(myPub)
+                            }
+                            if (wrapId != null) dmInFlightWrapIds = dmInFlightWrapIds - wrapId
+                            maybeLatchDmFullSync(myPub)
+                            return@launch
+                        }
+                    }
                     try {
                         // A bunker signer pays a remote round-trip per NIP-44 decrypt, and a gift
                         // wrap needs two (wrap then seal). A cold start with a large DM backlog
@@ -5095,7 +5536,7 @@ class NostrRepository(
                                 false
                             } else {
                                 kotlinx.coroutines.withTimeoutOrNull(DM_DECRYPT_TIMEOUT_MS) {
-                                    dmManager.ingestGiftWrap(giftWrap, myPub, signer)
+                                    dmManager.ingestGiftWrap(giftWrap, myPub, dmDecryptors(signer), ::verifyLegacyDmSender)
                                 } ?: false
                             }
                         }
@@ -5154,15 +5595,6 @@ class NostrRepository(
                 }
                 return
             }
-            // A user's NIP-4e encryption key announcement (kind:10044). Sending only: we announce
-            // no key of our own here, so nothing changes about how our inbox is read.
-            if (kind == Nip4e.KIND_ENCRYPTION_KEY) {
-                if (!AppModule.dmSettings.dmEnabled.value) return
-                runCatching { parseSignedEventJson(event.toString()) }.getOrNull()?.let {
-                    dmManager.ingestEncryptionKey(it)
-                }
-                return
-            }
             // A user's NIP-17 DM relay list (kind:10050).
             if (kind == Nip17.KIND_DM_RELAYS) {
                 if (!AppModule.dmSettings.dmEnabled.value) return
@@ -5180,6 +5612,33 @@ class NostrRepository(
                             scope.launch { resendDmInboxReq(it.pubkey) }
                         }
                     }
+                }
+                return
+            }
+            // NIP-4e device pairing, our own account only: a device asking for the encryption key
+            // (4454) and a device answering with it (4455).
+            if (kind == Nip4e.KIND_CLIENT_KEY || kind == Nip4e.KIND_KEY_SHARE) {
+                if (!AppModule.dmSettings.dmEnabled.value) return
+                val myPub = sessionManager.getPublicKey() ?: return
+                runCatching { parseSignedEventJson(event.toString()) }.getOrNull()?.let {
+                    if (it.pubkey != myPub) return
+                    if (kind == Nip4e.KIND_CLIENT_KEY) {
+                        // Only a device that holds the key can answer.
+                        if (dmEncryptionManager.heldKeys().isNotEmpty()) dmPairingManager.onRequestSeen(it)
+                    } else {
+                        handleKeyShare(it, myPub)
+                    }
+                }
+                return
+            }
+            // A user's NIP-4e encryption key announcement (kind:10044).
+            if (kind == Nip4e.KIND_ENCRYPTION_KEY) {
+                if (!AppModule.dmSettings.dmEnabled.value) return
+                runCatching { parseSignedEventJson(event.toString()) }.getOrNull()?.let {
+                    dmManager.ingestEncryptionKey(it)
+                    // Our own announcement is the relay's truth about this account: another device
+                    // may have rotated to a key we do not hold, or withdrawn ours.
+                    if (it.pubkey == sessionManager.getPublicKey()) dmEncryptionManager.ingestOwnAnnouncement(it)
                 }
                 return
             }

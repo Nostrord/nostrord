@@ -54,6 +54,8 @@ import kotlinx.coroutines.delay
 import org.nostr.nostrord.auth.AuthMethod
 import org.nostr.nostrord.auth.logoutConfirmBody
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
 import org.nostr.nostrord.settings.AppTheme
@@ -1330,7 +1332,238 @@ private fun DmSettingsPanelContent(
         }
         // Relay editor only matters while DMs are on; hidden with the rest of the feature when off.
         if (dmEnabled) {
+            DmEncryptionPanelContent()
             DmRelayPanelContent()
+        }
+    }
+}
+
+@Composable
+private fun DmArchiveContent(vm: DmEncryptionViewModel) {
+    val progress by vm.archiveProgress.collectAsState()
+    val confirmOpen by vm.archiveConfirmOpen.collectAsState()
+    val count by vm.archivableCount.collectAsState()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        when {
+            progress.running -> {
+                Text(
+                    text = "Archiving ${progress.done} of ${progress.total}…",
+                    style = NostrordTypography.Caption,
+                    color = NostrordColors.TextSecondary,
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { vm.cancelArchive() }) {
+                        Text("Stop", color = NostrordColors.Error, style = NostrordTypography.Button)
+                    }
+                }
+            }
+            confirmOpen -> {
+                Text(
+                    text = "This publishes ${count ?: 0} wrapped copies of your message history to your DM " +
+                        "relays, encrypted to your fast decryption key. New devices holding this key can " +
+                        "then load your history without contacting your signer. Publishing takes a few " +
+                        "minutes and reveals to your DM relays roughly how many messages you have.",
+                    style = NostrordTypography.Caption,
+                    color = NostrordColors.TextSecondary,
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { vm.dismissArchiveConfirm() }) {
+                        Text("Cancel", color = NostrordColors.TextSecondary, style = NostrordTypography.Button)
+                    }
+                    TextButton(onClick = { vm.confirmArchive() }, enabled = (count ?: 0) > 0) {
+                        Text("Publish archive", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                    }
+                }
+            }
+            else -> {
+                // Reported here rather than through the VM error: the run outlives this screen.
+                progress.error?.let {
+                    Text(text = it, style = NostrordTypography.Caption, color = NostrordColors.Error)
+                }
+                if (progress.done > 0 && progress.error == null) {
+                    Text(
+                        text = "Archived ${progress.done} of ${progress.total}.",
+                        style = NostrordTypography.Caption,
+                        color = NostrordColors.Success,
+                    )
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { vm.askToArchive() }) {
+                        Text("Archive history to this key", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DmEncryptionPanelContent() {
+    val activeAccountId by AppModule.accountStore.activeId.collectAsState()
+    val vm = viewModel(key = activeAccountId) { DmEncryptionViewModel(AppModule.nostrRepository) }
+    val state by vm.state.collectAsState()
+    val busy by vm.busy.collectAsState()
+    val error by vm.error.collectAsState()
+    val revealedKey by vm.revealedKey.collectAsState()
+    val importInput by vm.importInput.collectAsState()
+    val pairingState by vm.pairingState.collectAsState()
+
+    // Nothing to offload when signing is already local.
+    if (state is DmEncryptionManager.State.Unavailable) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = NostrordShapes.cardShape,
+        colors = CardDefaults.cardColors(containerColor = NostrordColors.Surface),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+        ) {
+            Text(
+                text = "Fast decryption key",
+                style = NostrordTypography.Button,
+                color = NostrordColors.TextPrimary,
+            )
+            Text(
+                text = "Creates a separate encryption key stored on this device. New messages decrypt " +
+                    "instantly without contacting your signer.",
+                style = NostrordTypography.Caption,
+                color = NostrordColors.TextSecondary,
+            )
+
+            when (val s = state) {
+                is DmEncryptionManager.State.AnnouncedElsewhere -> {
+                    InfoCard(
+                        title = "Key held on another device",
+                        titleColor = NostrordColors.Warning,
+                        icon = Icons.Default.Key,
+                        content = "This account already announced an encryption key from another device. " +
+                            "Ask that device to send it, or paste it here from its Show key screen.",
+                        isCompact = false,
+                    )
+                    when (val pairing = pairingState) {
+                        is DmPairingManager.State.Requesting ->
+                            Text(
+                                text = "Waiting for your other device. Approve the request showing code " +
+                                    "${pairing.code} there.",
+                                style = NostrordTypography.Caption,
+                                color = NostrordColors.TextSecondary,
+                            )
+                        is DmPairingManager.State.Failed ->
+                            Text(text = pairing.reason, style = NostrordTypography.Caption, color = NostrordColors.Error)
+                        else ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { vm.requestKeyFromOtherDevice() }) {
+                                    Text("Ask my other device", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                                }
+                            }
+                    }
+                    OutlinedTextField(
+                        value = importInput,
+                        onValueChange = { vm.setImportInput(it) },
+                        label = { Text("Encryption key") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(),
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { vm.importKey() }, enabled = importInput.isNotBlank()) {
+                            Text("Import key", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                        }
+                    }
+                }
+                is DmEncryptionManager.State.Active -> {
+                    Text(
+                        text = "Active. Senders are addressing ${s.encPubkey.take(12)}…",
+                        style = NostrordTypography.Caption,
+                        color = NostrordColors.Success,
+                    )
+                    // Another device of this account is asking for the key. The code comes from the
+                    // request itself, so matching it against the other screen proves which one asked.
+                    (pairingState as? DmPairingManager.State.IncomingRequest)?.let { request ->
+                        InfoCard(
+                            title = "Another device wants this key",
+                            titleColor = NostrordColors.Warning,
+                            icon = Icons.Default.Key,
+                            content = "Approve only if that device is showing code ${request.code}.",
+                            isCompact = false,
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { vm.declinePairing() }) {
+                                Text("Decline", color = NostrordColors.TextSecondary, style = NostrordTypography.Button)
+                            }
+                            TextButton(onClick = { vm.approvePairing() }) {
+                                Text("Send key", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                            }
+                        }
+                    }
+                    revealedKey?.let {
+                        Text(text = it, style = NostrordTypography.Caption, color = NostrordColors.TextPrimary)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { if (revealedKey == null) vm.revealKey() else vm.hideKey() }) {
+                            Text(
+                                if (revealedKey == null) "Show key" else "Hide key",
+                                color = NostrordColors.Primary,
+                                style = NostrordTypography.Button,
+                            )
+                        }
+                        TextButton(onClick = { vm.rotate() }, enabled = !busy) {
+                            Text("Replace key", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                        }
+                        TextButton(onClick = { vm.disable() }, enabled = !busy) {
+                            Text(
+                                if (busy) "Working…" else "Turn off",
+                                color = NostrordColors.Error,
+                                style = NostrordTypography.Button,
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Replace the key if this device may have been compromised. Contacts start " +
+                            "using the new one as they see it; the old key stays here so everything sent " +
+                            "to it keeps opening.",
+                        style = NostrordTypography.Caption,
+                        color = NostrordColors.TextSecondary,
+                    )
+                    Text(
+                        text = "Turning this off sends new messages back to your signer key. The key stays " +
+                            "saved on this device because messages already sent to it can only ever be " +
+                            "opened with it. It is never deleted, only no longer advertised.",
+                        style = NostrordTypography.Caption,
+                        color = NostrordColors.TextSecondary,
+                    )
+                    DmArchiveContent(vm)
+                }
+                else -> {
+                    if (state is DmEncryptionManager.State.HeldNotAnnounced) {
+                        Text(
+                            text = "A key from an earlier session is still saved here. Turning this on " +
+                                "advertises it again.",
+                            style = NostrordTypography.Caption,
+                            color = NostrordColors.TextSecondary,
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { vm.enable() }, enabled = !busy) {
+                            Text(
+                                if (busy) "Publishing…" else "Turn on",
+                                color = NostrordColors.Primary,
+                                style = NostrordTypography.Button,
+                            )
+                        }
+                    }
+                }
+            }
+
+            error?.let {
+                Text(text = it, style = NostrordTypography.MessageBody, color = NostrordColors.Error)
+            }
         }
     }
 }
