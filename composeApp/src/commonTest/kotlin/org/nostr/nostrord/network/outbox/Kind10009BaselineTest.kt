@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.OutboxManager
+import org.nostr.nostrord.nostr.Nip51
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -91,6 +92,111 @@ class Kind10009BaselineTest {
 
         assertEquals(CIPHERTEXT, outbox.currentKind10009Baseline().content)
         scope.cancel()
+    }
+
+    @Test
+    fun `private group entries are read from the encrypted section`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        val private = Nip51.encodeTags(listOf(listOf("group", "secret", "wss://relay.two")))
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { if (it == CIPHERTEXT) private else null },
+        )
+
+        assertEquals(setOf("wss://relay.two" to "secret"), outbox.privateGroupEntries.value)
+        assertEquals(setOf("wss://relay.one", "wss://relay.two"), outbox.kind10009Relays.value)
+        scope.cancel()
+    }
+
+    @Test
+    fun `a group listed in both sections stays public`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        val private = Nip51.encodeTags(listOf(listOf("group", "abc", "wss://relay.one")))
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { private },
+        )
+
+        // Demoting it would drop the group from the public tags the user already advertises.
+        assertTrue(outbox.privateGroupEntries.value.isEmpty())
+        scope.cancel()
+    }
+
+    @Test
+    fun `an unreadable private section is flagged, not discarded`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            // NIP-04-era content, or a signer that refuses to decrypt.
+            decryptPrivate = { null },
+        )
+
+        assertTrue(outbox.privateSectionOpaque.value)
+        assertEquals(CIPHERTEXT, outbox.currentKind10009Baseline().content, "the ciphertext must survive for the next publish")
+        scope.cancel()
+    }
+
+    @Test
+    fun `a failed decrypt keeps the known private entries out of the public tags`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        val private = Nip51.encodeTags(listOf(listOf("group", "secret", "wss://relay.two")))
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { private },
+        )
+        // A newer version arrives while the signer is offline or refuses.
+        outbox.handleKind10009Event(
+            event(200, "AhRotatedCiphertext==", """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { null },
+        )
+
+        // Forgetting them would publish the group the user hid as a public tag.
+        assertEquals(setOf("wss://relay.two" to "secret"), outbox.privateGroupEntries.value)
+        scope.cancel()
+    }
+
+    @Test
+    fun `rebuilding the private section keeps the other client's non-group tags`() {
+        val previous =
+            listOf(
+                listOf("group", "gone", "wss://relay.two"),
+                listOf("word", "spoiler"),
+                listOf("r", "wss://relay.three"),
+            )
+
+        val rebuilt = rebuildPrivateGroupTags(previous, listOf("wss://relay.two" to "kept"))
+
+        assertEquals(
+            listOf(
+                listOf("group", "kept", "wss://relay.two"),
+                listOf("word", "spoiler"),
+                listOf("r", "wss://relay.three"),
+            ),
+            rebuilt,
+        )
     }
 
     @Test

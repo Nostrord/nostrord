@@ -9,13 +9,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
 import org.nostr.nostrord.network.outbox.kind10009Tags
+import org.nostr.nostrord.network.outbox.rebuildPrivateGroupTags
 import org.nostr.nostrord.nostr.Event
+import org.nostr.nostrord.nostr.Nip51
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.loadGroupOrderFor
 import org.nostr.nostrord.storage.loadKind10009BaselineFor
@@ -50,6 +53,9 @@ class OutboxManager(
          * with an empty one, and a replaceable event leaves nothing to recover from.
          */
         const val BASELINE_WAIT_MS = 7_000L
+
+        /** Cap on one private-section decrypt: a bunker signer may be slow, offline, or refuse. */
+        const val PRIVATE_DECRYPT_TIMEOUT_MS = 8_000L
     }
 
     val bootstrapRelays: List<String> = relayListManager.bootstrapRelays
@@ -87,6 +93,32 @@ class OutboxManager(
     // True once the network fetch for the own kind:10009 has settled (an event applied, or the
     // fetch finished with none). Until then a publish has no baseline to preserve and waits.
     private val _kind10009BaselineSettled = MutableStateFlow(false)
+
+    // Decrypted private section of the newest own kind:10009, cached by the ciphertext it came
+    // from: with a bunker signer every decrypt is a remote round-trip, and relays re-deliver
+    // the same event on each fetch and reconnect.
+    private var privateTags: List<List<String>> = emptyList()
+    private var privateDecryptedFrom: String = ""
+
+    /**
+     * Joined groups the user keeps in the private (encrypted) section. Excluded from the public
+     * `group` tags of a publish, so a group listed privately is never advertised in the clear.
+     * An entry the public tags also carry is not here: the public listing wins.
+     */
+    private val _privateGroupEntries = MutableStateFlow<Set<Pair<String, String>>>(emptySet())
+    val privateGroupEntries: StateFlow<Set<Pair<String, String>>> = _privateGroupEntries.asStateFlow()
+
+    // Relays known only from the private section: kept locally (the rail needs them) but never
+    // emitted as a public `r` tag.
+    private val _privateOnlyRelays = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The list has a private section this client cannot read (another client's encryption, or a
+     * signer that refused to decrypt). Its content is still preserved verbatim on publish; the
+     * UI uses this to say the entries are kept but hidden rather than pretend they don't exist.
+     */
+    private val _privateSectionOpaque = MutableStateFlow(false)
+    val privateSectionOpaque: StateFlow<Boolean> = _privateSectionOpaque.asStateFlow()
 
     private val _kind10009Relays = MutableStateFlow<Set<String>>(emptySet())
     val kind10009Relays: StateFlow<Set<String>> = _kind10009Relays.asStateFlow()
@@ -169,6 +201,26 @@ class OutboxManager(
         // under this one.
         kind10009Baseline = Kind10009Baseline.EMPTY
         _kind10009BaselineSettled.value = false
+        resetPrivateSection()
+    }
+
+    /** Move a joined group between the public tags and the encrypted section of the next publish. */
+    fun setGroupPrivate(
+        relayUrl: String,
+        groupId: String,
+        private: Boolean,
+    ) {
+        val entry = relayUrl.normalizeRelayUrl() to groupId
+        _privateGroupEntries.value =
+            if (private) _privateGroupEntries.value + entry else _privateGroupEntries.value - entry
+    }
+
+    private fun resetPrivateSection() {
+        privateTags = emptyList()
+        privateDecryptedFrom = ""
+        _privateGroupEntries.value = emptySet()
+        _privateOnlyRelays.value = emptySet()
+        _privateSectionOpaque.value = false
     }
 
     fun initialize(
@@ -190,6 +242,16 @@ class OutboxManager(
             } catch (_: Exception) {
                 Kind10009Baseline.EMPTY
             }
+        // Which groups are private has to be known before the first publish of the session, not
+        // only after a successful decrypt.
+        _privateGroupEntries.value =
+            kind10009Baseline.privateEntries
+                .mapNotNull { entry ->
+                    val relay = entry.getOrNull(0) ?: return@mapNotNull null
+                    val groupId = entry.getOrNull(1) ?: return@mapNotNull null
+                    relay to groupId
+                }.toSet()
+        _privateOnlyRelays.value = kind10009Baseline.privateOnlyRelays.toSet()
         _kind10009BaselineSettled.value = false
         scope.launch {
             coroutineScope {
@@ -380,6 +442,88 @@ class OutboxManager(
     val kind10009NeedsRepublish: StateFlow<Boolean> = _kind10009NeedsRepublish.asStateFlow()
 
     /**
+     * The private section of [content] as a tag list, decrypting only when the ciphertext is one
+     * we have not already read. Returns empty when there is no private section or it cannot be
+     * read; [privateSectionOpaque] tells those two apart, and an unreadable section is still
+     * republished verbatim.
+     */
+    private suspend fun resolvePrivateTags(
+        content: String,
+        decryptPrivate: suspend (String) -> String?,
+    ): List<List<String>> {
+        if (content.isBlank()) {
+            privateTags = emptyList()
+            privateDecryptedFrom = ""
+            _privateSectionOpaque.value = false
+            return emptyList()
+        }
+        if (content == privateDecryptedFrom) return privateTags
+        val plaintext =
+            withTimeoutOrNull(PRIVATE_DECRYPT_TIMEOUT_MS) {
+                try {
+                    decryptPrivate(content)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    null
+                }
+            }
+        val decoded = plaintext?.let { Nip51.decodeTags(it) }
+        if (decoded == null) {
+            // NIP-04-era or foreign encryption, a signer that refused, or a bunker that never
+            // answered. Leave it opaque: the publish path keeps the ciphertext untouched.
+            privateTags = emptyList()
+            privateDecryptedFrom = ""
+            _privateSectionOpaque.value = true
+            return emptyList()
+        }
+        privateTags = decoded
+        privateDecryptedFrom = content
+        _privateSectionOpaque.value = false
+        return decoded
+    }
+
+    /**
+     * The `content` of a publish: the private section rebuilt around [privateOrder] when what
+     * the user keeps private changed, otherwise the previous ciphertext untouched.
+     *
+     * A section this client cannot read is left exactly as it is: its entries stay out of the
+     * public tags (they are inside that ciphertext) and the user's private list survives intact.
+     *
+     * Null when the section must change and the signer would not encrypt it. The publish is then
+     * abandoned: writing the groups publicly would expose what the user hid, and dropping them
+     * would delete them from the list.
+     */
+    private suspend fun buildPrivateContent(
+        pubKey: String,
+        baseline: Kind10009Baseline,
+        privateOrder: List<Pair<String, String>>,
+        encryptPrivate: suspend (String) -> String?,
+    ): String? {
+        if (_privateSectionOpaque.value) return baseline.content
+        val newPrivateTags = rebuildPrivateGroupTags(privateTags, privateOrder)
+        if (newPrivateTags == privateTags) return baseline.content
+        val ciphertext =
+            try {
+                encryptPrivate(Nip51.encodeTags(newPrivateTags))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            } ?: return null
+        privateTags = newPrivateTags
+        privateDecryptedFrom = ciphertext
+        // Carry the new section, not the replaced one: a second publish before our own event
+        // comes back from the relays would otherwise undo the change.
+        val updated = baseline.copy(content = ciphertext)
+        groupsMutex.withLock { kind10009Baseline = updated }
+        try {
+            SecureStorage.saveKind10009BaselineFor(pubKey, updated)
+        } catch (_: Exception) {}
+        return ciphertext
+    }
+
+    /**
      * Hold a publish until the own kind:10009 fetch has settled, so the version being replaced
      * was actually seen and its content preserved. Bounded: past [BASELINE_WAIT_MS] the publish
      * proceeds on the persisted baseline rather than stranding a join or a leave.
@@ -399,10 +543,12 @@ class OutboxManager(
         signEvent: suspend (Event) -> Event,
         messageHandler: (String, NostrGroupClient) -> Unit,
         orderOverride: List<Pair<String, String>>? = null,
+        encryptPrivate: suspend (String) -> String? = { null },
     ): Result<Unit> {
         return try {
             awaitKind10009Baseline()
             var publishedOrder: List<Pair<String, String>> = emptyList()
+            var privateOrder: List<Pair<String, String>> = emptyList()
             var baseline = Kind10009Baseline.EMPTY
             val tags =
                 groupsMutex.withLock {
@@ -416,13 +562,25 @@ class OutboxManager(
 
                     publishedOrder = orderJoinedGroups(allRelayGroups, orderOverride ?: _groupOrder.value)
 
-                    val distinctRelays = nip29Relays.map { it.normalizeRelayUrl() }.filter { it.isNotBlank() }.distinct()
+                    // Groups the user keeps private stay out of the public tags and are written
+                    // back into the encrypted section below.
+                    val privateEntries = _privateGroupEntries.value
+                    privateOrder = publishedOrder.filter { it in privateEntries }
+                    val distinctRelays =
+                        nip29Relays
+                            .map { it.normalizeRelayUrl() }
+                            .filter { it.isNotBlank() && it !in _privateOnlyRelays.value }
+                            .distinct()
                     baseline = kind10009Baseline
-                    kind10009Tags(publishedOrder, distinctRelays, baseline.foreignTags)
+                    kind10009Tags(publishedOrder - privateEntries, distinctRelays, baseline.foreignTags)
                 }
             // Own publish is authoritative for order too: the event we are about to sign is
             // exactly what the rail must show, including a drag that moved a chip.
             applyGroupOrder(pubKey, publishedOrder)
+
+            val content =
+                buildPrivateContent(pubKey, baseline, privateOrder, encryptPrivate)
+                    ?: return Result.Error(AppError.Unknown("Could not encrypt the private section of the group list", null))
 
             val event =
                 Event(
@@ -430,9 +588,7 @@ class OutboxManager(
                     createdAt = epochMillis() / 1000,
                     kind = 10009,
                     tags = tags,
-                    // Verbatim: another client's self-encrypted private entries live here and
-                    // this client has no business rewriting (or dropping) them.
-                    content = baseline.content,
+                    content = content,
                 )
 
             val signedEvent = signEvent(event)
@@ -526,6 +682,7 @@ class OutboxManager(
         onRelayGroupsUpdated: (Map<String, Set<String>>) -> Unit = {},
         messageHandler: (String, NostrGroupClient) -> Unit = { _, _ -> },
         isGroupDropped: (String) -> Boolean = { false },
+        decryptPrivate: suspend (String) -> String? = { null },
     ) {
         // Author guard: relays may deliver kind:10009 events for the *previous*
         // account if a subscription stayed open across an account switch. The
@@ -544,10 +701,18 @@ class OutboxManager(
         // seen — including one the freshness guard rejects below, since its `content` is still
         // the most recent thing the relays hold. Republishing without it wipes the private
         // group list of every other client this user has.
-        val incomingBaseline = Kind10009Baseline.from(event)
+        var incomingBaseline = Kind10009Baseline.from(event)
         val baselineChanged =
             groupsMutex.withLock {
                 if (incomingBaseline.createdAt > kind10009Baseline.createdAt) {
+                    // The private entries of the version being replaced ride along until this
+                    // event's own section is decrypted: dropping them first would publish the
+                    // user's private groups in the clear if the decrypt never succeeds.
+                    incomingBaseline =
+                        incomingBaseline.copy(
+                            privateEntries = kind10009Baseline.privateEntries,
+                            privateOnlyRelays = kind10009Baseline.privateOnlyRelays,
+                        )
                     kind10009Baseline = incomingBaseline
                     true
                 } else {
@@ -603,28 +768,71 @@ class OutboxManager(
         val explicitNip29Relays = mutableListOf<String>()
         // Tag sequence, preserved: bucketing by relay alone loses the only order the user has.
         val taggedOrder = mutableListOf<Pair<String, String>>()
+        val publicEntries = mutableSetOf<Pair<String, String>>()
+        val publicRelays = mutableSetOf<String>()
+        val privateEntries = mutableSetOf<Pair<String, String>>()
+        val privateRelays = mutableSetOf<String>()
 
-        tags.forEach { tag ->
-            val tagArray = tag.jsonArray
-            val tagName = tagArray.getOrNull(0)?.jsonPrimitive?.content ?: return@forEach
-            when (tagName) {
+        fun absorb(
+            values: List<String>,
+            fromPrivateSection: Boolean,
+        ) {
+            when (values.firstOrNull()) {
                 "group" -> {
-                    val groupId = tagArray.getOrNull(1)?.jsonPrimitive?.content ?: return@forEach
-                    val relayUrl = (tagArray.getOrNull(2)?.jsonPrimitive?.content ?: currentRelayUrl).normalizeRelayUrl()
+                    val groupId = values.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return
+                    val relayUrl = (values.getOrNull(2) ?: currentRelayUrl).normalizeRelayUrl()
                     if (newRelayGroups.getOrPut(relayUrl) { mutableSetOf() }.add(groupId)) {
                         taggedOrder.add(relayUrl to groupId)
                     }
+                    if (fromPrivateSection) {
+                        privateEntries.add(relayUrl to groupId)
+                        privateRelays.add(relayUrl)
+                    } else {
+                        publicEntries.add(relayUrl to groupId)
+                        publicRelays.add(relayUrl)
+                    }
                 }
                 "r" -> {
-                    val relayUrl =
-                        tagArray
-                            .getOrNull(1)
-                            ?.jsonPrimitive
-                            ?.content
-                            ?.normalizeRelayUrl() ?: return@forEach
-                    if (relayUrl.isNotBlank()) explicitNip29Relays.add(relayUrl)
+                    val relayUrl = values.getOrNull(1)?.normalizeRelayUrl()?.takeIf { it.isNotBlank() } ?: return
+                    // Both sides land in the persisted relay list (the rail needs the relay
+                    // either way); only the public ones are republished as `r` tags.
+                    explicitNip29Relays.add(relayUrl)
+                    if (fromPrivateSection) privateRelays.add(relayUrl) else publicRelays.add(relayUrl)
                 }
             }
+        }
+
+        tags.forEach { tag ->
+            val values =
+                try {
+                    tag.jsonArray.map { it.jsonPrimitive.content }
+                } catch (_: Exception) {
+                    return@forEach
+                }
+            absorb(values, fromPrivateSection = false)
+        }
+        // The private section is read last: an entry both sections carry stays public, so a
+        // publish can never demote a group the public tags already advertise.
+        resolvePrivateTags(incomingBaseline.content, decryptPrivate).forEach { absorb(it, fromPrivateSection = true) }
+        // Only the newest version seen defines which side an entry lives on: a superseded one
+        // could otherwise mark as private a group the user has since made public. An unreadable
+        // section keeps the entries the last successful decrypt found — they are still inside
+        // the ciphertext, so publishing them publicly would expose what the user hid.
+        if (!supersededByNewerSeen && !_privateSectionOpaque.value) {
+            _privateGroupEntries.value = privateEntries - publicEntries
+            _privateOnlyRelays.value = privateRelays - publicRelays
+            val withPrivate =
+                groupsMutex.withLock {
+                    kind10009Baseline =
+                        kind10009Baseline.copy(
+                            privateEntries = _privateGroupEntries.value.map { (relay, id) -> listOf(relay, id) },
+                            privateOnlyRelays = _privateOnlyRelays.value.toList(),
+                        )
+                    kind10009Baseline
+                }
+            try {
+                SecureStorage.saveKind10009BaselineFor(pubKey, withPrivate)
+            } catch (_: Exception) {}
         }
 
         val immutableRelayGroups = newRelayGroups.mapValues { it.value.toSet() }
@@ -910,6 +1118,7 @@ class OutboxManager(
             kind10009Baseline = Kind10009Baseline.EMPTY
         }
         _kind10009BaselineSettled.value = false
+        resetPrivateSection()
         _kind10009Relays.value = emptySet()
         _groupTagRelays.value = emptySet()
         // Per-account, like the relay list above: [restoreGroupOrder] declines to seed over a

@@ -17,12 +17,19 @@ import kotlinx.serialization.json.longOrNull
  * uses more than one client).
  *
  * [createdAt] is the version this snapshot came from: only a strictly newer event replaces it.
+ *
+ * [privateEntries] (`[relayUrl, groupId]`) and [privateOnlyRelays] are what the last successful
+ * decrypt found inside [content]. They persist so a session that cannot read the section — a
+ * bunker that is offline or refuses — still knows to keep those groups out of the public tags
+ * instead of publishing them in the clear.
  */
 @Serializable
 data class Kind10009Baseline(
     val createdAt: Long = 0L,
     val content: String = "",
     val foreignTags: List<List<String>> = emptyList(),
+    val privateEntries: List<List<String>> = emptyList(),
+    val privateOnlyRelays: List<String> = emptyList(),
 ) {
     companion object {
         val EMPTY = Kind10009Baseline()
@@ -53,6 +60,16 @@ data class Kind10009Baseline(
         }
     }
 }
+
+/**
+ * The private section of a kind:10009: [entries] as `group` tags, plus every non-`group` tag
+ * [previous] held (other clients' private relays and unmodelled entries), kept verbatim.
+ */
+fun rebuildPrivateGroupTags(
+    previous: List<List<String>>,
+    entries: List<Pair<String, String>>,
+): List<List<String>> = entries.map { (relayUrl, groupId) -> listOf("group", groupId, relayUrl) } +
+    previous.filterNot { it.firstOrNull() == "group" }
 
 /**
  * Tags of a kind:10009 publish: this client's own `group` / `r` tags followed by everything

@@ -4484,7 +4484,37 @@ class NostrRepository(
             signEvent = { sessionManager.signEvent(it) },
             messageHandler = { msg, client -> handleRelayMessage(msg, client) },
             orderOverride = orderOverride,
+            encryptPrivate = { plaintext -> encryptOwnListSection(plaintext) },
         )
+    }
+
+    /**
+     * Read the private section of one of our own NIP-51 lists (self-encrypted to our own key).
+     * Null when the signer can't or won't: the caller then leaves the section untouched.
+     */
+    private suspend fun decryptOwnListSection(ciphertext: String): String? {
+        val pubKey = sessionManager.getPublicKey() ?: return null
+        val signer = ActiveAccountManager.session.value?.signer ?: return null
+        return try {
+            signer.nip44Decrypt(pubKey, ciphertext)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** Write side of [decryptOwnListSection]. NIP-44 only: a list this client rewrites is upgraded. */
+    private suspend fun encryptOwnListSection(plaintext: String): String? {
+        val pubKey = sessionManager.getPublicKey() ?: return null
+        val signer = ActiveAccountManager.session.value?.signer ?: return null
+        return try {
+            signer.nip44Encrypt(pubKey, plaintext)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     override suspend fun reorderGroups(order: List<Pair<String, String>>): Result<Unit> {
@@ -4643,6 +4673,7 @@ class NostrRepository(
                         },
                         messageHandler = { m, c -> enqueueToRelayPipeline(m, c) },
                         isGroupDropped = { groupManager.isLocallyDropped(it) },
+                        decryptPrivate = { ciphertext -> decryptOwnListSection(ciphertext) },
                     )
                 }
                 return
@@ -5319,6 +5350,7 @@ class NostrRepository(
                             },
                             messageHandler = { m, c -> enqueueToRelayPipeline(m, c) },
                             isGroupDropped = { groupManager.isLocallyDropped(it) },
+                            decryptPrivate = { ciphertext -> decryptOwnListSection(ciphertext) },
                         )
                     }
                     return
