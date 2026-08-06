@@ -11,14 +11,18 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.NostrGroupClient
+import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
+import org.nostr.nostrord.network.outbox.kind10009Tags
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.loadGroupOrderFor
+import org.nostr.nostrord.storage.loadKind10009BaselineFor
 import org.nostr.nostrord.storage.loadKind10009Timestamp
 import org.nostr.nostrord.storage.loadRelayListFor
 import org.nostr.nostrord.storage.saveGroupOrderFor
+import org.nostr.nostrord.storage.saveKind10009BaselineFor
 import org.nostr.nostrord.storage.saveKind10009RepublishPendingFor
 import org.nostr.nostrord.storage.saveKind10009Timestamp
 import org.nostr.nostrord.storage.saveRelayListFor
@@ -39,6 +43,13 @@ class OutboxManager(
     companion object {
         /** How long to wait after the first kind:10009 event for slower relays to respond with newer versions. */
         const val DISCOVERY_SETTLE_MS = 1_500L
+
+        /**
+         * How long a publish waits for the network fetch to settle before writing. Publishing
+         * against a not-yet-loaded baseline would replace another client's private `content`
+         * with an empty one, and a replaceable event leaves nothing to recover from.
+         */
+        const val BASELINE_WAIT_MS = 7_000L
     }
 
     val bootstrapRelays: List<String> = relayListManager.bootstrapRelays
@@ -65,6 +76,17 @@ class OutboxManager(
     // any event backing it. Gates the stale additive merge: a version older than
     // one already seen must never resurrect groups the newer list omits.
     private var newestSeenKind10009CreatedAt: Long = 0
+
+    // Parts of the own kind:10009 that belong to other clients (self-encrypted private entries
+    // in `content`, unmodelled tags), carried forward by every publish. Guarded by groupsMutex.
+    private var kind10009Baseline: Kind10009Baseline = Kind10009Baseline.EMPTY
+
+    /** Latest preserved snapshot of the own kind:10009. */
+    suspend fun currentKind10009Baseline(): Kind10009Baseline = groupsMutex.withLock { kind10009Baseline }
+
+    // True once the network fetch for the own kind:10009 has settled (an event applied, or the
+    // fetch finished with none). Until then a publish has no baseline to preserve and waits.
+    private val _kind10009BaselineSettled = MutableStateFlow(false)
 
     private val _kind10009Relays = MutableStateFlow<Set<String>>(emptySet())
     val kind10009Relays: StateFlow<Set<String>> = _kind10009Relays.asStateFlow()
@@ -143,6 +165,10 @@ class OutboxManager(
         // 0 and let initialize() rehydrate the right scope when login completes.
         latestKind10009CreatedAt = 0
         newestSeenKind10009CreatedAt = 0
+        // Per-account too: another account's preserved content must never be republished
+        // under this one.
+        kind10009Baseline = Kind10009Baseline.EMPTY
+        _kind10009BaselineSettled.value = false
     }
 
     fun initialize(
@@ -156,6 +182,15 @@ class OutboxManager(
         // sidebar empty until restart.
         latestKind10009CreatedAt = SecureStorage.loadKind10009Timestamp(pubKey)
         newestSeenKind10009CreatedAt = 0
+        // Fallback baseline for a publish that has to go out before (or without) a successful
+        // fetch: the last content/foreign tags this account saw, rather than nothing.
+        kind10009Baseline =
+            try {
+                SecureStorage.loadKind10009BaselineFor(pubKey)
+            } catch (_: Exception) {
+                Kind10009Baseline.EMPTY
+            }
+        _kind10009BaselineSettled.value = false
         scope.launch {
             coroutineScope {
                 bootstrapRelays.forEach { url ->
@@ -290,6 +325,10 @@ class OutboxManager(
             }
         }
 
+        // The fetch is done: whatever content/foreign tags the relays hold are now captured
+        // (or there is no own kind:10009 at all), so a publish may safely replace the event.
+        _kind10009BaselineSettled.value = true
+
         // Live cross-device sync: a standing sub for our own kind:10009 so a list published
         // by another device applies while this app is OPEN (the fetch above is one-shot and
         // CLOSEd; without this, two open devices only converge on restart).
@@ -340,6 +379,19 @@ class OutboxManager(
     private val _kind10009NeedsRepublish = MutableStateFlow(false)
     val kind10009NeedsRepublish: StateFlow<Boolean> = _kind10009NeedsRepublish.asStateFlow()
 
+    /**
+     * Hold a publish until the own kind:10009 fetch has settled, so the version being replaced
+     * was actually seen and its content preserved. Bounded: past [BASELINE_WAIT_MS] the publish
+     * proceeds on the persisted baseline rather than stranding a join or a leave.
+     */
+    private suspend fun awaitKind10009Baseline() {
+        var waited = 0L
+        while (!_kind10009BaselineSettled.value && waited < BASELINE_WAIT_MS) {
+            delay(100)
+            waited += 100
+        }
+    }
+
     suspend fun publishJoinedGroupsList(
         pubKey: String,
         joinedGroupsByRelay: Map<String, Set<String>>,
@@ -349,7 +401,9 @@ class OutboxManager(
         orderOverride: List<Pair<String, String>>? = null,
     ): Result<Unit> {
         return try {
+            awaitKind10009Baseline()
             var publishedOrder: List<Pair<String, String>> = emptyList()
+            var baseline = Kind10009Baseline.EMPTY
             val tags =
                 groupsMutex.withLock {
                     // Normalize and deduplicate relay URLs before publishing
@@ -362,16 +416,9 @@ class OutboxManager(
 
                     publishedOrder = orderJoinedGroups(allRelayGroups, orderOverride ?: _groupOrder.value)
 
-                    val tagsList = mutableListOf<List<String>>()
-                    publishedOrder.forEach { (relayUrl, groupId) ->
-                        tagsList.add(listOf("group", groupId, relayUrl))
-                    }
                     val distinctRelays = nip29Relays.map { it.normalizeRelayUrl() }.filter { it.isNotBlank() }.distinct()
-                    distinctRelays.forEach { relayUrl ->
-                        tagsList.add(listOf("r", relayUrl))
-                    }
-
-                    tagsList
+                    baseline = kind10009Baseline
+                    kind10009Tags(publishedOrder, distinctRelays, baseline.foreignTags)
                 }
             // Own publish is authoritative for order too: the event we are about to sign is
             // exactly what the rail must show, including a drag that moved a chip.
@@ -383,7 +430,9 @@ class OutboxManager(
                     createdAt = epochMillis() / 1000,
                     kind = 10009,
                     tags = tags,
-                    content = "",
+                    // Verbatim: another client's self-encrypted private entries live here and
+                    // this client has no business rewriting (or dropping) them.
+                    content = baseline.content,
                 )
 
             val signedEvent = signEvent(event)
@@ -490,6 +539,27 @@ class OutboxManager(
         val tags = event["tags"]?.jsonArray ?: return
 
         val createdAt = event["created_at"]?.jsonPrimitive?.longOrNull ?: 0L
+
+        // Preserve the parts of the event this client does not own, from the newest version
+        // seen — including one the freshness guard rejects below, since its `content` is still
+        // the most recent thing the relays hold. Republishing without it wipes the private
+        // group list of every other client this user has.
+        val incomingBaseline = Kind10009Baseline.from(event)
+        val baselineChanged =
+            groupsMutex.withLock {
+                if (incomingBaseline.createdAt > kind10009Baseline.createdAt) {
+                    kind10009Baseline = incomingBaseline
+                    true
+                } else {
+                    false
+                }
+            }
+        if (baselineChanged) {
+            try {
+                SecureStorage.saveKind10009BaselineFor(pubKey, incomingBaseline)
+            } catch (_: Exception) {}
+        }
+        _kind10009BaselineSettled.value = true
         var supersededByNewerSeen = false
         val isNewest =
             groupsMutex.withLock {
@@ -837,7 +907,9 @@ class OutboxManager(
         groupsMutex.withLock {
             allRelayGroups = emptyMap()
             latestKind10009CreatedAt = 0
+            kind10009Baseline = Kind10009Baseline.EMPTY
         }
+        _kind10009BaselineSettled.value = false
         _kind10009Relays.value = emptySet()
         _groupTagRelays.value = emptySet()
         // Per-account, like the relay list above: [restoreGroupOrder] declines to seed over a
