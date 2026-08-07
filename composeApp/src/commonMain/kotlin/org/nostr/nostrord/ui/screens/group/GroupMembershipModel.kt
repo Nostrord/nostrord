@@ -76,11 +76,19 @@ class GroupMembershipModel(
             val messagesByGroup = arr[3] as Map<String, List<NostrGroupClient.NostrMessage>>
             val allGroups = arr[4] as List<GroupMetadata>
             val pendingByGroup = arr[6] as Map<String, Long>
-            val leftSet = arr[7] as Set<String>
+            val leftByRelay = arr[7] as Map<String, Set<String>>
             val byRelay = arr[8] as Map<String, List<GroupMetadata>>
 
             val pubkey = repo.getPublicKey()
-            val locallyLeft = groupId in leftSet
+            // Scoped exactly like `joined` below: leaving the same-id group on another relay says
+            // nothing about this one, and treating it as a leave here locked users out of a group
+            // the relay still had them in.
+            val locallyLeft =
+                if (hostRelay != null) {
+                    leftByRelay.atRelay(hostRelay)?.contains(groupId) == true
+                } else {
+                    leftByRelay.values.any { groupId in it }
+                }
             // With an explicit host relay only ITS joined set counts: being in the same-id
             // group on another relay is membership in a different group.
             val joined =

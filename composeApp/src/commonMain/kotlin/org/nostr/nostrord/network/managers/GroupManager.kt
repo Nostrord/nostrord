@@ -606,11 +606,17 @@ class GroupManager(
     // with a 30-day TTL and restored on cold start. This is the authoritative override the membership
     // derivation checks BEFORE the relay's kind:39002, so a left group reads as not-a-member ("Request
     // to Join") even when the relay keeps listing us (some relays do after a 9022). A rejoin clears it.
-    private val _leftGroups = MutableStateFlow<Map<String, Long>>(emptyMap())
-    val leftGroups: StateFlow<Set<String>> =
+    //
+    // Keyed by relay, THEN group id. The same id names independent groups on different relays
+    // ("nostrord" exists on several), and the storage slot behind this is already per-relay, so a
+    // bare-id marker made leaving one of them read as leaving all of them — with no way back, since
+    // the self-heal then cleared the marker from the wrong relay's slot and the restore re-flattened
+    // it on every cold start.
+    private val _leftGroups = MutableStateFlow<Map<String, Map<String, Long>>>(emptyMap())
+    val leftGroups: StateFlow<Map<String, Set<String>>> =
         _leftGroups
-            .map { it.keys }
-            .stateIn(scope, SharingStarted.Eagerly, emptySet())
+            .map { byRelay -> byRelay.mapValues { (_, marks) -> marks.keys } }
+            .stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     // Lets clientForGroup reconnect a group's own relay on demand. Wired by NostrRepository.
     var messageHandler: ((String, NostrGroupClient) -> Unit)? = null
@@ -627,13 +633,14 @@ class GroupManager(
     // Drops the relay's kind:9022 echo and updated kind:39002 that arrive in
     // the milliseconds after a leave, otherwise they re-populate the lists we
     // just cleared and the UI shows zombie members + a "you left" message.
+    // Keyed by [recentLeaveKey] (relay + group), like the durable marker above.
     private val recentlyLeftAt = mutableMapOf<String, Long>()
 
     /**
      * True when the group was deleted or left on THIS device. Stale kind:10009
      * merges skip these so a lagging relay cannot resurrect them.
      */
-    fun isLocallyDropped(groupId: String): Boolean = groupId in deletedGroupIds || recentlyLeftAt.containsKey(groupId)
+    fun isLocallyDropped(groupId: String, relayUrl: String? = null): Boolean = groupId in deletedGroupIds || isRecentlyLeft(relayUrl, groupId)
     private val LEFT_GROUP_GRACE_MS = 5_000L
 
     // Relay-of-origin per groupId, recorded from the WebSocket that delivered
@@ -654,11 +661,58 @@ class GroupManager(
         groupRelayHints.update { if (it[groupId] == normalized) it else it + (groupId to normalized) }
     }
 
-    private fun isRecentlyLeft(groupId: String): Boolean {
-        val at = recentlyLeftAt[groupId] ?: return false
-        if (epochMillis() - at < LEFT_GROUP_GRACE_MS) return true
-        recentlyLeftAt.remove(groupId)
-        return false
+    private fun recentLeaveKey(relayUrl: String, groupId: String): String = "${relayUrl.normalizeRelayUrl()}\u0000$groupId"
+
+    /**
+     * Leave grace window for [groupId] on [relayUrl]. A null relay means the event carried no
+     * relay of origin, and falls back to any relay's window: this guard only suppresses echoes
+     * of our own leave for 5s, so a cross-relay false positive there is bounded and self-clearing.
+     */
+    private fun isRecentlyLeft(relayUrl: String?, groupId: String): Boolean {
+        val keys =
+            if (relayUrl != null) {
+                listOf(recentLeaveKey(relayUrl, groupId))
+            } else {
+                recentlyLeftAt.keys.filter { it.endsWith("\u0000$groupId") }.toList()
+            }
+        var recent = false
+        for (key in keys) {
+            val at = recentlyLeftAt[key] ?: continue
+            if (epochMillis() - at < LEFT_GROUP_GRACE_MS) recent = true else recentlyLeftAt.remove(key)
+        }
+        return recent
+    }
+
+    /** Durable leave timestamp for [groupId] on [relayUrl]; null relay scans every relay. */
+    private fun leftAtOn(relayUrl: String?, groupId: String): Long? {
+        val relay = relayUrl?.normalizeRelayUrl()
+            ?: return _leftGroups.value.values.firstNotNullOfOrNull { it[groupId] }
+        return _leftGroups.value[relay]?.get(groupId)
+    }
+
+    private fun markLeft(relayUrl: String, groupId: String, atSeconds: Long) {
+        val relay = relayUrl.normalizeRelayUrl()
+        _leftGroups.update { it + (relay to (it[relay].orEmpty() + (groupId to atSeconds))) }
+    }
+
+    /**
+     * A kind:9021 rejection that means "you are already in this group". Relays word it freely
+     * ("duplicate: already a member", "invalid: user already in group"), so match on the shape.
+     * Treated as a successful join so the local markers get reconciled with the relay's truth.
+     */
+    private fun isAlreadyMemberRejection(reason: String?): Boolean {
+        val text = reason?.lowercase() ?: return false
+        if ("already" !in text) return false
+        return "member" in text || "in group" in text || "in the group" in text || "joined" in text
+    }
+
+    private fun clearLeft(relayUrl: String, groupId: String) {
+        val relay = relayUrl.normalizeRelayUrl()
+        _leftGroups.update { current ->
+            val marks = current[relay] ?: return@update current
+            if (groupId !in marks) return@update current
+            current + (relay to (marks - groupId))
+        }
     }
 
     // When a group was joined this session. Auto-forget skips groups joined within
@@ -933,8 +987,9 @@ class GroupManager(
         // A group we durably left, AND are no longer joined to, must not re-enter the shared mux via
         // the loaded/opened terms (reopening it to see the locked panel would otherwise re-subscribe
         // its live chat). A still-joined group is NEVER excluded — a stale left marker on a rejoined
-        // group must not cut off its live messages.
-        val excluded = _leftGroups.value.keys - joined
+        // group must not cut off its live messages. Only THIS relay's markers count: the same id
+        // left on another relay is a different group and must keep streaming here.
+        val excluded = _leftGroups.value[normalized]?.keys.orEmpty() - joined
         return (joined + loaded + opened).distinct().filter { it !in excluded }
     }
 
@@ -1421,12 +1476,22 @@ class GroupManager(
         // reads NONE after a restart. We do NOT filter the joined set against them: leaveGroup already
         // removes the group from the joined slot, and filtering here risked excluding a rejoined group
         // whose marker hadn't been cleared yet, breaking its live messages.
-        val leftAll = mutableMapOf<String, Long>()
-        for (url in relayUrls) leftAll.putAll(SecureStorage.getLeftGroupsForRelay(pubKey, url, now))
+        // Each relay's slot stays under its own key: flattening them into one id-keyed map made a
+        // leave on one relay suppress the same-id group on every other relay, and it came back on
+        // every cold start because the restore re-flattened it.
+        val leftAll = mutableMapOf<String, Map<String, Long>>()
+        for (url in relayUrls) {
+            val marks = SecureStorage.getLeftGroupsForRelay(pubKey, url, now)
+            if (marks.isNotEmpty()) leftAll[url.normalizeRelayUrl()] = marks
+        }
         val updates = relayUrls.associate { url ->
             url.normalizeRelayUrl() to SecureStorage.getJoinedGroupsForRelay(pubKey, url)
         }.filter { (_, groups) -> groups.isNotEmpty() }
-        if (leftAll.isNotEmpty()) _leftGroups.update { it + leftAll }
+        if (leftAll.isNotEmpty()) {
+            _leftGroups.update { current ->
+                current + leftAll.mapValues { (relay, marks) -> current[relay].orEmpty() + marks }
+            }
+        }
         if (updates.isNotEmpty()) {
             // Additive, like loadJoinedGroupsFromStorage: never wipe a fresher join.
             _joinedGroupsByRelay.update { current ->
@@ -1532,7 +1597,12 @@ class GroupManager(
             when (val publish = currentClient.sendAndAwaitOk(message, eventId)) {
                 is org.nostr.nostrord.network.PublishResult.Success -> Unit
                 is org.nostr.nostrord.network.PublishResult.Rejected ->
-                    return Result.Error(AppError.Group.JoinFailed(groupId, Exception(publish.reason)))
+                    // "Already a member" is the relay agreeing with the join, not refusing it. Failing
+                    // here left the local left/dropped markers set forever: they only clear on success,
+                    // so a user whose markers disagreed with the relay could never rejoin.
+                    if (!isAlreadyMemberRejection(publish.reason)) {
+                        return Result.Error(AppError.Group.JoinFailed(groupId, Exception(publish.reason)))
+                    }
                 is org.nostr.nostrord.network.PublishResult.Timeout ->
                     return Result.Error(AppError.Group.JoinFailed(groupId, Exception("The relay did not confirm the join request.")))
                 is org.nostr.nostrord.network.PublishResult.Error ->
@@ -1545,8 +1615,8 @@ class GroupManager(
             // write below, so the additive kind:10009 merge can't drop the fresh join.
             deletedGroupIds.remove(groupId)
             persistDroppedGroups()
-            recentlyLeftAt.remove(groupId)
-            _leftGroups.update { it - groupId }
+            recentlyLeftAt.remove(recentLeaveKey(groupRelayUrl, groupId))
+            clearLeft(groupRelayUrl, groupId)
             try {
                 SecureStorage.removeLeftGroupForRelay(pubKey, groupRelayUrl.normalizeRelayUrl(), groupId)
             } catch (_: Exception) {}
@@ -2390,7 +2460,16 @@ class GroupManager(
                 }
             }
 
-            val relayGroups = _joinedGroupsByRelay.value[groupRelayUrl] ?: emptySet()
+            // Merge with the persisted slot like joinGroup and acceptInvite: the in-memory map can be
+            // partial early in a session (the storage restore is async), and a memory-only write would
+            // drop this relay's OTHER groups from the slot — and then from the kind:10009 we publish
+            // right below, so the loss propagates to every client.
+            val storedGroups = try {
+                SecureStorage.getJoinedGroupsForRelay(pubKey, groupRelayUrl)
+            } catch (_: Exception) {
+                emptySet()
+            }
+            val relayGroups = (_joinedGroupsByRelay.value[groupRelayUrl] ?: emptySet()) + storedGroups
             val updatedAfterLeave = relayGroups - groupId
             SecureStorage.saveJoinedGroupsForRelay(pubKey, groupRelayUrl, updatedAfterLeave)
             _joinedGroupsByRelay.update { it + (groupRelayUrl to updatedAfterLeave) }
@@ -2398,12 +2477,12 @@ class GroupManager(
 
             publishJoinedGroups()
 
-            recentlyLeftAt[groupId] = epochMillis()
+            recentlyLeftAt[recentLeaveKey(groupRelayUrl, groupId)] = epochMillis()
             // Leaving also settles a pending external add (this IS the decline path).
             discardPendingInvite(groupId)
             // Durable leave intent: outlives recentlyLeftAt (5s) and a restart, so the membership
             // derivation keeps reporting NONE even when the relay still lists us in kind:39002.
-            _leftGroups.update { it + (groupId to epochSeconds()) }
+            markLeft(groupRelayUrl, groupId, epochSeconds())
             try {
                 SecureStorage.addLeftGroupForRelay(pubKey, groupRelayUrl, groupId, epochSeconds())
             } catch (_: Exception) {}
@@ -3996,7 +4075,7 @@ class GroupManager(
      * Returns list of member pubkeys that need metadata fetching
      */
     fun handleGroupMembers(members: GroupMembers, createdAt: Long = 0L, relayUrl: String? = null): List<String> {
-        if (isRecentlyLeft(members.groupId)) {
+        if (isRecentlyLeft(relayUrl, members.groupId)) {
             _loadingMembers.value = _loadingMembers.value - members.groupId
             return emptyList()
         }
@@ -4051,11 +4130,11 @@ class GroupManager(
         // lists us) leaves us NOT joined, so the marker stays and the group keeps reading "left".
         if (self != null &&
             self in members.members &&
-            members.groupId in _leftGroups.value &&
             hostRelay != null &&
+            leftAtOn(hostRelay, members.groupId) != null &&
             isJoinedOn(hostRelay, members.groupId)
         ) {
-            _leftGroups.update { it - members.groupId }
+            clearLeft(hostRelay, members.groupId)
             currentPubkey?.let { pk ->
                 try {
                     SecureStorage.removeLeftGroupForRelay(pk, hostRelay, members.groupId)
@@ -4164,7 +4243,9 @@ class GroupManager(
         }
         if (stored.isEmpty()) return
         val valid = stored.filter {
-            !isJoinedOn(it.relayUrl, it.groupId) && it.groupId !in _leftGroups.value && it.groupId !in deletedGroupIds
+            !isJoinedOn(it.relayUrl, it.groupId) &&
+                leftAtOn(it.relayUrl, it.groupId) == null &&
+                it.groupId !in deletedGroupIds
         }
         if (valid.isEmpty()) return
         // Keep in-memory entries: a live registration this session is fresher than the slot.
@@ -4188,7 +4269,7 @@ class GroupManager(
         // Our own put-user echoed back (some relays emit one for the group creator, and we
         // are the actor when we add ourselves) is not an external add.
         if (actorPubkey != null && actorPubkey == currentPubkey) return
-        if (isRecentlyLeft(groupId) || groupId in deletedGroupIds) return
+        if (isRecentlyLeft(relayUrl, groupId) || groupId in deletedGroupIds) return
         val relay = (relayUrl ?: getRelayForGroup(groupId) ?: currentRelayUrl ?: return).normalizeRelayUrl()
         // Per relay: the same id joined elsewhere is a different group. Matching across all
         // relays swallowed the invite, so a group we are a relay-side member of never got a
@@ -4197,12 +4278,12 @@ class GroupManager(
         // A create/join we initiated is still in flight (id pre-claimed before the send):
         // the relay's put-user echo for it is our own doing, not an external add.
         if (isRecentlyJoined(groupId)) return
-        val leftAt = _leftGroups.value[groupId]
+        val leftAt = leftAtOn(relay, groupId)
         if (leftAt != null) {
             // Only an actual put-user event dated after the leave re-opens; 39002 listings
             // carry no causality (the relay may simply have never processed our 9022).
             if (actorPubkey == null || createdAtSeconds <= leftAt) return
-            _leftGroups.update { it - groupId }
+            clearLeft(relay, groupId)
             currentPubkey?.let { pk ->
                 try {
                     SecureStorage.removeLeftGroupForRelay(pk, relay, groupId)
@@ -4337,8 +4418,8 @@ class GroupManager(
             }
             deletedGroupIds.remove(groupId)
             persistDroppedGroups(pubkey)
-            recentlyLeftAt.remove(groupId)
-            _leftGroups.update { it - groupId }
+            recentlyLeftAt.remove(recentLeaveKey(relay, groupId))
+            clearLeft(relay, groupId)
             try {
                 SecureStorage.removeLeftGroupForRelay(pubkey, relay, groupId)
             } catch (_: Exception) {}
@@ -4427,7 +4508,7 @@ class GroupManager(
      * Handle incoming group admins (kind 39001)
      */
     fun handleGroupAdmins(admins: GroupAdmins, createdAt: Long = 0L, relayUrl: String? = null) {
-        if (isRecentlyLeft(admins.groupId)) return
+        if (isRecentlyLeft(relayUrl, admins.groupId)) return
         updateRelayScopedList(_groupAdminsByRelay, scopedAdminEventTimestamps, relayUrl, admins.groupId, createdAt, admins.admins)
         val existing = adminEventTimestamps[admins.groupId] ?: 0L
         if (createdAt > 0L && createdAt < existing) {
@@ -4472,7 +4553,7 @@ class GroupManager(
      * Handle incoming group roles (kind 39003)
      */
     fun handleGroupRoles(roles: GroupRoles, createdAt: Long = 0L, relayUrl: String? = null) {
-        if (isRecentlyLeft(roles.groupId)) return
+        if (isRecentlyLeft(relayUrl, roles.groupId)) return
         updateRelayScopedList(_groupRolesByRelay, scopedRoleEventTimestamps, relayUrl, roles.groupId, createdAt, roles.roles)
         val existing = roleEventTimestamps[roles.groupId] ?: 0L
         if (createdAt > 0L && createdAt < existing) {
@@ -4494,7 +4575,7 @@ class GroupManager(
      * so it is stored like any other update rather than skipped.
      */
     fun handleLiveKitParticipants(participants: LiveKitParticipants, createdAt: Long = 0L) {
-        if (isRecentlyLeft(participants.groupId)) return
+        if (isRecentlyLeft(null, participants.groupId)) return
         val existing = liveKitEventTimestamps[participants.groupId] ?: 0L
         if (createdAt > 0L && createdAt < existing) return
         if (createdAt > 0L) liveKitEventTimestamps[participants.groupId] = createdAt
@@ -4680,7 +4761,7 @@ class GroupManager(
         if (message.kind in threadKinds) {
             if (message.id.isBlank()) return null
             val groupId = extractGroupIdFromMessage(rawMsg) ?: return null
-            if (isRecentlyLeft(groupId)) return null
+            if (isRecentlyLeft(relayUrl, groupId)) return null
             // Ahead of the dedup: a resubscribe replays the same roots, and those replays are
             // exactly what proves the relay still serves them. Deduping first would leave the
             // answer window looking empty and the EOSE would reconcile live threads away.
@@ -4709,7 +4790,7 @@ class GroupManager(
 
         val groupId = extractGroupIdFromMessage(rawMsg) ?: return null
 
-        if (isRecentlyLeft(groupId)) return null
+        if (isRecentlyLeft(relayUrl, groupId)) return null
 
         if (relayUrl != null) {
             _latestMessageRelayByGroup.update { it + (groupId to relayUrl) }
