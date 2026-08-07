@@ -62,6 +62,7 @@ import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip78
+import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.cache.DM_CACHE_KIND
@@ -784,8 +785,21 @@ class NostrRepository(
 
     private var notifPrefsCreatedAt = 0L
 
-    /** True while a relay's payload is being written into the settings, so the echo doesn't republish it. */
-    private var notifPrefsApplyingRemote = false
+    /**
+     * The override map as last agreed with the network: what this device published, or
+     * what it last accepted from another one. A change is only worth publishing when it
+     * differs from this.
+     *
+     * This is a content comparison rather than an "applying remote" flag on purpose.
+     * Writing an ingested payload into the settings makes [NotificationSettings.muteState]
+     * emit, and the watcher below observes that emission from another coroutine — after
+     * the ingest has already returned. Any flag raised around the write is back down by
+     * then, so the echo would be republished, prompting the signer on a device that only
+     * received the change and bouncing the event back to its origin.
+     *
+     * Null means "unknown", which makes the next change publish.
+     */
+    private var notifPrefsSynced: Map<String, NotificationLevel>? = null
 
     /**
      * A local change that has not reached a relay: the signer declined, was unavailable,
@@ -810,10 +824,13 @@ class NostrRepository(
         notifPrefsPublishJob?.cancel()
         notifPrefsCreatedAt = SecureStorage.loadKind30078TimestampFor(pubkey, Nip78.D_NOTIFICATIONS)
         notifPrefsUnpublished = SecureStorage.isNotifPrefsPendingFor(pubkey)
+        // What's on disk is what the last session left in agreement with the network,
+        // unless it left a change pending — then nothing is known to be synced.
+        notifPrefsSynced = if (notifPrefsUnpublished) null else settings.muteState.value.overrides
         notifPrefsWatchJob = scope.launch {
             // drop(1): the current value is what initialize() just loaded from disk, not a change.
-            settings.muteState.drop(1).collect {
-                if (notifPrefsApplyingRemote) return@collect
+            settings.muteState.drop(1).collect { state ->
+                if (state.overrides == notifPrefsSynced) return@collect
                 markNotifPrefsUnpublished(pubkey)
                 schedulePublishNotificationPrefs()
             }
@@ -830,6 +847,7 @@ class NostrRepository(
         notifPrefsPublishJob = null
         notifPrefsCreatedAt = 0L
         notifPrefsUnpublished = false
+        notifPrefsSynced = null
     }
 
     private fun markNotifPrefsUnpublished(pubkey: String) {
@@ -877,6 +895,8 @@ class NostrRepository(
             if (publishToGeneralPurposeRelays(message, eventId) is Result.Success) {
                 notifPrefsCreatedAt = signedEvent.createdAt
                 SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, signedEvent.createdAt)
+                // Exactly the snapshot that went out, so our own relay echo is a no-op.
+                notifPrefsSynced = state.overrides
                 notifPrefsUnpublished = false
                 SecureStorage.saveNotifPrefsPendingFor(pubKey, false)
             } else {
@@ -936,12 +956,10 @@ class NostrRepository(
             if (sessionManager.getPublicKey() != pubKey) return@launch
             notifPrefsCreatedAt = createdAt
             SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, createdAt)
-            notifPrefsApplyingRemote = true
-            try {
-                settings.applyRemoteGroupLevels(decoded.groupLevels)
-            } finally {
-                notifPrefsApplyingRemote = false
-            }
+            // Recorded BEFORE the write: applying it makes muteState emit, and the watcher
+            // must already see this payload as the agreed state or it republishes it.
+            notifPrefsSynced = decoded.groupLevels
+            settings.applyRemoteGroupLevels(decoded.groupLevels)
         }
     }
 
