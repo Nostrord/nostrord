@@ -872,8 +872,16 @@ class NostrRepository(
     private suspend fun publishNotificationPrefs() {
         val settings = notificationSettings ?: return
         val pubKey = sessionManager.getPublicKey() ?: return
-        val signer = ActiveAccountManager.session.value?.signer ?: return
         val state = settings.muteState.value
+        // No signer yet (session still activating, bunker reconnecting): leave the change
+        // marked pending so the next change or session start retries, and say so rather
+        // than returning silently — a mute that never reached a relay looked identical to
+        // a synced one.
+        val signer = ActiveAccountManager.session.value?.signer ?: run {
+            markNotifPrefsUnpublished(pubKey)
+            AppModule.postSystemMessage("Mute saved on this device. No signer available to sync it yet.")
+            return
+        }
         try {
             val content = signer.nip44Encrypt(
                 pubKey,
@@ -887,7 +895,10 @@ class NostrRepository(
                 content = content,
             )
             val signedEvent = sessionManager.signEvent(event)
-            val eventId = signedEvent.id ?: return
+            val eventId = signedEvent.id ?: run {
+                markNotifPrefsUnpublished(pubKey)
+                return
+            }
             val message = buildJsonArray {
                 add("EVENT")
                 add(signedEvent.toJsonObject())
@@ -2505,6 +2516,10 @@ class NostrRepository(
         // Re-seed the incoming account's mutes so filtering holds through the swap;
         // the network refresh rides the requestContactList() below.
         hydrateMuteListFromCache(pubkey)
+        // Re-arm on the incoming account. A warm swap initializes notificationSettings
+        // from AppModule, not from here, so without this the watcher stays bound to the
+        // previous pubkey and files B's changes under A.
+        startNotificationPrefsSync(pubkey)
         // Same session-cache teardown the full-logout path runs, so a warm swap does not
         // leak account A's restricted-relay / dedup state into account B (which otherwise
         // left B's groups dark until an app restart). Runs BEFORE B's re-derive below.
