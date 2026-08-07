@@ -9,6 +9,7 @@ import org.nostr.nostrord.ui.theme.paletteForTheme
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.AppLoading
+import org.nostr.nostrord.web.components.SystemMessageHost
 import org.nostr.nostrord.web.components.installGlobalModalFocusTrap
 import org.nostr.nostrord.web.components.installPullToRefresh
 import org.nostr.nostrord.web.modals.UnlockModal
@@ -97,6 +98,9 @@ val WebApp =
                     ?.setAttribute("data-app-ready", "true")
             }
         }
+
+        // Transient notices (AppModule.systemMessages), over every screen including login.
+        SystemMessageHost()
 
         // NIP-49 unlock gate: a password-protected account blocked session restore;
         // ask for the password over whatever screen is showing (mirrors native App.kt).

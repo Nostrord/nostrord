@@ -33,6 +33,7 @@ import org.nostr.nostrord.startup.AppStartState
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.ui.components.chat.AvSpaceRoomHost
 import org.nostr.nostrord.ui.components.layout.AppFrame
+import org.nostr.nostrord.ui.components.layout.SystemMessageHost
 import org.nostr.nostrord.ui.components.navigation.MinimalTitleBar
 import org.nostr.nostrord.ui.navigation.clearBrowserUrlQuery
 import org.nostr.nostrord.ui.screens.login.NostrLoginScreen
@@ -231,6 +232,10 @@ fun App() {
 
             // AV room host: mounted once so every entry point shows the same room.
             AvSpaceRoomHost()
+
+            // Transient notices (AppModule.systemMessages). Mounted last so the toast
+            // draws over every screen and host above it.
+            SystemMessageHost()
         }
     }
 }
