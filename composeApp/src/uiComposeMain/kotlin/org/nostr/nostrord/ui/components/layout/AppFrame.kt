@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -1086,6 +1087,9 @@ private fun RailGroupButton(
                 Modifier
                     .size(48.dp)
                     .clip(shape)
+                    // Muted chips recede, so a silenced group is recognisable at a glance
+                    // even when it has no traffic at all.
+                    .alpha(if (muted) 0.45f else 1f)
                     .hoverable(interactionSource),
                 shape = shape,
                 color = NostrordColors.Background,
@@ -1100,10 +1104,15 @@ private fun RailGroupButton(
                     isGroup = true,
                 )
             }
+            if (muted) {
+                RailMutedBadge(modifier = Modifier.align(Alignment.BottomEnd))
+            }
             if (unread > 0) {
                 RailBadge(count = unread, modifier = Modifier.align(Alignment.BottomEnd))
             } else if (mutedActivity) {
-                RailMutedDot(modifier = Modifier.align(Alignment.BottomEnd))
+                // Muted but moving: a dot in the free corner, since the bell-off badge
+                // owns the bottom one.
+                RailMutedDot(modifier = Modifier.align(Alignment.TopEnd))
             }
         }
     }
@@ -1126,6 +1135,30 @@ private fun RailBadge(
             color = Color.White,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/**
+ * Persistent "this group is silenced" marker on a rail chip. Unlike the sidebar row
+ * there is no label to dim, so the state needs its own mark whether or not the group
+ * has unread traffic.
+ */
+@Composable
+private fun RailMutedBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier =
+        modifier
+            .size(16.dp)
+            .clip(CircleShape)
+            .background(NostrordColors.BackgroundDark),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.NotificationsOff,
+            contentDescription = "Muted",
+            tint = NostrordColors.TextMuted,
+            modifier = Modifier.size(10.dp),
         )
     }
 }

@@ -1903,6 +1903,32 @@ body {
     bottom: auto;
 }
 
+/* Muted rail chip: the icon recedes so a silenced group reads at a glance even with
+   no traffic, and a bell-off badge names the reason. */
+.rail-group-btn.muted {
+    opacity: 0.45;
+}
+
+.rail-muted-badge {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    color: var(--color-text-muted);
+    background: var(--color-background-dark);
+    border-radius: var(--radius-full);
+    pointer-events: none;
+}
+
+.rail-muted-badge .ico {
+    width: 10px;
+    height: 10px;
+}
+
 .rail-divider {
     width: 32px;
     height: 1px;

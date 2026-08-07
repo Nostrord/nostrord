@@ -476,15 +476,15 @@ val AppFrame =
                                     setRailMenu(GroupMenuAnchor(group.meta.id, e.clientX.toDouble(), e.clientY.toDouble()))
                                 }
                                 button {
+                                    val chipActive = activeRootId == group.meta.id &&
+                                        activeRelay == group.relayUrl.normalizeRelayUrl() &&
+                                        !notificationsOpen
+                                    val chipMuted = muteState.isMuted(group.meta.id)
                                     className =
                                         ClassName(
-                                            if (activeRootId == group.meta.id &&
-                                                activeRelay == group.relayUrl.normalizeRelayUrl() &&
-                                                !notificationsOpen
-                                            ) {
-                                                "rail-group-btn active"
-                                            } else {
-                                                "rail-group-btn"
+                                            buildString {
+                                                append(if (chipActive) "rail-group-btn active" else "rail-group-btn")
+                                                if (chipMuted) append(" muted")
                                             },
                                         )
                                     title = name
@@ -502,6 +502,15 @@ val AppFrame =
                                         cls = "group-card-avatar"
                                     }
                                 }
+                                // Persistent silenced marker: unlike a sidebar row there is no
+                                // label to dim, so the state needs its own mark even with no traffic.
+                                if (muteState.isMuted(group.meta.id)) {
+                                    span {
+                                        className = ClassName("rail-muted-badge")
+                                        title = "Muted"
+                                        icon(Ic.NotificationsOff)
+                                    }
+                                }
                                 val unread = railUnread[group.meta.id] ?: 0
                                 if (unread > 0) {
                                     span {
@@ -509,8 +518,9 @@ val AppFrame =
                                         +(if (unread > 99) "99+" else "$unread")
                                     }
                                 } else if (group.meta.id in railMutedActivity) {
-                                    // Muted with traffic behind it: a dot, no number.
-                                    span { className = ClassName("rail-badge muted-dot") }
+                                    // Muted but moving: a dot in the free corner, since the
+                                    // bell-off badge owns the bottom one.
+                                    span { className = ClassName("rail-badge top muted-dot") }
                                 }
                             }
                         }
