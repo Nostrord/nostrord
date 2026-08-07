@@ -127,6 +127,17 @@ private const val FOREGROUND_PROBE_MIN_SILENCE_MS = 60_000L
  */
 private const val NOTIF_PREFS_PUBLISH_DEBOUNCE_MS = 600L
 
+/** Floor between focus-driven kind:30078 re-fetches, so window flipping can't spam relays. */
+private const val NOTIF_PREFS_FETCH_MIN_INTERVAL_S = 10L
+
+/**
+ * Safety-net poll for kind:30078 while the app is focused. The standing REQ carries a
+ * `limit`, and not every relay keeps pushing new matches on such a filter; desktop also
+ * reports no window-focus change when the user clicks over to a browser beside it. One
+ * small REQ a minute makes both devices converge regardless.
+ */
+private const val NOTIF_PREFS_TICK_MS = 60_000L
+
 /**
  * Repository for Nostr operations.
  * Coordinates between specialized managers for different concerns.
@@ -804,6 +815,8 @@ class NostrRepository(
 
     private var notifPrefsPublishJob: Job? = null
     private var notifPrefsWatchJob: Job? = null
+    private var notifPrefsFocusJob: Job? = null
+    private var notifPrefsTickJob: Job? = null
 
     /**
      * Starts mirroring the account's per-group notification levels to kind:30078.
@@ -826,11 +839,66 @@ class NostrRepository(
                 schedulePublishNotificationPrefs()
             }
         }
+        notifPrefsFocusJob?.cancel()
+        notifPrefsFocusJob = scope.launch {
+            // Pull on every focus gain, so switching to this device shows what another one
+            // changed. drop(1) skips the tracker's current value; the initial fetch below
+            // covers startup. Web hooks real window focus/blur, which is what makes two
+            // apps side by side converge on a click; desktop only reports lifecycle stops,
+            // hence the tick below.
+            AppModule.focusTracker.isAppFocused.drop(1).collect { focused ->
+                if (focused) refreshNotificationPrefs()
+            }
+        }
+        notifPrefsTickJob?.cancel()
+        notifPrefsTickJob = scope.launch {
+            refreshNotificationPrefs()
+            while (true) {
+                delay(NOTIF_PREFS_TICK_MS)
+                // Only while the user is here: a backgrounded app converges on its next
+                // focus instead of polling relays it isn't showing.
+                if (AppModule.focusTracker.isAppFocused.value) refreshNotificationPrefs()
+            }
+        }
+    }
+
+    // Throttle for the focus-driven kind:30078 re-fetch (seconds).
+    private var lastNotifPrefsFetchAt = 0L
+
+    /**
+     * Re-request the account's kind:30078 from the general-purpose relays.
+     *
+     * A standing REQ is not enough on its own: the filter carries a `limit`, and whether
+     * a relay keeps pushing new matches afterwards is not something to depend on. This
+     * runs whenever the window regains focus, which is the moment the user looks at this
+     * device after changing something on another one — including two apps open side by
+     * side, where the browser's visibilitychange never fires.
+     */
+    private suspend fun refreshNotificationPrefs() {
+        val pubKey = sessionManager.getPublicKey() ?: return
+        val now = epochSeconds()
+        if (now - lastNotifPrefsFetchAt < NOTIF_PREFS_FETCH_MIN_INTERVAL_S) return
+        lastNotifPrefsFetchAt = now
+        val nip29Relays = outboxManager.kind10009Relays.value + connectionManager.currentRelayUrl.value
+        val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays)
+            .distinct()
+            .filter { it !in nip29Relays }
+        targets.forEach { relayUrl ->
+            runCatching {
+                val client = connectionManager.getClientForRelay(relayUrl)?.takeIf { it.isConnected() }
+                    ?: connectionManager.getOrConnectRelay(relayUrl, metadataMessageHandler)
+                client?.takeIf { it.isConnected() }?.requestNotificationPrefs(pubKey)
+            }
+        }
     }
 
     private fun stopNotificationPrefsSync() {
         notifPrefsWatchJob?.cancel()
         notifPrefsWatchJob = null
+        notifPrefsFocusJob?.cancel()
+        notifPrefsFocusJob = null
+        notifPrefsTickJob?.cancel()
+        notifPrefsTickJob = null
         notifPrefsPublishJob?.cancel()
         notifPrefsPublishJob = null
         notifPrefsPublishing = false
