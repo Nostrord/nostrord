@@ -72,7 +72,6 @@ import org.nostr.nostrord.storage.getLastActiveAt
 import org.nostr.nostrord.storage.isDmCacheMigratedFor
 import org.nostr.nostrord.storage.isGroupFetchLazy
 import org.nostr.nostrord.storage.isKind10009RepublishPendingFor
-import org.nostr.nostrord.storage.isNotifPrefsPendingFor
 import org.nostr.nostrord.storage.loadDmLastRead
 import org.nostr.nostrord.storage.loadDmMessages
 import org.nostr.nostrord.storage.loadDmProcessedWrapIds
@@ -97,7 +96,6 @@ import org.nostr.nostrord.storage.saveGroupFetchLazy
 import org.nostr.nostrord.storage.saveKind10000TimestampFor
 import org.nostr.nostrord.storage.saveKind30078TimestampFor
 import org.nostr.nostrord.storage.saveMuteListSnapshotFor
-import org.nostr.nostrord.storage.saveNotifPrefsPendingFor
 import org.nostr.nostrord.storage.saveRelayListFor
 import org.nostr.nostrord.storage.setDmCacheMigratedFor
 import org.nostr.nostrord.utils.AppError
@@ -801,14 +799,8 @@ class NostrRepository(
      */
     private var notifPrefsSynced: Map<String, NotificationLevel>? = null
 
-    /**
-     * A local change that has not reached a relay: the signer declined, was unavailable,
-     * or every relay rejected. Muting is a local preference first, so the change stands
-     * either way, but while this is set an incoming remote event must NOT overwrite it
-     * (the other device's list is older than what the user just did here) and the next
-     * opportunity retries the publish.
-     */
-    private var notifPrefsUnpublished = false
+    /** True while a publish is in flight, so an arriving remote event doesn't race it. */
+    private var notifPrefsPublishing = false
 
     private var notifPrefsPublishJob: Job? = null
     private var notifPrefsWatchJob: Job? = null
@@ -822,22 +814,18 @@ class NostrRepository(
         val settings = notificationSettings ?: return
         notifPrefsWatchJob?.cancel()
         notifPrefsPublishJob?.cancel()
+        notifPrefsPublishing = false
         notifPrefsCreatedAt = SecureStorage.loadKind30078TimestampFor(pubkey, Nip78.D_NOTIFICATIONS)
-        notifPrefsUnpublished = SecureStorage.isNotifPrefsPendingFor(pubkey)
-        // What's on disk is what the last session left in agreement with the network,
-        // unless it left a change pending — then nothing is known to be synced.
-        notifPrefsSynced = if (notifPrefsUnpublished) null else settings.muteState.value.overrides
+        // A change only survives once it is published, so whatever is on disk is by
+        // definition the last state that reached the network.
+        notifPrefsSynced = settings.muteState.value.overrides
         notifPrefsWatchJob = scope.launch {
             // drop(1): the current value is what initialize() just loaded from disk, not a change.
             settings.muteState.drop(1).collect { state ->
                 if (state.overrides == notifPrefsSynced) return@collect
-                markNotifPrefsUnpublished(pubkey)
                 schedulePublishNotificationPrefs()
             }
         }
-        // A change from a previous session never made it out (declined prompt, offline):
-        // retry once the session is up rather than leaving it device-local forever.
-        if (notifPrefsUnpublished) schedulePublishNotificationPrefs()
     }
 
     private fun stopNotificationPrefsSync() {
@@ -845,14 +833,22 @@ class NostrRepository(
         notifPrefsWatchJob = null
         notifPrefsPublishJob?.cancel()
         notifPrefsPublishJob = null
+        notifPrefsPublishing = false
         notifPrefsCreatedAt = 0L
-        notifPrefsUnpublished = false
         notifPrefsSynced = null
     }
 
-    private fun markNotifPrefsUnpublished(pubkey: String) {
-        notifPrefsUnpublished = true
-        SecureStorage.saveNotifPrefsPendingFor(pubkey, true)
+    /**
+     * Puts the levels back to the last state that reached the network, after a change
+     * failed to publish. [notifPrefsSynced] already holds that state, so the watcher
+     * sees the restored value as agreed and does not try to publish the undo.
+     */
+    private fun revertNotificationPrefs(reason: String) {
+        val settings = notificationSettings ?: return
+        val synced = notifPrefsSynced ?: return
+        if (settings.muteState.value.overrides == synced) return
+        settings.applyRemoteGroupLevels(synced)
+        AppModule.postSystemMessage(reason)
     }
 
     /**
@@ -869,19 +865,21 @@ class NostrRepository(
         }
     }
 
+    /**
+     * A level change only stands once its kind:30078 is signed and accepted by a relay;
+     * anything else puts the levels back. That is the user's chosen contract: declining
+     * the signing prompt must not leave the app acting on a change it was told not to
+     * make. The cost is that muting with no signer or no reachable relay fails too,
+     * because NIP-07 surfaces a refusal and an error the same way.
+     */
     private suspend fun publishNotificationPrefs() {
         val settings = notificationSettings ?: return
-        val pubKey = sessionManager.getPublicKey() ?: return
+        val pubKey = sessionManager.getPublicKey()
+            ?: return revertNotificationPrefs("Mute undone: not signed in.")
         val state = settings.muteState.value
-        // No signer yet (session still activating, bunker reconnecting): leave the change
-        // marked pending so the next change or session start retries, and say so rather
-        // than returning silently — a mute that never reached a relay looked identical to
-        // a synced one.
-        val signer = ActiveAccountManager.session.value?.signer ?: run {
-            markNotifPrefsUnpublished(pubKey)
-            AppModule.postSystemMessage("Mute saved on this device. No signer available to sync it yet.")
-            return
-        }
+        val signer = ActiveAccountManager.session.value?.signer
+            ?: return revertNotificationPrefs("Mute undone: no signer available to sync it.")
+        notifPrefsPublishing = true
         try {
             val content = signer.nip44Encrypt(
                 pubKey,
@@ -895,10 +893,8 @@ class NostrRepository(
                 content = content,
             )
             val signedEvent = sessionManager.signEvent(event)
-            val eventId = signedEvent.id ?: run {
-                markNotifPrefsUnpublished(pubKey)
-                return
-            }
+            val eventId = signedEvent.id
+                ?: return revertNotificationPrefs("Mute undone: the event could not be signed.")
             val message = buildJsonArray {
                 add("EVENT")
                 add(signedEvent.toJsonObject())
@@ -908,20 +904,17 @@ class NostrRepository(
                 SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, signedEvent.createdAt)
                 // Exactly the snapshot that went out, so our own relay echo is a no-op.
                 notifPrefsSynced = state.overrides
-                notifPrefsUnpublished = false
-                SecureStorage.saveNotifPrefsPendingFor(pubKey, false)
             } else {
-                markNotifPrefsUnpublished(pubKey)
-                AppModule.postSystemMessage("Mute saved on this device. Could not reach a relay to sync it.")
+                revertNotificationPrefs("Mute undone: no relay accepted the change.")
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Throwable) {
-            // Declined prompt, a signer without NIP-44, or a dead relay set. The levels
-            // stand locally; say so instead of failing silently, and retry on the next
-            // change or the next session.
-            markNotifPrefsUnpublished(pubKey)
-            AppModule.postSystemMessage("Mute saved on this device only. Approve the signing request to sync it.")
+            // Declined prompt, or a signer that can't NIP-44. Indistinguishable here, and
+            // both mean the change was never agreed to.
+            revertNotificationPrefs("Mute undone: the signing request was not approved.")
+        } finally {
+            notifPrefsPublishing = false
         }
     }
 
@@ -939,10 +932,9 @@ class NostrRepository(
         }
         val dTag = tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
         if (dTag != Nip78.D_NOTIFICATIONS) return
-        // A local change is still waiting to be signed/published: it is newer than
-        // anything a relay can hand back, so applying this would undo the mute the user
-        // just made. Keep ours; the pending publish supersedes the event.
-        if (notifPrefsUnpublished) return
+        // A publish is mid-flight (the user may be staring at a signing prompt): let it
+        // settle rather than applying a payload it is about to supersede or be reverted to.
+        if (notifPrefsPublishing) return
         val createdAt = event["created_at"]?.jsonPrimitive?.longOrNull ?: 0L
         // <=, not <: a same-second replay carries no new information, and applying it
         // would fight a local change made in that same second.
@@ -963,7 +955,7 @@ class NostrRepository(
             val decoded = Nip78.decodeNotifications(plaintext) ?: return@launch
             // Superseded while decrypting (newer event, local change, account switch).
             if (createdAt <= notifPrefsCreatedAt) return@launch
-            if (notifPrefsUnpublished) return@launch
+            if (notifPrefsPublishing) return@launch
             if (sessionManager.getPublicKey() != pubKey) return@launch
             notifPrefsCreatedAt = createdAt
             SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, createdAt)

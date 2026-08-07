@@ -1243,21 +1243,6 @@ fun SecureStorage.loadKind30078TimestampFor(
     return getStringPref(kind30078TimestampKey(pubkey, dTag), "0").toLongOrNull() ?: 0L
 }
 
-// Set while a local notification-prefs change has not reached a relay (the signer
-// declined, was unavailable, or every relay rejected). Survives a restart so the
-// change is retried instead of silently staying device-local.
-private fun notifPrefsPendingKey(pubkey: String): String = "notif_prefs_pending_${pubkeyDigest(pubkey)}"
-
-fun SecureStorage.saveNotifPrefsPendingFor(
-    pubkey: String,
-    pending: Boolean,
-) {
-    if (pubkey.isBlank()) return
-    saveStringPref(notifPrefsPendingKey(pubkey), if (pending) "true" else "")
-}
-
-fun SecureStorage.isNotifPrefsPendingFor(pubkey: String): Boolean = pubkey.isNotBlank() && getStringPref(notifPrefsPendingKey(pubkey), "") == "true"
-
 // Per-account "last active" timestamp in Unix seconds. Written when the user
 // switches away from this account and as a periodic heartbeat while active so
 // it survives crashes. Used to compute the catch-up `since` for notification

@@ -124,6 +124,24 @@ class NotificationSettingsMuteTest {
     }
 
     @Test
+    fun revertingToTheSyncedMapUndoesAToggleExactly() {
+        // The sync layer reverts a change that could not be signed by writing back the
+        // last map that reached the network. That undo has to land on exactly the prior
+        // state, or a declined prompt would leave a third state behind.
+        val settings = settingsFor("mute-test-revert")
+        settings.setGroupLevel("keep", NotificationLevel.MENTIONS_REPLIES)
+        val synced = settings.muteState.value.overrides
+
+        settings.toggleMute("oops")
+        assertTrue(settings.isMuted("oops"))
+
+        settings.applyRemoteGroupLevels(synced)
+        assertFalse(settings.isMuted("oops"))
+        assertEquals(synced, settings.muteState.value.overrides)
+        assertEquals(NotificationLevel.MENTIONS_REPLIES, settings.effectiveLevelFor("keep"))
+    }
+
+    @Test
     fun remoteLevelsWithNoActiveAccountAreDropped() {
         // Guards the account-switch window: an in-flight decrypt that lands after clear()
         // must not write the previous account's groups into the next one.
