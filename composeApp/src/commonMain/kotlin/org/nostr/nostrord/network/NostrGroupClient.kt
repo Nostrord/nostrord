@@ -12,6 +12,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.livekit.isHexPubkey
+import org.nostr.nostrord.nostr.NostrFilter
 import org.nostr.nostrord.utils.epochMillis
 
 @Serializable
@@ -1100,6 +1101,36 @@ class NostrGroupClient(
                     put("limit", limit)
                 },
             )
+        }.toString()
+        send(req)
+        return subscriptionId
+    }
+
+    /**
+     * REQ an arbitrary set of already-resolved filters (spells).
+     *
+     * Multiple filters ride one REQ, which is how an author list chunked past the relay's
+     * accepted size stays a single subscription with a single EOSE. Sends CLOSE first so
+     * re-entry with the same id is idempotent.
+     */
+    suspend fun requestFilters(
+        subscriptionId: String,
+        filters: List<NostrFilter>,
+        until: Long? = null,
+    ): String {
+        if (filters.isEmpty()) return subscriptionId
+        send(
+            buildJsonArray {
+                add("CLOSE")
+                add(subscriptionId)
+            }.toString(),
+        )
+        val req = buildJsonArray {
+            add("REQ")
+            add(subscriptionId)
+            filters.forEach { filter ->
+                add((if (until != null) filter.copy(until = until) else filter).toJsonObject())
+            }
         }.toString()
         send(req)
         return subscriptionId

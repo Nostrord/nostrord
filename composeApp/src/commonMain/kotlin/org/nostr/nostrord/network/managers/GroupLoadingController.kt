@@ -160,6 +160,9 @@ data class SubscriptionTracker(
 /**
  * Per-group loading controller with its own mutex.
  * Manages state transitions and subscription tracking for a single group.
+ *
+ * [subIdPrefix] namespaces the generated subscription ids. NostrRepository routes inbound
+ * frames by subId prefix, so a non-group consumer of this controller must pick its own.
  */
 class GroupLoadingController(
     private val groupId: String,
@@ -168,6 +171,7 @@ class GroupLoadingController(
     private val timeoutMs: Long = 10_000L,
     private val maxRetries: Int = 3,
     private val maxConsecutivePaginationTimeouts: Int = 3,
+    private val subIdPrefix: String = "msg",
 ) {
     // Zero-event pagination timeouts in a row on the current frontier. Reset by any
     // completed page (EOSE) or partial delivery; reaching the cap transitions to Stalled.
@@ -200,7 +204,7 @@ class GroupLoadingController(
             is GroupLoadingState.Idle,
             is GroupLoadingState.Error,
             -> {
-                val subId = "msg_${groupId.take(8)}_${epochMillis()}"
+                val subId = "${subIdPrefix}_${groupId.take(8)}_${epochMillis()}"
                 val tracker = SubscriptionTracker(
                     subscriptionId = subId,
                     groupId = groupId,
@@ -256,7 +260,7 @@ class GroupLoadingController(
 
         when (currentState) {
             is GroupLoadingState.HasMore -> {
-                val subId = "msg_${groupId.take(8)}_${epochMillis()}"
+                val subId = "${subIdPrefix}_${groupId.take(8)}_${epochMillis()}"
                 val cursor = currentState.cursor
                 val tracker = SubscriptionTracker(
                     subscriptionId = subId,
@@ -440,7 +444,7 @@ class GroupLoadingController(
                     return@withLock null // Max retries exceeded
                 }
 
-                val subId = "msg_${groupId.take(8)}_${epochMillis()}"
+                val subId = "${subIdPrefix}_${groupId.take(8)}_${epochMillis()}"
                 val tracker = SubscriptionTracker(
                     subscriptionId = subId,
                     groupId = groupId,
@@ -575,6 +579,7 @@ class GroupLoadingRegistry(
     private val scope: CoroutineScope,
     private val pageSize: Int = 50,
     private val timeoutMs: Long = 10_000L,
+    private val subIdPrefix: String = "msg",
 ) {
     private val mutex = Mutex()
     private val controllers = mutableMapOf<String, GroupLoadingController>()
@@ -587,7 +592,7 @@ class GroupLoadingRegistry(
      */
     suspend fun getController(groupId: String): GroupLoadingController = mutex.withLock {
         controllers.getOrPut(groupId) {
-            GroupLoadingController(groupId, scope, pageSize, timeoutMs)
+            GroupLoadingController(groupId, scope, pageSize, timeoutMs, subIdPrefix = subIdPrefix)
         }
     }
 

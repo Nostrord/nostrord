@@ -13,6 +13,8 @@ import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip46Client
+import org.nostr.nostrord.nostr.Spell
+import org.nostr.nostrord.nostr.SpellContext
 import org.nostr.nostrord.utils.Result
 
 /**
@@ -103,6 +105,31 @@ interface NostrRepositoryApi {
      * group open before any kind:9 has streamed).
      */
     val groupStates: StateFlow<Map<String, org.nostr.nostrord.network.managers.GroupLoadingState>>
+
+    /** Events delivered by each open spell, keyed by [org.nostr.nostrord.network.managers.key]. */
+    val spellEvents: StateFlow<Map<String, List<NostrGroupClient.NostrMessage>>>
+
+    /** Loading state per open spell, same state machine group chat uses. */
+    val spellStates: StateFlow<Map<String, org.nostr.nostrord.network.managers.GroupLoadingState>>
+
+    /**
+     * Resolve [spell] against [ctx] and subscribe on its target relays. Fails when a runtime
+     * variable cannot be resolved, rather than sending a filter that would match nothing.
+     */
+    suspend fun openSpell(
+        spell: Spell,
+        ctx: SpellContext,
+        nip65ReadRelays: List<String> = emptyList(),
+    ): Result<Unit>
+
+    /** Fetch the page before the spell's current cursor. */
+    suspend fun loadMoreSpell(spellKey: String): Boolean
+
+    /**
+     * CLOSE the spell's subscriptions and drop its cached events. Fire and forget: the caller is
+     * a ViewModel teardown, where no scope is left alive to await on.
+     */
+    fun closeSpell(spellKey: String)
 
     /**
      * Groups whose initial history read is waiting on NIP-42 AUTH (private group on a relay

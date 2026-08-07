@@ -124,6 +124,21 @@ class FakeNostrRepository : NostrRepositoryApi {
         _groupStates
     override val groupsAwaitingAuthRead: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
+    override val spellEvents: StateFlow<Map<String, List<NostrGroupClient.NostrMessage>>> =
+        MutableStateFlow(emptyMap())
+    override val spellStates: StateFlow<Map<String, org.nostr.nostrord.network.managers.GroupLoadingState>> =
+        MutableStateFlow(emptyMap())
+
+    override suspend fun openSpell(
+        spell: org.nostr.nostrord.nostr.Spell,
+        ctx: org.nostr.nostrord.nostr.SpellContext,
+        nip65ReadRelays: List<String>,
+    ): Result<Unit> = Result.Success(Unit)
+
+    override suspend fun loadMoreSpell(spellKey: String): Boolean = false
+
+    override fun closeSpell(spellKey: String) {}
+
     override suspend fun resetGroupLoadingState(groupId: String) {}
     override val reactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> = _reactions
     override val groupMembers: StateFlow<Map<String, List<String>>> = _groupMembers
