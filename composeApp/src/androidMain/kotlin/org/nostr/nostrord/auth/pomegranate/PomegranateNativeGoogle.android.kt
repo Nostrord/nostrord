@@ -5,11 +5,11 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.CancellationException
 import java.lang.ref.WeakReference
 
 /**
@@ -38,18 +38,26 @@ internal actual object PomegranateNativeGoogle {
                 CredentialManager.create(activity).getCredential(activity, request)
             } catch (_: GetCredentialCancellationException) {
                 throw PomegranatePopupClosedException()
-            } catch (_: GetCredentialException) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Play services also reports an unregistered package / signing fingerprint here,
+                // and not always as a GetCredentialException, so anything that is not a user
+                // cancel hands the sign-in back to the browser flow.
+                println("[Pomegranate] native sign-in unavailable: ${e::class.simpleName}: ${e.message}")
                 return null
             }
         val credential = response.credential
         if (credential !is CustomCredential ||
             credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
         ) {
+            println("[Pomegranate] native sign-in returned ${credential.type}, not a Google ID token")
             return null
         }
         return try {
             GoogleIdTokenCredential.createFrom(credential.data).idToken
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            println("[Pomegranate] native sign-in token unreadable: ${e.message}")
             null
         }
     }
