@@ -119,6 +119,27 @@ class GroupLeftMarkerTest {
     }
 
     @Test
+    fun `deleting a group on one relay does not suppress the same id on another`() = runTest {
+        val scope = TestScope(testScheduler)
+        SecureStorage.saveJoinedGroupsForRelay(pubkey, otherRelay, setOf(sharedId))
+
+        val gm = makeManager(scope)
+        gm.setCurrentPubkey(pubkey)
+        gm.loadAllJoinedGroupsFromStorage(pubkey, listOf(relay, otherRelay))
+        // The throwaway group on `relay` is deleted by its owner.
+        gm.handleRemoteDeleteGroup(sharedId, relay, pubkey)
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(gm.isLocallyDropped(sharedId, relay), "the deleted group stays dropped on its relay")
+        assertFalse(
+            gm.isLocallyDropped(sharedId, otherRelay),
+            "the same-id group on another relay must still accept the kind:10009 merge",
+        )
+
+        scope.cancel()
+    }
+
+    @Test
     fun `a left marker survives a restart on its own relay only`() = runTest {
         val scope = TestScope(testScheduler)
         SecureStorage.addLeftGroupForRelay(pubkey, relay, sharedId, nowSeconds = epochSeconds())

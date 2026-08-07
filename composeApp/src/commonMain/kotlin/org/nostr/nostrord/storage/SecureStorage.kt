@@ -1424,10 +1424,15 @@ fun SecureStorage.clearAllCredentialsForAccount(pubkey: String) {
 private fun droppedGroupsForAccountKey(pubkey: String) = "dropped_groups_${pubkeyDigest(pubkey)}"
 
 /**
- * Group ids the user deleted or left on this device. Persisted so the additive kind:10009 merge
- * (OutboxManager) keeps skipping them after a restart: a relay that never received the updated list
- * still serves the old one, and without this guard the stale copy resurrects the group in the rail.
- * Cleared (per id) on re-join.
+ * Groups the user deleted or forgot on this device, as "<relay>|<groupId>". Persisted so the
+ * additive kind:10009 merge (OutboxManager) keeps skipping them after a restart: a relay that never
+ * received the updated list still serves the old one, and without this guard the stale copy
+ * resurrects the group in the rail. Cleared (per entry) on re-join.
+ *
+ * Relay-qualified because the same id names independent groups on different relays. Bare legacy
+ * entries are dropped on load: keeping them would go on suppressing a same-id group the user never
+ * touched, with no self-heal, and the cost of dropping one is bounded — a deleted group can
+ * reappear from a lagging relay's stale list until it is deleted again.
  */
 fun SecureStorage.saveDroppedGroupIds(
     pubkey: String,
@@ -1445,7 +1450,7 @@ fun SecureStorage.loadDroppedGroupIds(pubkey: String): Set<String> {
     val raw = getStringPref(droppedGroupsForAccountKey(pubkey), "")
     if (raw.isBlank()) return emptySet()
     return try {
-        Json.decodeFromString<List<String>>(raw).toSet()
+        Json.decodeFromString<List<String>>(raw).filter { '|' in it }.toSet()
     } catch (_: Exception) {
         emptySet()
     }
