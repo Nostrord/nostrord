@@ -237,11 +237,16 @@ class PomegranateService {
                         contentType(ContentType.Application.Json)
                         setBody(buildJsonObject { put("id_token", idToken) }.toString())
                     }
-                if (!res.status.isSuccess()) return null
-                res.bodyAsText()
+                val text = res.bodyAsText()
+                if (!res.status.isSuccess()) {
+                    println("[Pomegranate] central rejected the ID token (${res.status}): $text")
+                    return null
+                }
+                text
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                println("[Pomegranate] ID token exchange failed: ${e.message}")
                 return null
             }
         val raw = parseAndroidLoginToken(body) ?: return null

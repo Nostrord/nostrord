@@ -21,6 +21,9 @@ import java.lang.ref.WeakReference
  * Cloud project (Play services refuses the token in that case).
  */
 internal actual object PomegranateNativeGoogle {
+    /** Play services status code prefix, e.g. "[16] Account reauth failed.". */
+    private val GMS_STATUS_CODE = Regex("""\[\d+]""")
+
     actual val isAvailable: Boolean get() = PomegranateGoogleSignIn.activity != null
 
     actual suspend fun requestIdToken(serverClientId: String): String? {
@@ -36,7 +39,16 @@ internal actual object PomegranateNativeGoogle {
         val response =
             try {
                 CredentialManager.create(activity).getCredential(activity, request)
-            } catch (_: GetCredentialCancellationException) {
+            } catch (e: GetCredentialCancellationException) {
+                // Play services reports its own failures as a user cancel as well, tagged with a
+                // status code: an app whose package + fingerprint is not registered in the
+                // central's Google Cloud project closes the chooser with "[16] Account reauth
+                // failed.". A real dismissal carries no such code, and only that is a cancel.
+                val detail = e.errorMessage?.toString().orEmpty()
+                if (GMS_STATUS_CODE.containsMatchIn(detail)) {
+                    println("[Pomegranate] native sign-in unavailable: $detail")
+                    return null
+                }
                 throw PomegranatePopupClosedException()
             } catch (e: CancellationException) {
                 throw e
