@@ -23,8 +23,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import org.nostr.nostrord.network.createHttpClient
 import org.nostr.nostrord.nostr.Crypto
 import org.nostr.nostrord.nostr.Event
@@ -214,8 +216,40 @@ class PomegranateService {
     // --- internal -------------------------------------------------------------
 
     private suspend fun authenticateWithGoogle(central: String): GoogleToken {
+        nativeGoogleToken(central)?.let { return it }
         val raw = PomegranatePopups.awaitTokenFromPopup("$central/login/google", central)
         return decodeGoogleToken(raw)
+    }
+
+    /**
+     * Browserless sign-in: the platform account picker mints a Google ID token and the central
+     * exchanges it for its own token at `POST /login/google/android`, skipping the OAuth redirect
+     * dance entirely. Null on any platform or configuration where that is not possible, so the
+     * caller opens the browser flow instead; a user-dismissed picker propagates as a cancel.
+     */
+    private suspend fun nativeGoogleToken(central: String): GoogleToken? {
+        if (!PomegranateNativeGoogle.isAvailable) return null
+        val idToken = PomegranateNativeGoogle.requestIdToken(PomegranateConfig.GOOGLE_WEB_CLIENT_ID) ?: return null
+        val body =
+            try {
+                val res =
+                    http.post("$central/login/google/android") {
+                        contentType(ContentType.Application.Json)
+                        setBody(buildJsonObject { put("id_token", idToken) }.toString())
+                    }
+                if (!res.status.isSuccess()) return null
+                res.bodyAsText()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return null
+            }
+        val raw = parseAndroidLoginToken(body) ?: return null
+        return try {
+            decodeGoogleToken(raw)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** GET /account — the account, or null when this Google login has none yet. */
@@ -400,6 +434,13 @@ class PomegranateService {
         session: String,
         operatorUrl: String,
     ): String = Crypto.sha256("$session:$operatorUrl").toHexString()
+
+    /** Pulls the central token out of the `POST /login/google/android` reply (`{"token": "..."}`). */
+    internal fun parseAndroidLoginToken(body: String): String? = try {
+        (json.parseToJsonElement(body).jsonObject["token"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) {
+        null
+    }
 
     /** Decodes the base64 token the central popup posts; rejects expired/garbled ones. */
     @OptIn(ExperimentalEncodingApi::class)

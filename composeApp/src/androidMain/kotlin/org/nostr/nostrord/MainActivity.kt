@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import org.nostr.nostrord.auth.pomegranate.PomegranateGoogleSignIn
 import org.nostr.nostrord.network.livekit.AvMediaBridge
 import org.nostr.nostrord.network.upload.ShareMediaQueue
 import org.nostr.nostrord.nostr.Nip55AndroidBridge
@@ -45,6 +46,8 @@ class MainActivity : ComponentActivity() {
         Nip55AndroidBridge.register(this)
         // Mic / camera grants for NIP-29 AV spaces round-trip through this activity too.
         AvMediaBridge.register(this)
+        // The pomegranate Google account picker draws on this activity.
+        PomegranateGoogleSignIn.register(this)
         handleDeepLink(intent)
         handleShareIntent(intent)
         setContent {

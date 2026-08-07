@@ -17,6 +17,15 @@ object PomegranateConfig {
     const val CENTRAL_URL = "https://auth.njump.me"
 
     /**
+     * The central's Google OAuth web client, public (it rides the redirect to accounts.google.com).
+     * The Android account picker mints ID tokens with this as their audience, which is exactly what
+     * the central checks at `POST /login/google/android`. Play services only hands out such a token
+     * to an app whose package + signing fingerprint is registered as an Android OAuth client in the
+     * same Google Cloud project, so this stays inert until the central's operator adds ours.
+     */
+    const val GOOGLE_WEB_CLIENT_ID = "300561989816-7nv10jo4vdn0d6p9knf12g7rq4fcusnc.apps.googleusercontent.com"
+
+    /**
      * Recommended shard operators (the public promenade instances). Any of them can be
      * offline at a given moment, so the setup step probes them and registration tolerates
      * the ones that fail.
