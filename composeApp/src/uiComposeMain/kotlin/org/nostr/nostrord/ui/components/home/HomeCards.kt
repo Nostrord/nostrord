@@ -33,6 +33,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,6 +84,9 @@ fun GroupCard(
     // Silenced group: the card recedes and carries a bell-off mark, matching the rail chip
     // so the same group doesn't read as two different states on two surfaces.
     muted: Boolean = false,
+    // Unmute straight from the card. Null leaves the mark inert (discovery lists, where
+    // the account has no level for the group).
+    onUnmute: (() -> Unit)? = null,
     onRelayClick: (() -> Unit)? = null,
     onClick: () -> Unit = {},
 ) {
@@ -118,12 +123,31 @@ fun GroupCard(
                         )
                         if (muted) {
                             Spacer(modifier = Modifier.width(6.dp))
-                            Icon(
-                                imageVector = Icons.Outlined.NotificationsOff,
-                                contentDescription = "Muted",
-                                tint = NostrordColors.TextMuted,
-                                modifier = Modifier.size(14.dp),
-                            )
+                            // Sits at the row's trailing edge because the name takes the free
+                            // space. As an action it earns that position: a tap unmutes without
+                            // opening the group.
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(NostrordShapes.shapeSmall)
+                                    .then(
+                                        if (onUnmute != null) {
+                                            Modifier
+                                                .clickable(onClick = onUnmute)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.NotificationsOff,
+                                    contentDescription = if (onUnmute != null) "Unmute group" else "Muted",
+                                    tint = NostrordColors.TextMuted,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
                         }
                         if (isJoined) {
                             Spacer(modifier = Modifier.width(6.dp))
