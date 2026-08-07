@@ -108,6 +108,22 @@ class NotificationSettingsMuteTest {
     }
 
     @Test
+    fun appliedRemoteLevelsSurfaceVerbatimInMuteState() {
+        // The sync layer decides "is this a local change worth publishing?" by comparing
+        // muteState.overrides against the payload it just applied. If this write ever
+        // normalized or filtered the map, that comparison would always differ and every
+        // device would republish what it just received, prompting its signer each round.
+        val settings = settingsFor("mute-test-remote-verbatim")
+        val payload = mapOf(
+            "a" to NotificationLevel.MUTED,
+            "b" to NotificationLevel.MENTIONS_REPLIES,
+            "c" to NotificationLevel.ALL,
+        )
+        settings.applyRemoteGroupLevels(payload)
+        assertEquals(payload, settings.muteState.value.overrides)
+    }
+
+    @Test
     fun remoteLevelsWithNoActiveAccountAreDropped() {
         // Guards the account-switch window: an in-flight decrypt that lands after clear()
         // must not write the previous account's groups into the next one.
