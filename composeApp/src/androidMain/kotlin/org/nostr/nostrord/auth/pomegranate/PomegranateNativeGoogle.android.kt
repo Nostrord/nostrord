@@ -8,7 +8,7 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import java.lang.ref.WeakReference
 
@@ -28,16 +28,11 @@ internal actual object PomegranateNativeGoogle {
         val request =
             GetCredentialRequest
                 .Builder()
-                .addCredentialOption(
-                    GetGoogleIdOption
-                        .Builder()
-                        .setServerClientId(serverClientId)
-                        // Login screen: offer every Google account on the device, not just the
-                        // ones already linked to this app, and always let the user pick.
-                        .setFilterByAuthorizedAccounts(false)
-                        .setAutoSelectEnabled(false)
-                        .build(),
-                ).build()
+                // Button-initiated flow, not One Tap: the account chooser always opens. One Tap
+                // goes quiet for 24h once a user dismisses it a few times, which here would read
+                // as the native path silently reverting to the browser.
+                .addCredentialOption(GetSignInWithGoogleOption.Builder(serverClientId).build())
+                .build()
         val response =
             try {
                 CredentialManager.create(activity).getCredential(activity, request)
