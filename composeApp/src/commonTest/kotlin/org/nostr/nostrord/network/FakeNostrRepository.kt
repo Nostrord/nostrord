@@ -661,7 +661,7 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     override val groupRoles: StateFlow<Map<String, List<RoleDefinition>>> = MutableStateFlow(emptyMap())
     override val restrictedGroups: StateFlow<Map<String, String>> = MutableStateFlow(emptyMap())
-    override val leftGroups: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+    override val leftGroups: StateFlow<Map<String, Set<String>>> = MutableStateFlow(emptyMap())
 
     val pendingGroupInvitesFlow = MutableStateFlow<Map<String, PendingGroupInvite>>(emptyMap())
     override val pendingGroupInvites: StateFlow<Map<String, PendingGroupInvite>> = pendingGroupInvitesFlow

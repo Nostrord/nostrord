@@ -146,8 +146,12 @@ interface NostrRepositoryApi {
     /** Groups whose subscriptions were CLOSED with "restricted" — private group, non-member. */
     val restrictedGroups: StateFlow<Map<String, String>>
 
-    /** Groups the user explicitly LEFT (durable, survives restart); membership reads NONE for these. */
-    val leftGroups: StateFlow<Set<String>>
+    /**
+     * Groups the user explicitly LEFT (durable, survives restart), keyed by the relay they were
+     * left on; membership reads NONE for these. Relay-scoped because the same group id names
+     * independent groups on different relays.
+     */
+    val leftGroups: StateFlow<Map<String, Set<String>>>
 
     /**
      * External adds (an admin's kind:9000) awaiting the user's accept/decline, keyed by

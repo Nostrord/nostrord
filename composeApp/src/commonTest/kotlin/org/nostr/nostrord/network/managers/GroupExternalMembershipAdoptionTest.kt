@@ -172,7 +172,7 @@ class GroupExternalMembershipAdoptionTest {
         gm.setCurrentPubkey(pubkey)
         gm.loadAllJoinedGroupsFromStorage(pubkey, listOf(relay))
         testScheduler.advanceUntilIdle()
-        assertTrue(group in gm.leftGroups.value)
+        assertTrue(group in gm.leftGroups.value[relay].orEmpty())
 
         gm.handleGroupMembers(GroupMembers(group, listOf(pubkey)), createdAt = 100, relayUrl = relay)
         testScheduler.advanceUntilIdle()
@@ -253,7 +253,7 @@ class GroupExternalMembershipAdoptionTest {
         gm.setCurrentPubkey(pubkey)
         gm.loadAllJoinedGroupsFromStorage(pubkey, listOf(relay))
         testScheduler.advanceUntilIdle()
-        assertTrue(group in gm.leftGroups.value)
+        assertTrue(group in gm.leftGroups.value[relay].orEmpty())
 
         fun putUser(createdAt: Long) {
             val msg = NostrGroupClient.NostrMessage(
@@ -277,7 +277,7 @@ class GroupExternalMembershipAdoptionTest {
         putUser(leftAt + 100)
         testScheduler.advanceUntilIdle()
         assertTrue(group in gm.pendingGroupInvites.value, "a fresh put-user re-opens the invite")
-        assertFalse(group in gm.leftGroups.value, "the durable left marker is cleared")
+        assertFalse(group in gm.leftGroups.value[relay].orEmpty(), "the durable left marker is cleared")
 
         scope.cancel()
     }

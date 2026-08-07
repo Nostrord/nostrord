@@ -712,7 +712,9 @@ class OutboxManager(
         onRelaysRestored: suspend (List<String>) -> Unit = {},
         onRelayGroupsUpdated: (Map<String, Set<String>>) -> Unit = {},
         messageHandler: (String, NostrGroupClient) -> Unit = { _, _ -> },
-        isGroupDropped: (String) -> Boolean = { false },
+        // (relayUrl, groupId): the drop guard is per relay, since the same id on two relays is
+        // two independent groups and only one of them may have been dropped here.
+        isGroupDropped: (String, String) -> Boolean = { _, _ -> false },
         decryptPrivate: suspend (String) -> String? = { null },
     ) {
         // Author guard: relays may deliver kind:10009 events for the *previous*
@@ -895,7 +897,7 @@ class OutboxManager(
             val additions =
                 immutableRelayGroups
                     .mapValues { (relay, ids) ->
-                        ids.filterNot { it in known[relay].orEmpty() || isGroupDropped(it) }.toSet()
+                        ids.filterNot { it in known[relay].orEmpty() || isGroupDropped(relay, it) }.toSet()
                     }.filterValues { it.isNotEmpty() }
             if (additions.isEmpty()) return
             groupsMutex.withLock {

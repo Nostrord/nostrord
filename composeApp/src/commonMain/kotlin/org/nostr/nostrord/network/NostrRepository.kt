@@ -452,7 +452,7 @@ class NostrRepository(
     override val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>> = groupManager.groupRolesByRelay
     override val loadingMembers: StateFlow<Set<String>> = groupManager.loadingMembers
     override val restrictedGroups: StateFlow<Map<String, String>> = groupManager.restrictedGroups
-    override val leftGroups: StateFlow<Set<String>> = groupManager.leftGroups
+    override val leftGroups: StateFlow<Map<String, Set<String>>> = groupManager.leftGroups
     override val pendingGroupInvites: StateFlow<Map<String, PendingGroupInvite>> = groupManager.pendingGroupInvites
 
     override suspend fun acceptGroupInvite(groupId: String) {
@@ -4695,7 +4695,7 @@ class NostrRepository(
                             }
                         },
                         messageHandler = { m, c -> enqueueToRelayPipeline(m, c) },
-                        isGroupDropped = { groupManager.isLocallyDropped(it) },
+                        isGroupDropped = { relay, gid -> groupManager.isLocallyDropped(gid, relay) },
                         decryptPrivate = { ciphertext -> decryptOwnListSection(ciphertext) },
                     )
                 }
@@ -5372,7 +5372,7 @@ class NostrRepository(
                                 }
                             },
                             messageHandler = { m, c -> enqueueToRelayPipeline(m, c) },
-                            isGroupDropped = { groupManager.isLocallyDropped(it) },
+                            isGroupDropped = { relay, gid -> groupManager.isLocallyDropped(gid, relay) },
                             decryptPrivate = { ciphertext -> decryptOwnListSection(ciphertext) },
                         )
                     }
