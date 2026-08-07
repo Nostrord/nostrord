@@ -135,6 +135,22 @@ class NotificationSettings {
         )
     }
 
+    /**
+     * Installs the per-group levels carried by a newer kind:30078 from another device.
+     * Replaces the whole override map rather than merging: the event is replaceable, and
+     * a merge would resurrect a group the other device just unmuted.
+     *
+     * [defaultLevel] is deliberately not synced. Its storage slot is device-global, not
+     * per-account, so letting one account's event write it would hand the next account
+     * that device's default too.
+     */
+    fun applyRemoteGroupLevels(groups: Map<String, NotificationLevel>) {
+        val pubkey = currentPubkey ?: return
+        _groupLevels.value = groups
+        syncMuteState()
+        SecureStorage.saveGroupNotificationLevelsFor(pubkey, groups.mapValues { it.value.name })
+    }
+
     /** Drops a group's override so it tracks [defaultLevel] again. */
     fun clearGroupLevel(groupId: String) {
         val pubkey = currentPubkey ?: return

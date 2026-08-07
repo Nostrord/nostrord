@@ -61,6 +61,7 @@ import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip78
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.cache.DM_CACHE_KIND
@@ -79,6 +80,7 @@ import org.nostr.nostrord.storage.loadDmSyncCursor
 import org.nostr.nostrord.storage.loadDmWrapRumor
 import org.nostr.nostrord.storage.loadFollowingCacheFor
 import org.nostr.nostrord.storage.loadKind10000TimestampFor
+import org.nostr.nostrord.storage.loadKind30078TimestampFor
 import org.nostr.nostrord.storage.loadMuteListSnapshotFor
 import org.nostr.nostrord.storage.loadRelayListFor
 import org.nostr.nostrord.storage.saveCurrentRelayUrlFor
@@ -91,6 +93,7 @@ import org.nostr.nostrord.storage.saveDmWrapRumor
 import org.nostr.nostrord.storage.saveFollowingCacheFor
 import org.nostr.nostrord.storage.saveGroupFetchLazy
 import org.nostr.nostrord.storage.saveKind10000TimestampFor
+import org.nostr.nostrord.storage.saveKind30078TimestampFor
 import org.nostr.nostrord.storage.saveMuteListSnapshotFor
 import org.nostr.nostrord.storage.saveRelayListFor
 import org.nostr.nostrord.storage.setDmCacheMigratedFor
@@ -115,6 +118,9 @@ private const val GIFT_WRAP_BACKDATE_SECONDS = 2L * 24 * 60 * 60
 // Min frame silence before a foreground return probes a socket. A frame in the
 // last minute proves the socket is alive; below this, probing is pure overhead.
 private const val FOREGROUND_PROBE_MIN_SILENCE_MS = 60_000L
+
+/** Coalescing window for kind:30078 notification-prefs publishes: a burst of toggles is one event. */
+private const val NOTIF_PREFS_PUBLISH_DEBOUNCE_MS = 3_000L
 
 /**
  * Repository for Nostr operations.
@@ -765,6 +771,169 @@ class NostrRepository(
         }
     }
 
+    // ===== NIP-78 notification preferences (kind:30078) =====
+    // Per-group notification levels follow the account across devices. The payload is
+    // NIP-44 self-encrypted: it is a list of NIP-29 group ids, which in plaintext would
+    // hand any relay the account's group membership.
+
+    private var notifPrefsCreatedAt = 0L
+
+    /** True while a relay's payload is being written into the settings, so the echo doesn't republish it. */
+    private var notifPrefsApplyingRemote = false
+
+    private var notifPrefsPublishJob: Job? = null
+    private var notifPrefsWatchJob: Job? = null
+
+    /**
+     * Starts mirroring the account's per-group notification levels to kind:30078.
+     * Re-armed per account: the previous account's watcher is cancelled first, so a
+     * switch can never publish account A's prefs under account B.
+     */
+    private fun startNotificationPrefsSync(pubkey: String) {
+        val settings = notificationSettings ?: return
+        notifPrefsWatchJob?.cancel()
+        notifPrefsPublishJob?.cancel()
+        notifPrefsCreatedAt = SecureStorage.loadKind30078TimestampFor(pubkey, Nip78.D_NOTIFICATIONS)
+        notifPrefsWatchJob = scope.launch {
+            // drop(1): the current value is what initialize() just loaded from disk, not a change.
+            settings.muteState.drop(1).collect {
+                if (notifPrefsApplyingRemote) return@collect
+                schedulePublishNotificationPrefs()
+            }
+        }
+    }
+
+    private fun stopNotificationPrefsSync() {
+        notifPrefsWatchJob?.cancel()
+        notifPrefsWatchJob = null
+        notifPrefsPublishJob?.cancel()
+        notifPrefsPublishJob = null
+        notifPrefsCreatedAt = 0L
+    }
+
+    /**
+     * Coalesces a burst of level changes into one event. Toggling three groups in a row
+     * is one publish, not three replaceable events racing each other at the relay.
+     */
+    private fun schedulePublishNotificationPrefs() {
+        notifPrefsPublishJob?.cancel()
+        notifPrefsPublishJob = scope.launch {
+            delay(NOTIF_PREFS_PUBLISH_DEBOUNCE_MS)
+            publishNotificationPrefs()
+        }
+    }
+
+    private suspend fun publishNotificationPrefs() {
+        val settings = notificationSettings ?: return
+        val pubKey = sessionManager.getPublicKey() ?: return
+        val signer = ActiveAccountManager.session.value?.signer ?: return
+        val state = settings.muteState.value
+        try {
+            val content = signer.nip44Encrypt(
+                pubKey,
+                Nip78.encodeNotifications(state.defaultLevel, state.overrides),
+            )
+            val event = Event(
+                pubkey = pubKey,
+                createdAt = epochSeconds(),
+                kind = Nip78.KIND_APP_DATA,
+                tags = listOf(listOf("d", Nip78.D_NOTIFICATIONS)),
+                content = content,
+            )
+            val signedEvent = sessionManager.signEvent(event)
+            val eventId = signedEvent.id ?: return
+            val message = buildJsonArray {
+                add("EVENT")
+                add(signedEvent.toJsonObject())
+            }.toString()
+            if (publishToGeneralPurposeRelays(message, eventId) is Result.Success) {
+                notifPrefsCreatedAt = signedEvent.createdAt
+                SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, signedEvent.createdAt)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // A signer without NIP-44 encryption, or a dead relay set: the levels stay
+            // local and the next change retries. Never fatal to muting itself.
+        }
+    }
+
+    /**
+     * Ingests the account's own kind:30078 notification prefs. Last write wins on
+     * created_at and replaces the whole map, which is what a replaceable event means:
+     * a union-merge would resurrect a group unmuted on another device.
+     */
+    private fun handleKind30078Event(event: JsonObject) {
+        val settings = notificationSettings ?: return
+        val pubKey = sessionManager.getPublicKey() ?: return
+        if (event["pubkey"]?.jsonPrimitive?.contentOrNull != pubKey) return
+        val tags = event["tags"]?.jsonArray.orEmpty().map { tag ->
+            tag.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
+        }
+        val dTag = tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
+        if (dTag != Nip78.D_NOTIFICATIONS) return
+        val createdAt = event["created_at"]?.jsonPrimitive?.longOrNull ?: 0L
+        // <=, not <: a same-second replay carries no new information, and applying it
+        // would fight a local change made in that same second.
+        if (createdAt <= notifPrefsCreatedAt) return
+        val content = event["content"]?.jsonPrimitive?.contentOrNull ?: return
+        if (content.isBlank()) return
+        // Decrypt off the ingest path: a bunker signer is a remote round-trip.
+        scope.launch {
+            val signer = ActiveAccountManager.session.value?.signer ?: return@launch
+            val plaintext =
+                try {
+                    signer.nip44Decrypt(pubKey, content)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    return@launch
+                }
+            val decoded = Nip78.decodeNotifications(plaintext) ?: return@launch
+            // Superseded while decrypting (newer event, account switch): drop it.
+            if (createdAt <= notifPrefsCreatedAt) return@launch
+            if (sessionManager.getPublicKey() != pubKey) return@launch
+            notifPrefsCreatedAt = createdAt
+            SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, createdAt)
+            notifPrefsApplyingRemote = true
+            try {
+                settings.applyRemoteGroupLevels(decoded.groupLevels)
+            } finally {
+                notifPrefsApplyingRemote = false
+            }
+        }
+    }
+
+    /**
+     * Publishes a signed replaceable event to the account's general-purpose relays.
+     *
+     * Same routing as kind:3: write + bootstrap relays, never the NIP-29 relays (they
+     * don't serve replaceable lists back). Succeeds if any one relay accepts.
+     */
+    private suspend fun publishToGeneralPurposeRelays(
+        message: String,
+        eventId: String,
+    ): Result<Unit> {
+        val nip29Relays = outboxManager.kind10009Relays.value + connectionManager.currentRelayUrl.value
+        val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays)
+            .distinct()
+            .filter { it !in nip29Relays }
+        val clients = targets.mapNotNull { relayUrl ->
+            connectionManager.getClientForRelay(relayUrl)?.takeIf { it.isConnected() }
+                ?: connectionManager.getOrConnectRelay(relayUrl, metadataMessageHandler)?.takeIf { it.isConnected() }
+        }
+        if (clients.isEmpty()) {
+            return Result.Error(AppError.Network.Disconnected(connectionManager.currentRelayUrl.value))
+        }
+        val results = clients.map { client ->
+            scope.async { client.sendAndAwaitOkOrError(message, eventId) }
+        }.awaitAll()
+        if (results.none { it is PublishResult.Success }) {
+            return Result.Error(AppError.Network.PublishRejected(results.summarizeFailures()))
+        }
+        return Result.Success(Unit)
+    }
+
     /** Seed the mute state from the per-account snapshot so filtering works before the network answers. */
     private fun hydrateMuteListFromCache(pubkey: String) {
         muteListCreatedAt = SecureStorage.loadKind10000TimestampFor(pubkey)
@@ -1066,6 +1235,7 @@ class NostrRepository(
                 if (pubkey != null) {
                     unreadManager.initialize(pubkey)
                     notificationSettings?.initialize(pubkey)
+                    startNotificationPrefsSync(pubkey)
                     notificationHistoryStore?.initialize(pubkey)
                     hydrateMuteListFromCache(pubkey)
                     initializeOutboxModel()
@@ -1133,6 +1303,7 @@ class NostrRepository(
                 groupManager.migrateMessageBlobsToCache(pubkey)
                 unreadManager.initialize(pubkey)
                 notificationSettings?.initialize(pubkey)
+                startNotificationPrefsSync(pubkey)
                 notificationHistoryStore?.initialize(pubkey)
                 hydrateMuteListFromCache(pubkey)
                 // Arm catch-up so the first mux refresh after connect replays
@@ -1492,6 +1663,7 @@ class NostrRepository(
             }
             unreadManager.initialize(newPubkey)
             notificationSettings?.initialize(newPubkey)
+            startNotificationPrefsSync(newPubkey)
             notificationHistoryStore?.initialize(newPubkey)
             hydrateMuteListFromCache(newPubkey)
             // Arm catch-up so the first mux refresh after connect() replays the
@@ -1546,6 +1718,7 @@ class NostrRepository(
         groupManager.clear()
         unreadManager.clear()
         notificationSettings?.clear()
+        stopNotificationPrefsSync()
         notificationHistoryStore?.clear()
         liveCursorStore?.clear()
         relayPipelines.values.forEach { (_, pipeline) -> pipeline.close() }
@@ -4096,25 +4269,8 @@ class NostrRepository(
                     add(signedEvent.toJsonObject())
                 }.toString()
 
-                // Same routing as kind:3: general-purpose relays only, never NIP-29 relays
-                // (they don't serve replaceable lists back).
-                val nip29Relays = outboxManager.kind10009Relays.value + connectionManager.currentRelayUrl.value
-                val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays)
-                    .distinct()
-                    .filter { it !in nip29Relays }
-                val clients = targets.mapNotNull { relayUrl ->
-                    connectionManager.getClientForRelay(relayUrl)?.takeIf { it.isConnected() }
-                        ?: connectionManager.getOrConnectRelay(relayUrl, metadataMessageHandler)?.takeIf { it.isConnected() }
-                }
-                if (clients.isEmpty()) {
-                    return@withLock Result.Error(AppError.Network.Disconnected(connectionManager.currentRelayUrl.value))
-                }
-                val results = clients.map { client ->
-                    scope.async { client.sendAndAwaitOkOrError(message, eventId) }
-                }.awaitAll()
-                if (results.none { it is PublishResult.Success }) {
-                    return@withLock Result.Error(AppError.Network.PublishRejected(results.summarizeFailures()))
-                }
+                val publish = publishToGeneralPurposeRelays(message, eventId)
+                if (publish is Result.Error) return@withLock publish
 
                 muteListCreatedAt = signedEvent.createdAt
                 muteListPublicTags = newPublicTags
@@ -4711,6 +4867,10 @@ class NostrRepository(
             }
             if (kind == org.nostr.nostrord.nostr.Nip51.KIND_MUTE_LIST) {
                 handleKind10000Event(event)
+                return
+            }
+            if (kind == Nip78.KIND_APP_DATA) {
+                handleKind30078Event(event)
                 return
             }
             // NIP-17 DM gift wrap addressed to us: decrypt with the active signer.
@@ -5394,6 +5554,12 @@ class NostrRepository(
                 // Handle kind:10000 (NIP-51 mute list) for the active account
                 if (kind == org.nostr.nostrord.nostr.Nip51.KIND_MUTE_LIST) {
                     handleKind10000Event(event)
+                    return
+                }
+
+                // NIP-78 per-group notification levels from another device.
+                if (kind == Nip78.KIND_APP_DATA) {
+                    handleKind30078Event(event)
                     return
                 }
             }

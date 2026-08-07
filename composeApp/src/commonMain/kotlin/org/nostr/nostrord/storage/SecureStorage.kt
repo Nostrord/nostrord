@@ -1218,6 +1218,31 @@ fun SecureStorage.saveGroupNotificationLevelsFor(
     }
 }
 
+// Freshness floor for a NIP-78 (kind:30078) app-data event, per account and `d` tag.
+// A lagging relay replaying an older prefs event can't undo a change made in a
+// previous session.
+private fun kind30078TimestampKey(
+    pubkey: String,
+    dTag: String,
+): String = "kind30078_ts_${dTag}_${pubkeyDigest(pubkey)}"
+
+fun SecureStorage.saveKind30078TimestampFor(
+    pubkey: String,
+    dTag: String,
+    timestamp: Long,
+) {
+    if (pubkey.isBlank()) return
+    saveStringPref(kind30078TimestampKey(pubkey, dTag), timestamp.toString())
+}
+
+fun SecureStorage.loadKind30078TimestampFor(
+    pubkey: String,
+    dTag: String,
+): Long {
+    if (pubkey.isBlank()) return 0L
+    return getStringPref(kind30078TimestampKey(pubkey, dTag), "0").toLongOrNull() ?: 0L
+}
+
 // Per-account "last active" timestamp in Unix seconds. Written when the user
 // switches away from this account and as a periodic heartbeat while active so
 // it survives crashes. Used to compute the catch-up `since` for notification
