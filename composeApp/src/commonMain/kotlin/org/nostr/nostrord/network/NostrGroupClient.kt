@@ -984,8 +984,18 @@ class NostrGroupClient(
      * Its own REQ rather than a filter on the contact-list one: this is re-issued
      * whenever the window regains focus, which must not drag a kind:3 re-fetch along
      * with it. Re-using the same subId replaces the previous subscription in place.
+     *
+     * Two filters, because one cannot mean both things. The `limit` one fetches the
+     * current value; a relay is free to treat a limited filter as a finished query and
+     * stop there, which is what left the other device waiting for the next poll. The
+     * `since` one carries no limit, so it is unambiguously a live subscription and new
+     * events push straight through. Overlap is harmless: a re-delivered event exits on
+     * the created_at floor before it costs a decrypt.
      */
-    suspend fun requestNotificationPrefs(pubkey: String): String {
+    suspend fun requestNotificationPrefs(
+        pubkey: String,
+        liveSince: Long,
+    ): String {
         val subId = "notifprefs_${pubkey.take(8)}"
         trySendClose(subId)
         val req = buildJsonArray {
@@ -997,6 +1007,14 @@ class NostrGroupClient(
                     putJsonArray("authors") { add(pubkey) }
                     putJsonArray("#d") { add("nostrord.notifications.v1") }
                     put("limit", 1)
+                },
+            )
+            add(
+                buildJsonObject {
+                    putJsonArray("kinds") { add(30078) }
+                    putJsonArray("authors") { add(pubkey) }
+                    putJsonArray("#d") { add("nostrord.notifications.v1") }
+                    put("since", liveSince)
                 },
             )
         }

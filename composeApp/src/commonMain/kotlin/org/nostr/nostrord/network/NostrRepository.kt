@@ -128,15 +128,18 @@ private const val FOREGROUND_PROBE_MIN_SILENCE_MS = 60_000L
 private const val NOTIF_PREFS_PUBLISH_DEBOUNCE_MS = 600L
 
 /** Floor between focus-driven kind:30078 re-fetches, so window flipping can't spam relays. */
-private const val NOTIF_PREFS_FETCH_MIN_INTERVAL_S = 10L
+private const val NOTIF_PREFS_FETCH_MIN_INTERVAL_S = 3L
+
+/** How far back the live kind:30078 filter reaches, to absorb clock skew between devices. */
+private const val NOTIF_PREFS_LIVE_SLACK_S = 300L
 
 /**
- * Safety-net poll for kind:30078 while the app is focused. The standing REQ carries a
- * `limit`, and not every relay keeps pushing new matches on such a filter; desktop also
- * reports no window-focus change when the user clicks over to a browser beside it. One
- * small REQ a minute makes both devices converge regardless.
+ * Backstop poll for kind:30078 while the app is focused. The subscription's `since`
+ * filter is what should deliver a change within a second; this only covers a relay that
+ * drops the subscription, or a desktop window that reports no focus change because the
+ * user clicked over to a browser sitting beside it.
  */
-private const val NOTIF_PREFS_TICK_MS = 60_000L
+private const val NOTIF_PREFS_TICK_MS = 30_000L
 
 /**
  * Repository for Nostr operations.
@@ -887,7 +890,10 @@ class NostrRepository(
             runCatching {
                 val client = connectionManager.getClientForRelay(relayUrl)?.takeIf { it.isConnected() }
                     ?: connectionManager.getOrConnectRelay(relayUrl, metadataMessageHandler)
-                client?.takeIf { it.isConnected() }?.requestNotificationPrefs(pubKey)
+                // Slack on the live window: the publishing device's clock may sit slightly
+                // behind ours, and an event stamped a few seconds "ago" must not fall
+                // outside the subscription that is supposed to catch it.
+                client?.takeIf { it.isConnected() }?.requestNotificationPrefs(pubKey, now - NOTIF_PREFS_LIVE_SLACK_S)
             }
         }
     }
