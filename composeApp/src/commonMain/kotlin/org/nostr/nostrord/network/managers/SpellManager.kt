@@ -181,20 +181,22 @@ class SpellManager(
         }
     }
 
-    /** Route one inbound EOSE, settling the page and advancing the cursor. */
+    /**
+     * Route one inbound EOSE, settling the page and advancing the cursor.
+     *
+     * The subscription stays mapped afterwards. EOSE ends the stored page, not the feed: the REQ
+     * is still open on the relay (spells are deliberately absent from the one-shot auto-CLOSE
+     * list), so dropping the mapping here would silently discard every live event that follows.
+     * Only [close] unmaps.
+     */
     suspend fun handleEose(
         subId: String,
         relayUrl: String,
     ) {
-        val key = mutex.withLock { subToKey[subId] } ?: return
+        mutex.withLock { subToKey[subId] } ?: return
         registry.handleEose(subId, relayUrl)
         // The page is settled; anything still buffered belongs to it.
         buffer.flushAll()
-        val settled = registry.getController(key).state.value
-        if (settled !is GroupLoadingState.Paginating && settled !is GroupLoadingState.InitialLoading) {
-            mutex.withLock { subToKey.remove(subId) }
-            registry.unregisterSubscription(subId)
-        }
     }
 
     /** Drop every spell's state. Called on logout and account switch. */

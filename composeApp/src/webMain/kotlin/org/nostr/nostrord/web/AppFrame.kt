@@ -573,263 +573,267 @@ val AppFrame =
                 }
 
                 // ── Sidebar: home hub or the open group's tree ───────────────
-                div {
-                    className = ClassName("sidebar")
-                    val dmRoute = route as? DmRoute
-                    if (notificationsOpen) {
-                        NotificationsSidebar { this.vm = notifVm }
-                    } else if (groupRoute != null) {
-                        GroupSidebar {
-                            this.route = groupRoute
-                            onNavigateGroup = { pushRoute(it) }
-                        }
-                    } else if (dmRoute != null && dmEnabled) {
-                        DmSidebar {
-                            activePubkey = dmRoute.pubkey
-                            onOpenConversation = { pushRoute(it) }
-                        }
-                    } else {
-                        div {
-                            className = ClassName("sidebar-header")
-                            +"nostrord"
-                        }
-                        div {
-                            className = ClassName("sidebar-body")
+                // A spell has no second column: it is a top-level destination, so the feed
+                // takes the width the friends hub would otherwise occupy.
+                if (route !is SpellRoute || notificationsOpen) {
+                    div {
+                        className = ClassName("sidebar")
+                        val dmRoute = route as? DmRoute
+                        if (notificationsOpen) {
+                            NotificationsSidebar { this.vm = notifVm }
+                        } else if (groupRoute != null) {
+                            GroupSidebar {
+                                this.route = groupRoute
+                                onNavigateGroup = { pushRoute(it) }
+                            }
+                        } else if (dmRoute != null && dmEnabled) {
+                            DmSidebar {
+                                activePubkey = dmRoute.pubkey
+                                onOpenConversation = { pushRoute(it) }
+                            }
+                        } else {
                             div {
-                                className = ClassName("tab-strip")
-                                tabItem(hub == 0, Ic.People, "Friends") { setHub(0) }
-                                tabItem(hub == 1, Ic.Bookmark, "Saved") { setHub(1) }
+                                className = ClassName("sidebar-header")
+                                +"nostrord"
                             }
-                            if (hub == 0 && friends.isNotEmpty()) {
+                            div {
+                                className = ClassName("sidebar-body")
                                 div {
-                                    className = ClassName("sidebar-friends-search")
-                                    searchInput(
-                                        placeholder = "Search friends...",
-                                        value = friendQuery,
-                                        onChange = { setFriendQuery(it) },
-                                        compact = true,
-                                    )
+                                    className = ClassName("tab-strip")
+                                    tabItem(hub == 0, Ic.People, "Friends") { setHub(0) }
+                                    tabItem(hub == 1, Ic.Bookmark, "Saved") { setHub(1) }
                                 }
-                            }
-                            when {
-                                hub == 1 ->
+                                if (hub == 0 && friends.isNotEmpty()) {
                                     div {
-                                        className = ClassName("sidebar-note")
-                                        +"Coming soon"
+                                        className = ClassName("sidebar-friends-search")
+                                        searchInput(
+                                            placeholder = "Search friends...",
+                                            value = friendQuery,
+                                            onChange = { setFriendQuery(it) },
+                                            compact = true,
+                                        )
                                     }
-                                friendsLoading ->
-                                    div {
-                                        className = ClassName("sidebar-friends")
-                                        repeat(6) { memberSkeleton() }
-                                    }
-                                friends.isEmpty() ->
-                                    div {
-                                        className = ClassName("sidebar-follow-empty")
+                                }
+                                when {
+                                    hub == 1 ->
                                         div {
                                             className = ClassName("sidebar-note")
-                                            +"You don't follow anyone yet."
+                                            +"Coming soon"
                                         }
-                                        button {
-                                            className = ClassName("sidebar-follow-cta")
-                                            onClick = { AppModule.requestOnboarding() }
-                                            icon(Ic.PersonAdd)
-                                            +"Follow people"
+                                    friendsLoading ->
+                                        div {
+                                            className = ClassName("sidebar-friends")
+                                            repeat(6) { memberSkeleton() }
                                         }
-                                    }
-                                else ->
-                                    div {
-                                        className = ClassName("sidebar-friends")
-                                        val filtered =
-                                            if (friendQuery.isBlank()) {
-                                                friends
-                                            } else {
-                                                friends.filter { f ->
-                                                    val n =
-                                                        f.metadata?.displayName?.takeIf { it.isNotBlank() }
-                                                            ?: f.metadata?.name?.takeIf { it.isNotBlank() }
-                                                            ?: Nip19.encodeNpub(f.pubkey)
-                                                    n.contains(friendQuery, ignoreCase = true)
-                                                }
-                                            }
-                                        if (filtered.isEmpty()) {
+                                    friends.isEmpty() ->
+                                        div {
+                                            className = ClassName("sidebar-follow-empty")
                                             div {
                                                 className = ClassName("sidebar-note")
-                                                +"No friends match."
+                                                +"You don't follow anyone yet."
                                             }
-                                        }
-                                        filtered.forEach { friend ->
-                                            val friendName =
-                                                friend.metadata?.displayName?.takeIf { it.isNotBlank() }
-                                                    ?: friend.metadata?.name?.takeIf { it.isNotBlank() }
-                                                    ?: (Nip19.encodeNpub(friend.pubkey).take(12) + "…")
                                             button {
-                                                key = friend.pubkey
-                                                className = ClassName("sidebar-friend")
-                                                onClick = {
-                                                    setDrawerOpen(false)
-                                                    setProfileUser(friend.pubkey)
-                                                }
-                                                WebAvatar {
-                                                    url = friend.metadata?.picture
-                                                    seed = friend.pubkey
-                                                    name = friendName
-                                                    cls = "sidebar-friend-avatar"
-                                                }
-                                                span {
-                                                    className = ClassName("sidebar-friend-name")
-                                                    +friendName
-                                                }
+                                                className = ClassName("sidebar-follow-cta")
+                                                onClick = { AppModule.requestOnboarding() }
+                                                icon(Ic.PersonAdd)
+                                                +"Follow people"
                                             }
                                         }
-                                    }
-                            }
-                        }
-                    }
-                    div {
-                        className = ClassName("account-menu")
-                        if (menuOpen) {
-                            div {
-                                className = ClassName("account-pop-backdrop")
-                                onClick = { setMenuOpen(false) }
-                            }
-                            div {
-                                className = ClassName("account-pop")
-                                div {
-                                    className = ClassName("account-pop-label")
-                                    +"Accounts"
-                                }
-                                accounts.forEach { account ->
-                                    val isActiveAccount = account.id == activeId
-                                    val m = userMetadata[account.pubkey]
-                                    val npub = runCatching { Nip19.encodeNpub(account.pubkey) }.getOrDefault("")
-                                    // Fall back to the npub (not the generic "Account N" label)
-                                    // when the account has no name metadata.
-                                    val name =
-                                        m?.displayName?.takeIf { it.isNotBlank() }
-                                            ?: m?.name?.takeIf { it.isNotBlank() }
-                                            ?: npub
-                                    // Two sibling buttons, not a copy nested inside the switch
-                                    // button: a tiny nested target let near-misses fall through
-                                    // and change account by accident.
-                                    div {
-                                        key = account.id
-                                        className =
-                                            ClassName(
-                                                if (isActiveAccount) "account-pop-row active" else "account-pop-row",
-                                            )
-                                        button {
-                                            className = ClassName("account-pop-switch")
-                                            onClick = {
-                                                setMenuOpen(false)
-                                                if (!isActiveAccount) {
-                                                    launchApp { AppModule.accountManager.switchAccount(account.id) }
+                                    else ->
+                                        div {
+                                            className = ClassName("sidebar-friends")
+                                            val filtered =
+                                                if (friendQuery.isBlank()) {
+                                                    friends
+                                                } else {
+                                                    friends.filter { f ->
+                                                        val n =
+                                                            f.metadata?.displayName?.takeIf { it.isNotBlank() }
+                                                                ?: f.metadata?.name?.takeIf { it.isNotBlank() }
+                                                                ?: Nip19.encodeNpub(f.pubkey)
+                                                        n.contains(friendQuery, ignoreCase = true)
+                                                    }
+                                                }
+                                            if (filtered.isEmpty()) {
+                                                div {
+                                                    className = ClassName("sidebar-note")
+                                                    +"No friends match."
                                                 }
                                             }
-                                            WebAvatar {
-                                                url = m?.picture
-                                                seed = account.pubkey
-                                                this.name = name
-                                                cls = "account-pop-avatar"
-                                            }
-                                            div {
-                                                className = ClassName("account-pop-meta")
-                                                div {
-                                                    className = ClassName("account-pop-name")
-                                                    +name
-                                                }
-                                                div {
-                                                    className = ClassName("account-pop-npub-row")
+                                            filtered.forEach { friend ->
+                                                val friendName =
+                                                    friend.metadata?.displayName?.takeIf { it.isNotBlank() }
+                                                        ?: friend.metadata?.name?.takeIf { it.isNotBlank() }
+                                                        ?: (Nip19.encodeNpub(friend.pubkey).take(12) + "…")
+                                                button {
+                                                    key = friend.pubkey
+                                                    className = ClassName("sidebar-friend")
+                                                    onClick = {
+                                                        setDrawerOpen(false)
+                                                        setProfileUser(friend.pubkey)
+                                                    }
+                                                    WebAvatar {
+                                                        url = friend.metadata?.picture
+                                                        seed = friend.pubkey
+                                                        name = friendName
+                                                        cls = "sidebar-friend-avatar"
+                                                    }
                                                     span {
-                                                        className = ClassName("signer-chip")
-                                                        +signerLabel(account)
+                                                        className = ClassName("sidebar-friend-name")
+                                                        +friendName
                                                     }
                                                 }
                                             }
                                         }
-                                        button {
-                                            className =
-                                                ClassName(
-                                                    if (copiedNpub == account.id) {
-                                                        "account-pop-copy copied"
-                                                    } else {
-                                                        "account-pop-copy"
-                                                    },
-                                                )
-                                            title = "Copy npub"
-                                            onClick = {
-                                                copyToClipboard(npub)
-                                                setCopiedNpub(account.id)
-                                                window.setTimeout({ setCopiedNpub(null) }, 1200)
-                                            }
-                                            icon(if (copiedNpub == account.id) Ic.Check else Ic.ContentCopy)
-                                        }
-                                    }
-                                }
-                                div { className = ClassName("account-pop-divider") }
-                                active?.let { acct ->
-                                    button {
-                                        className = ClassName("account-pop-action")
-                                        onClick = {
-                                            setMenuOpen(false)
-                                            pushRoute(UserRoute(acct.pubkey))
-                                        }
-                                        icon(Ic.Person)
-                                        +"View profile"
-                                    }
-                                }
-                                button {
-                                    className = ClassName("account-pop-action")
-                                    onClick = {
-                                        setMenuOpen(false)
-                                        setAddAccountOpen(true)
-                                    }
-                                    icon(Ic.Add)
-                                    +"Add account"
-                                }
-                                button {
-                                    className = ClassName("account-pop-action danger")
-                                    onClick = {
-                                        setMenuOpen(false)
-                                        setConfirmLogout(true)
-                                    }
-                                    icon(Ic.Logout)
-                                    +logoutLabel
                                 }
                             }
                         }
                         div {
-                            className = ClassName("account-bar")
-                            button {
-                                className = ClassName("account-bar-trigger")
-                                title = "Switch account"
-                                onClick = { setMenuOpen(!menuOpen) }
-                                WebAvatar {
-                                    url = meta?.picture
-                                    seed = active?.pubkey
-                                    this.name = displayName
-                                    cls = "account-bar-avatar"
+                            className = ClassName("account-menu")
+                            if (menuOpen) {
+                                div {
+                                    className = ClassName("account-pop-backdrop")
+                                    onClick = { setMenuOpen(false) }
                                 }
                                 div {
-                                    className = ClassName("account-bar-meta")
+                                    className = ClassName("account-pop")
                                     div {
-                                        className = ClassName("account-bar-name")
-                                        +displayName
+                                        className = ClassName("account-pop-label")
+                                        +"Accounts"
                                     }
-                                    div {
-                                        className = ClassName("account-bar-status")
-                                        +"online"
+                                    accounts.forEach { account ->
+                                        val isActiveAccount = account.id == activeId
+                                        val m = userMetadata[account.pubkey]
+                                        val npub = runCatching { Nip19.encodeNpub(account.pubkey) }.getOrDefault("")
+                                        // Fall back to the npub (not the generic "Account N" label)
+                                        // when the account has no name metadata.
+                                        val name =
+                                            m?.displayName?.takeIf { it.isNotBlank() }
+                                                ?: m?.name?.takeIf { it.isNotBlank() }
+                                                ?: npub
+                                        // Two sibling buttons, not a copy nested inside the switch
+                                        // button: a tiny nested target let near-misses fall through
+                                        // and change account by accident.
+                                        div {
+                                            key = account.id
+                                            className =
+                                                ClassName(
+                                                    if (isActiveAccount) "account-pop-row active" else "account-pop-row",
+                                                )
+                                            button {
+                                                className = ClassName("account-pop-switch")
+                                                onClick = {
+                                                    setMenuOpen(false)
+                                                    if (!isActiveAccount) {
+                                                        launchApp { AppModule.accountManager.switchAccount(account.id) }
+                                                    }
+                                                }
+                                                WebAvatar {
+                                                    url = m?.picture
+                                                    seed = account.pubkey
+                                                    this.name = name
+                                                    cls = "account-pop-avatar"
+                                                }
+                                                div {
+                                                    className = ClassName("account-pop-meta")
+                                                    div {
+                                                        className = ClassName("account-pop-name")
+                                                        +name
+                                                    }
+                                                    div {
+                                                        className = ClassName("account-pop-npub-row")
+                                                        span {
+                                                            className = ClassName("signer-chip")
+                                                            +signerLabel(account)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            button {
+                                                className =
+                                                    ClassName(
+                                                        if (copiedNpub == account.id) {
+                                                            "account-pop-copy copied"
+                                                        } else {
+                                                            "account-pop-copy"
+                                                        },
+                                                    )
+                                                title = "Copy npub"
+                                                onClick = {
+                                                    copyToClipboard(npub)
+                                                    setCopiedNpub(account.id)
+                                                    window.setTimeout({ setCopiedNpub(null) }, 1200)
+                                                }
+                                                icon(if (copiedNpub == account.id) Ic.Check else Ic.ContentCopy)
+                                            }
+                                        }
                                     }
-                                }
-                                span {
-                                    className = ClassName(if (menuOpen) "account-chevron open" else "account-chevron")
-                                    icon(Ic.ChevronRight)
+                                    div { className = ClassName("account-pop-divider") }
+                                    active?.let { acct ->
+                                        button {
+                                            className = ClassName("account-pop-action")
+                                            onClick = {
+                                                setMenuOpen(false)
+                                                pushRoute(UserRoute(acct.pubkey))
+                                            }
+                                            icon(Ic.Person)
+                                            +"View profile"
+                                        }
+                                    }
+                                    button {
+                                        className = ClassName("account-pop-action")
+                                        onClick = {
+                                            setMenuOpen(false)
+                                            setAddAccountOpen(true)
+                                        }
+                                        icon(Ic.Add)
+                                        +"Add account"
+                                    }
+                                    button {
+                                        className = ClassName("account-pop-action danger")
+                                        onClick = {
+                                            setMenuOpen(false)
+                                            setConfirmLogout(true)
+                                        }
+                                        icon(Ic.Logout)
+                                        +logoutLabel
+                                    }
                                 }
                             }
-                            button {
-                                className = ClassName("icon-btn")
-                                title = "Settings"
-                                onClick = { pushRoute(SettingsRoute) }
-                                icon(Ic.Settings)
+                            div {
+                                className = ClassName("account-bar")
+                                button {
+                                    className = ClassName("account-bar-trigger")
+                                    title = "Switch account"
+                                    onClick = { setMenuOpen(!menuOpen) }
+                                    WebAvatar {
+                                        url = meta?.picture
+                                        seed = active?.pubkey
+                                        this.name = displayName
+                                        cls = "account-bar-avatar"
+                                    }
+                                    div {
+                                        className = ClassName("account-bar-meta")
+                                        div {
+                                            className = ClassName("account-bar-name")
+                                            +displayName
+                                        }
+                                        div {
+                                            className = ClassName("account-bar-status")
+                                            +"online"
+                                        }
+                                    }
+                                    span {
+                                        className = ClassName(if (menuOpen) "account-chevron open" else "account-chevron")
+                                        icon(Ic.ChevronRight)
+                                    }
+                                }
+                                button {
+                                    className = ClassName("icon-btn")
+                                    title = "Settings"
+                                    onClick = { pushRoute(SettingsRoute) }
+                                    icon(Ic.Settings)
+                                }
                             }
                         }
                     }

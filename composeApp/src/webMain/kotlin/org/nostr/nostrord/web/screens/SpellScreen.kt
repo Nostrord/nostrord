@@ -7,7 +7,9 @@ import org.nostr.nostrord.utils.formatTimestamp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.AvatarKind
+import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.WebAvatar
+import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.navigation.pushRoute
 import react.FC
 import react.Props
@@ -35,10 +37,11 @@ val SpellScreen = FC<SpellScreenProps> { props ->
     div {
         className = ClassName("page-header")
         props.onOpenDrawer?.let { open ->
+            // Hidden above 767px by .chat-drawer-btn: on desktop the rail is already on screen.
             button {
-                className = ClassName("page-header-menu")
+                className = ClassName("chat-icon-btn chat-drawer-btn")
                 onClick = { open() }
-                +"☰"
+                icon(Ic.Menu)
             }
         }
         span {
