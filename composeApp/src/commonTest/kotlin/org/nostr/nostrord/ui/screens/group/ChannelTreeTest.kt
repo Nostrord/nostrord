@@ -136,6 +136,33 @@ class ChannelTreeTest {
         assertEquals(order, moveChannelBefore(order, "a", "x"))
     }
 
+    // ── aggregateUnreadUnmuted ──────────────────────────────────────────────
+
+    @Test
+    fun mutedRootZeroesItsWholeTree() {
+        val children = mapOf("root" to setOf("c1", "c2"))
+        val unread = mapOf("root" to 3, "c1" to 5, "c2" to 1)
+        assertEquals(9, aggregateUnread("root", children, unread))
+        assertEquals(0, aggregateUnreadUnmuted("root", children, unread) { it == "root" })
+    }
+
+    @Test
+    fun mutedChannelDropsOutOfALiveRoot() {
+        val children = mapOf("root" to setOf("c1", "c2"))
+        val unread = mapOf("root" to 3, "c1" to 5, "c2" to 1)
+        assertEquals(4, aggregateUnreadUnmuted("root", children, unread) { it == "c1" })
+    }
+
+    @Test
+    fun nothingMutedMatchesThePlainAggregate() {
+        val children = mapOf("root" to setOf("c1"))
+        val unread = mapOf("root" to 2, "c1" to 4)
+        assertEquals(
+            aggregateUnread("root", children, unread),
+            aggregateUnreadUnmuted("root", children, unread) { false },
+        )
+    }
+
     // ── isLockedChannel ─────────────────────────────────────────────────────
 
     @Test

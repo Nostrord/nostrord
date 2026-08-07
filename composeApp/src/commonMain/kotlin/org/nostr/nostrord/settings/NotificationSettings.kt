@@ -17,10 +17,26 @@ import org.nostr.nostrord.storage.saveGroupNotificationLevelsFor
  *   user's own messages notify. Ordinary chatter is silent.
  * - [MUTED] — nothing notifies, not even direct mentions/replies.
  *
- * Unread badges are independent of this setting: a quiet or muted group still
- * accumulates its unread count, it just doesn't fire the feed/sound/popup.
+ * [MENTIONS_REPLIES] still shows the unread count; only the feed/sound/popup is
+ * skipped. [MUTED] additionally drops the group out of the rail and total badge
+ * rollups, so a muted group reads as a dim dot rather than a number. The count is
+ * still tracked internally, so the unread divider and jump-to-unread keep working
+ * once the group is opened.
  */
 enum class NotificationLevel { ALL, MENTIONS_REPLIES, MUTED }
+
+/**
+ * An immutable snapshot of "how loud is each group", published as one flow so a
+ * consumer resolves a group's level without racing the default against the overrides.
+ */
+data class MuteState(
+    val defaultLevel: NotificationLevel = NotificationLevel.ALL,
+    val overrides: Map<String, NotificationLevel> = emptyMap(),
+) {
+    fun levelFor(groupId: String): NotificationLevel = overrides[groupId] ?: defaultLevel
+
+    fun isMuted(groupId: String): Boolean = levelFor(groupId) == NotificationLevel.MUTED
+}
 
 /**
  * User-facing notification preferences — toggled from Settings → Notifications.
@@ -60,7 +76,16 @@ class NotificationSettings {
     private val _groupLevels = MutableStateFlow<Map<String, NotificationLevel>>(emptyMap())
     val groupLevels: StateFlow<Map<String, NotificationLevel>> = _groupLevels.asStateFlow()
 
+    // Default + overrides as one value, for consumers that resolve a group's level
+    // reactively (badge rollups, muted styling) and must not see the two halves apart.
+    private val _muteState = MutableStateFlow(MuteState(_defaultLevel.value))
+    val muteState: StateFlow<MuteState> = _muteState.asStateFlow()
+
     private var currentPubkey: String? = null
+
+    private fun syncMuteState() {
+        _muteState.value = MuteState(_defaultLevel.value, _groupLevels.value)
+    }
 
     fun setSoundEnabled(enabled: Boolean) {
         _soundEnabled.value = enabled
@@ -75,6 +100,7 @@ class NotificationSettings {
     fun setDefaultLevel(level: NotificationLevel) {
         _defaultLevel.value = level
         SecureStorage.saveStringPref(KEY_DEFAULT_LEVEL, level.name)
+        syncMuteState()
     }
 
     /** Load the active account's per-group overrides. Call on account activation. */
@@ -86,12 +112,14 @@ class NotificationSettings {
                     runCatching { id to NotificationLevel.valueOf(name) }.getOrNull()
                 }
                 .toMap()
+        syncMuteState()
     }
 
     /** Drop the active account's overrides on logout / account switch. */
     fun clear() {
         currentPubkey = null
         _groupLevels.value = emptyMap()
+        syncMuteState()
     }
 
     fun setGroupLevel(
@@ -100,6 +128,32 @@ class NotificationSettings {
     ) {
         val pubkey = currentPubkey ?: return
         _groupLevels.update { it + (groupId to level) }
+        syncMuteState()
+        SecureStorage.saveGroupNotificationLevelsFor(
+            pubkey,
+            _groupLevels.value.mapValues { it.value.name },
+        )
+    }
+
+    /**
+     * One-click mute from a group row. Unmuting returns the group to the global
+     * default rather than pinning it to [NotificationLevel.ALL], so a later change
+     * of the default still reaches it.
+     */
+    fun toggleMute(groupId: String) {
+        val pubkey = currentPubkey ?: return
+        _groupLevels.update {
+            if (isMuted(groupId)) {
+                if (_defaultLevel.value == NotificationLevel.MUTED) {
+                    it + (groupId to NotificationLevel.ALL)
+                } else {
+                    it - groupId
+                }
+            } else {
+                it + (groupId to NotificationLevel.MUTED)
+            }
+        }
+        syncMuteState()
         SecureStorage.saveGroupNotificationLevelsFor(
             pubkey,
             _groupLevels.value.mapValues { it.value.name },
@@ -107,6 +161,8 @@ class NotificationSettings {
     }
 
     fun effectiveLevelFor(groupId: String): NotificationLevel = _groupLevels.value[groupId] ?: _defaultLevel.value
+
+    fun isMuted(groupId: String): Boolean = effectiveLevelFor(groupId) == NotificationLevel.MUTED
 
     /**
      * Whether a notification should fire for a message of the given [level].

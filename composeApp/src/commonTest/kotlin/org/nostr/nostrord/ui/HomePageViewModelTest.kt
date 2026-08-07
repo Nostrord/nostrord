@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -11,6 +12,8 @@ import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.notifications.NotificationEntry
 import org.nostr.nostrord.notifications.NotificationHistoryStore
 import org.nostr.nostrord.notifications.NotificationType
+import org.nostr.nostrord.settings.MuteState
+import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.ui.screens.home.Friend
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
 import org.nostr.nostrord.ui.screens.home.railKey
@@ -87,6 +90,39 @@ class HomePageViewModelTest {
             vm.myGroups.value.map { it.relayUrl to it.meta.name },
         )
         assertEquals(2, vm.railRootGroups.value.size)
+    }
+
+    @Test
+    fun `muted groups report no rail count and surface as activity instead`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value = mapOf("wss://a" to listOf(meta("loud", "Loud"), meta("quiet", "Quiet")))
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("loud", "quiet"))
+        fake._unreadCounts.value = mapOf("loud" to 4, "quiet" to 7)
+        val mute = MutableStateFlow(MuteState(overrides = mapOf("quiet" to NotificationLevel.MUTED)))
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher, muteState = mute)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(mapOf("loud" to 4, "quiet" to 0), vm.railUnreadCounts.value)
+        assertEquals(setOf("quiet"), vm.railMutedActivity.value)
+
+        // Unmuting restores the number without any new traffic.
+        mute.value = MuteState()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(mapOf("loud" to 4, "quiet" to 7), vm.railUnreadCounts.value)
+        assertEquals(emptySet(), vm.railMutedActivity.value)
+    }
+
+    @Test
+    fun `a muted group with nothing unread shows no marker at all`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._groupsByRelay.value = mapOf("wss://a" to listOf(meta("quiet", "Quiet")))
+        fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("quiet"))
+        val mute = MutableStateFlow(MuteState(overrides = mapOf("quiet" to NotificationLevel.MUTED)))
+        val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher, muteState = mute)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(mapOf("quiet" to 0), vm.railUnreadCounts.value)
+        assertEquals(emptySet(), vm.railMutedActivity.value)
     }
 
     @Test
