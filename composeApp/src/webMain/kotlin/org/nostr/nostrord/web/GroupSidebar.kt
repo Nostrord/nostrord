@@ -19,6 +19,8 @@ import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
+import org.nostr.nostrord.web.components.GroupContextMenu
+import org.nostr.nostrord.web.components.GroupMenuAnchor
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.Portal
 import org.nostr.nostrord.web.components.WebAvatar
@@ -64,6 +66,9 @@ val GroupSidebar =
         val relayMetadata = useStateFlow(vm.relayMetadata)
         val joinedGroupsByRelay = useStateFlow(vm.joinedGroupsByRelay)
         val unreadCounts = useStateFlow(AppModule.nostrRepository.unreadCounts)
+        val muteState = useStateFlow(AppModule.notificationSettings.muteState)
+        // Open group context menu: which row, and where it was right-clicked.
+        val (groupMenu, setGroupMenu) = useState<GroupMenuAnchor?> { null }
         val (showMembers, setShowMembers) = useState { false }
         val (showCreateSubgroup, setShowCreateSubgroup) = useState { false }
         val (showManage, setShowManage) = useState { false }
@@ -310,6 +315,9 @@ val GroupSidebar =
                         // Only first-level channels reorder: their order is the root's child
                         // tag positions; nested foreign rows just render.
                         val draggable = isRootAdmin && entry.depth == 1
+                        // Muting the root silences the whole tree, so a channel inside a muted
+                        // group reads as muted without an override of its own.
+                        val channelMuted = muteState.isMuted(entry.id) || muteState.isMuted(rootId)
                         button {
                             key = entry.id
                             className =
@@ -318,10 +326,15 @@ val GroupSidebar =
                                         append(if (active) "group-side-row active$depthCls" else "group-side-row$depthCls")
                                         if (dragId == entry.id) append(" dragging")
                                         if (overId == entry.id && dragId != null && dragId != entry.id) append(" drag-over")
+                                        if (channelMuted) append(" muted")
                                     },
                                 )
                             if (draggable) asDynamic()["data-sgid"] = entry.id
                             onClick = { props.onNavigateGroup(GroupRoute(route.relayUrl, entry.id)) }
+                            onContextMenu = { e ->
+                                e.preventDefault()
+                                setGroupMenu(GroupMenuAnchor(entry.id, e.clientX.toDouble(), e.clientY.toDouble()))
+                            }
                             if (draggable) {
                                 span {
                                     className = ClassName("group-side-row-drag")
@@ -349,11 +362,23 @@ val GroupSidebar =
                                     icon(Ic.Lock)
                                 }
                             }
+                            if (channelMuted) {
+                                span {
+                                    className = ClassName("group-side-row-lock")
+                                    title = "Muted"
+                                    icon(Ic.NotificationsOff)
+                                }
+                            }
                             val unread = unreadCounts[entry.id] ?: 0
                             if (unread > 0) {
-                                span {
-                                    className = ClassName("count-badge")
-                                    +(if (unread > 99) "99+" else "$unread")
+                                if (channelMuted) {
+                                    // Dot, not a count: the number is exactly the noise muting removes.
+                                    span { className = ClassName("muted-dot") }
+                                } else {
+                                    span {
+                                        className = ClassName("count-badge")
+                                        +(if (unread > 99) "99+" else "$unread")
+                                    }
                                 }
                             }
                         }
@@ -366,6 +391,20 @@ val GroupSidebar =
                             asDynamic()["data-sgid"] = END_DROP
                         }
                     }
+                }
+            }
+        }
+
+        groupMenu?.let { anchor ->
+            // Portaled for the same reason as the modals below: the drawer's `transform`
+            // would trap a position:fixed menu inside it.
+            Portal {
+                GroupContextMenu {
+                    x = anchor.x
+                    y = anchor.y
+                    muted = muteState.isMuted(anchor.groupId)
+                    onClose = { setGroupMenu(null) }
+                    onToggleMute = { AppModule.notificationSettings.toggleMute(anchor.groupId) }
                 }
             }
         }

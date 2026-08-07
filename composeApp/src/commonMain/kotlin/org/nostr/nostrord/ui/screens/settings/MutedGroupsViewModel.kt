@@ -38,15 +38,17 @@ class MutedGroupsViewModel(
      */
     val rows: StateFlow<List<MutedGroupRow>> =
         combine(settings.groupLevels, repo.groupsByRelay, repo.joinedGroupsByRelay) { levels, byRelay, joined ->
-            val located = buildMap {
-                joined.forEach { (relayUrl, ids) ->
-                    byRelay[relayUrl].orEmpty().forEach { meta ->
-                        if (meta.id in ids) putIfAbsent(meta.id, relayUrl to meta)
-                    }
+            // First relay wins for a same-id group joined twice: the panel is keyed by the
+            // bare id the override itself uses, so it can only point at one of them.
+            val located = mutableMapOf<String, Pair<String, GroupMetadata>>()
+            joined.forEach { (relayUrl, ids) ->
+                byRelay[relayUrl].orEmpty().forEach { meta ->
+                    if (meta.id in ids && meta.id !in located) located[meta.id] = relayUrl to meta
                 }
             }
             levels.map { (groupId, level) ->
-                val (relayUrl, meta) = located[groupId] ?: ("" to null as GroupMetadata?)
+                val relayUrl = located[groupId]?.first.orEmpty()
+                val meta = located[groupId]?.second
                 MutedGroupRow(
                     groupId = groupId,
                     relayUrl = relayUrl,

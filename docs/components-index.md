@@ -46,6 +46,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `GroupCardSkeleton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/home/HomeCards.kt | Shimmer placeholder shaped like a [GroupCard], shown while a tab is still loading. |
 | `GroupCardSkeleton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/loading/SkeletonLoader.kt | Skeleton loader for group cards on the home screen. |
 | `GroupCard` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/home/HomeCards.kt | Home page building blocks — Compose counterpart of the web's `.group-card` / |
+| `GroupContextMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/layout/GroupContextMenu.kt | Right-click / long-press menu for a group row (rail chip, channel row, group card). |
 | `GroupGradientAvatar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/avatars/GradientAvatar.kt | Deterministic gradient fallback for group avatars (prototype gradientGroupAvatar): |
 | `GroupInviteCard` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/GroupInviteCard.kt | DM group-invite card (prototype InviteCard): "GROUP INVITE" eyebrow + group avatar/name, |
 | `GroupSidebar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/layout/GroupSidebar.kt | Second column when a group is open (prototype ChannelsSidebar group mode): the |
@@ -125,6 +126,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `GeneratedKeyCard` | webMain/kotlin/org/nostr/nostrord/web/components/GeneratedKeyCard.kt | Generated private key panel shown after "Generate New Identity". Displays the |
 | `GoogleLogo` | webMain/kotlin/org/nostr/nostrord/web/components/GoogleLogo.kt | The multicolor Google "G" mark, inlined so the login button needs no asset fetch. |
 | `GroupAvatarUploadRow` | webMain/kotlin/org/nostr/nostrord/web/components/GroupAvatarUploadRow.kt | Group avatar preview + "Change photo" upload. Shared by Create Group and Manage > Info so the |
+| `GroupContextMenu` | webMain/kotlin/org/nostr/nostrord/web/components/GroupContextMenu.kt | Right-click / long-press menu for a group row (rail chip, channel row). Shares the |
 | `GroupInfoModal` | webMain/kotlin/org/nostr/nostrord/web/modals/GroupInfoModal.kt | Group info modal — prototype GroupInfoModal: title bar, gradient cover with the |
 | `GroupInviteCard` | webMain/kotlin/org/nostr/nostrord/web/components/GroupInviteCard.kt | DM group-invite card (prototype InviteCard): "GROUP INVITE" eyebrow + group avatar/name, |
 | `GroupInviteModal` | webMain/kotlin/org/nostr/nostrord/web/modals/GroupInviteModal.kt | The pending-invite prompt (web counterpart of GroupScreen's GroupInviteDialog), in the |
