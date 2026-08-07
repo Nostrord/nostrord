@@ -6,6 +6,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 @OptIn(ExperimentalEncodingApi::class)
 class PomegranateServiceTest {
@@ -58,5 +59,18 @@ class PomegranateServiceTest {
     fun decodeGoogleTokenRejectsGarbage() {
         assertFailsWith<Exception> { service.decodeGoogleToken("not-base64!!") }
         assertFailsWith<Exception> { service.decodeGoogleToken(Base64.encode("[1,2]".encodeToByteArray())) }
+    }
+
+    @Test
+    fun parseAndroidLoginTokenReadsTheTokenField() {
+        assertEquals("abc123", service.parseAndroidLoginToken("""{"token":"abc123"}"""))
+    }
+
+    @Test
+    fun parseAndroidLoginTokenReturnsNullOnUnusableReplies() {
+        // An error page or an empty token must fall back to the browser flow, not log in blank.
+        assertNull(service.parseAndroidLoginToken("invalid google token audience"))
+        assertNull(service.parseAndroidLoginToken("""{"error":"nope"}"""))
+        assertNull(service.parseAndroidLoginToken("""{"token":""}"""))
     }
 }

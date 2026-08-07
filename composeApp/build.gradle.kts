@@ -82,8 +82,13 @@ kotlin {
         androidMain.dependencies {
             implementation("io.github.nostrord:pomegranate-dealer:0.1.0")
             implementation(compose.preview)
-            // Chrome Custom Tabs for the pomegranate Google sign-in (system browser, not WebView).
+            // Chrome Custom Tabs: pomegranate Google sign-in fallback when the account picker
+            // below has nothing to offer (no Play services, no Google account, unregistered build).
             implementation("androidx.browser:browser:1.8.0")
+            // Credential Manager: browserless Google sign-in for pomegranate.
+            implementation("androidx.credentials:credentials:1.6.0")
+            implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+            implementation("com.google.android.libraries.identity.googleid:googleid:1.2.0")
             implementation(libs.androidx.activity.compose)
             implementation("io.ktor:ktor-client-okhttp:3.4.2")
             implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.14.0")
