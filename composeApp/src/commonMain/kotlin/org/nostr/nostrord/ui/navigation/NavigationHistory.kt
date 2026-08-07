@@ -23,6 +23,7 @@ fun routeKey(route: HashRoute?): String = when (route) {
     is GroupRoute -> "g:${route.relayUrl}/${route.groupId}:${route.view}:${route.threadRootId ?: ""}"
     is RelayRoute -> "r:${route.relayUrl}"
     is UserRoute -> "u:${route.pubkey}"
+    is SpellRoute -> "s:${route.spellId}"
     is DmRoute -> "dm:${route.pubkey ?: ""}"
     is NotificationsRoute -> "notifications"
     is SettingsRoute -> "settings"

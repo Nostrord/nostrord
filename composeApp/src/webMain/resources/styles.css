@@ -11311,3 +11311,142 @@ button.hierarchy-crumb-item:hover {
     font-size: 11px;
     font-weight: 700;
 }
+
+/* ---------------------------------------------------------------------------
+   Spells: saved queries rendered as a feed. Rail chips reuse the group chip
+   geometry but carry an initial instead of an avatar, so a spell reads as a
+   destination without being mistaken for a group.
+   --------------------------------------------------------------------------- */
+
+.rail-spell-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    padding: 0;
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    font-size: 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-radius 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.rail-spell-btn:hover,
+.rail-spell-btn.active {
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    background: var(--color-background);
+}
+
+/* Owns the vertical space under the page header, so the feed scrolls on its own
+   instead of pushing the frame. */
+.spell-feed {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--color-background);
+}
+
+.spell-row {
+    display: flex;
+    gap: var(--space-md);
+    max-width: 720px;
+    margin: 0 auto;
+    padding: var(--space-md) var(--space-lg);
+    border-bottom: 1px solid var(--color-line);
+}
+
+.spell-row:hover {
+    background: var(--color-message-hover);
+}
+
+.spell-row-avatar {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: var(--radius-full);
+}
+
+.spell-row-body {
+    min-width: 0;
+    flex: 1;
+}
+
+.spell-row-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-xxs);
+}
+
+.spell-row-name {
+    font-weight: 600;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.spell-row-time {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.spell-row-content {
+    color: var(--color-text-content);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+/* Feed media is decoration, not the subject: cap it so one image cannot own the
+   viewport the way a chat attachment can. */
+.spell-row-content img,
+.spell-row-content video {
+    max-width: 100%;
+    max-height: 320px;
+    height: auto;
+    border-radius: var(--radius-md);
+}
+
+.spell-empty {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: var(--space-xxxl) var(--space-lg);
+    text-align: center;
+    color: var(--color-text-muted);
+}
+
+.spell-load-more {
+    display: block;
+    margin: var(--space-lg) auto var(--space-xxxl);
+    padding: var(--space-sm) var(--space-lg);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+
+.spell-load-more:hover {
+    background: var(--color-hover);
+    color: var(--color-text-primary);
+}
+
+/* The rail's add-spell affordance: same chip geometry, muted until hovered. */
+.rail-spell-add {
+    font-size: 22px;
+    font-weight: 400;
+    border-style: dashed;
+    color: var(--color-text-muted);
+}
+
+/* Validation message under the create-spell fields. */
+.modal-error-text {
+    color: var(--color-error);
+}

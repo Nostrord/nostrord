@@ -45,6 +45,7 @@ import org.nostr.nostrord.network.managers.ConnectionStats
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmManager
 import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.network.managers.GroupLoadingState
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.LiveCursorStore
 import org.nostr.nostrord.network.managers.MetadataManager
@@ -54,6 +55,7 @@ import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.RelayMetadataManager
 import org.nostr.nostrord.network.managers.RelayReconnectScheduler
 import org.nostr.nostrord.network.managers.SessionManager
+import org.nostr.nostrord.network.managers.SpellManager
 import org.nostr.nostrord.network.managers.UnreadManager
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
@@ -61,6 +63,8 @@ import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Spell
+import org.nostr.nostrord.nostr.SpellContext
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.cache.DM_CACHE_KIND
@@ -404,6 +408,32 @@ class NostrRepository(
             } != null
         },
     )
+
+    // Saved-query feeds. Reaches relays outside the group pool, so it connects on demand
+    // through the same pipeline every other read uses.
+    private val spellManager = SpellManager(
+        scope = scope,
+        connectRelay = { relayUrl ->
+            connectionManager.getClientForRelay(relayUrl)
+                ?: connectionManager.getOrConnectRelay(relayUrl) { msg, c -> enqueueToRelayPipeline(msg, c) }
+        },
+        pooledRelay = { relayUrl -> connectionManager.getClientForRelay(relayUrl) },
+    )
+
+    override val spellEvents: StateFlow<Map<String, List<NostrGroupClient.NostrMessage>>> = spellManager.events
+    override val spellStates: StateFlow<Map<String, GroupLoadingState>> = spellManager.states
+
+    override suspend fun openSpell(
+        spell: Spell,
+        ctx: SpellContext,
+        nip65ReadRelays: List<String>,
+    ): Result<Unit> = spellManager.open(spell, ctx, nip65ReadRelays)
+
+    override suspend fun loadMoreSpell(spellKey: String): Boolean = spellManager.loadMore(spellKey)
+
+    override fun closeSpell(spellKey: String) {
+        scope.launch { spellManager.close(spellKey) }
+    }
 
     private val _isInitialized = MutableStateFlow(false)
     override val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
@@ -4892,6 +4922,10 @@ class NostrRepository(
                 val sourceRelayUrl = client.getRelayUrl()
                 scope.launch {
                     yield()
+                    if (spellManager.owns(subId)) {
+                        spellManager.handleEose(subId, sourceRelayUrl)
+                        return@launch
+                    }
                     // A msg_ initial load that EOSEs while the relay still needs AUTH (some
                     // relays empty-EOSE instead of CLOSED auth-required) is not a real empty
                     // result: hold it in InitialLoading so the UI keeps skeletons until
@@ -5140,6 +5174,15 @@ class NostrRepository(
                 val subId = arr[1].jsonPrimitive.content
                 val event = arr[2].jsonObject
                 val kind = event["kind"]?.jsonPrimitive?.int
+
+                // Spell feeds carry arbitrary kinds, so they route on the subscription id
+                // before the kind dispatch below can claim a group-shaped event.
+                if (spellManager.owns(subId)) {
+                    client.parseMessage(event)?.let { parsed ->
+                        spellManager.handleEvent(subId, parsed.copy(relayUrl = client.getRelayUrl()))
+                    }
+                    return
+                }
 
                 // Handle event subscriptions (event_* or e_*) for quotes
                 if (subId.startsWith("event_") || subId.startsWith("e_")) {

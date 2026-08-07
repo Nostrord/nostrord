@@ -135,6 +135,22 @@ sealed class AppError(
         ) : Group("Failed to update group" + (cause?.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""), cause)
     }
 
+    /** Saved-query (kind:777) errors */
+    sealed class Spell(
+        override val message: String,
+        override val cause: Throwable? = null,
+    ) : AppError(message, cause) {
+        data class Malformed(
+            val reason: String,
+        ) : Spell("Malformed spell: $reason")
+
+        /** A `$me` / `$contacts` / `$members` placeholder the current context cannot fill. */
+        data class UnresolvedVariable(
+            val variable: String,
+            val reason: String,
+        ) : Spell("Cannot resolve $variable: $reason")
+    }
+
     /** Generic/unknown errors */
     data class Unknown(
         override val message: String,

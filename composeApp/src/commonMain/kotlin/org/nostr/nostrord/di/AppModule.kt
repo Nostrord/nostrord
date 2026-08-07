@@ -652,6 +652,11 @@ object AppModule {
 
     val dmSettings: DmSettings by lazy { DmSettings() }
 
+    /** The active account's pinned rail spells. Reloads itself on every account switch. */
+    val spellLibrary: org.nostr.nostrord.settings.SpellLibrary by lazy {
+        org.nostr.nostrord.settings.SpellLibrary(appScope)
+    }
+
     /** Holds an open AV room across screen changes; see [org.nostr.nostrord.ui.screens.avspace.AvSpaceHost]. */
     val avSpaceHost: org.nostr.nostrord.ui.screens.avspace.AvSpaceHost by lazy {
         org.nostr.nostrord.ui.screens.avspace.AvSpaceHost(nostrRepository)
