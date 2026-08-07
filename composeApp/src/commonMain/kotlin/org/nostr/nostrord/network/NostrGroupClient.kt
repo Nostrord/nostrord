@@ -973,8 +973,24 @@ class NostrGroupClient(
                     put("limit", 1)
                 },
             )
-            // NIP-78 per-group notification levels, on the same REQ for the same reason:
-            // one more own-authored replaceable event, no extra subscription.
+        }
+        sendJson(req)
+        return subId
+    }
+
+    /**
+     * NIP-78 per-group notification levels (kind:30078) for our own pubkey.
+     *
+     * Its own REQ rather than a filter on the contact-list one: this is re-issued
+     * whenever the window regains focus, which must not drag a kind:3 re-fetch along
+     * with it. Re-using the same subId replaces the previous subscription in place.
+     */
+    suspend fun requestNotificationPrefs(pubkey: String): String {
+        val subId = "notifprefs_${pubkey.take(8)}"
+        trySendClose(subId)
+        val req = buildJsonArray {
+            add("REQ")
+            add(subId)
             add(
                 buildJsonObject {
                     putJsonArray("kinds") { add(30078) }
