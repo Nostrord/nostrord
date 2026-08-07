@@ -11,7 +11,6 @@ import org.nostr.nostrord.auth.signerLabel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.nostr.Nip19
-import org.nostr.nostrord.nostr.SpellPresets
 import org.nostr.nostrord.ui.navigation.DmRoute
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
@@ -48,6 +47,7 @@ import org.nostr.nostrord.web.modals.AddAccountModal
 import org.nostr.nostrord.web.modals.AddGroupModal
 import org.nostr.nostrord.web.modals.AvSpaceModalHost
 import org.nostr.nostrord.web.modals.CreateGroupModal
+import org.nostr.nostrord.web.modals.CreateSpellModal
 import org.nostr.nostrord.web.modals.JoinGroupModal
 import org.nostr.nostrord.web.modals.UserProfileModal
 import org.nostr.nostrord.web.navigation.consumeInviteInHash
@@ -105,6 +105,8 @@ val AppFrame =
         // Channel model: the rail shows only root groups; a subgroup lives in its root's
         // channel list, with the root chip aggregating the subtree's unread.
         val railRoots = useStateFlow(vm.railRootGroups)
+        val railSpells = useStateFlow(AppModule.spellLibrary.pinned)
+        val (createSpellOpen, setCreateSpellOpen) = useState(false)
         val railUnread = useStateFlow(vm.railUnreadCounts)
         val groupParents = useStateFlow(vm.groupParents)
         val friends = useStateFlow(vm.friends)
@@ -494,10 +496,9 @@ val AppFrame =
                         }
                         // Spells sit below the groups behind a divider: a saved query is a
                         // destination like a group, but must never be mistaken for one.
-                        val spells = SpellPresets.forRail()
-                        if (spells.isNotEmpty()) {
+                        run {
                             div { className = ClassName("rail-divider") }
-                            spells.forEach { spell ->
+                            railSpells.forEach { spell ->
                                 div {
                                     key = spell.id
                                     className = ClassName("rail-group")
@@ -512,9 +513,21 @@ val AppFrame =
                                             )
                                         title = spell.name
                                         onClick = { pushRoute(SpellRoute(spell.id)) }
+                                        // Right-click unpins, mirroring the group chip's menu.
+                                        onContextMenu = { e ->
+                                            e.preventDefault()
+                                            AppModule.spellLibrary.remove(spell.id)
+                                            if ((route as? SpellRoute)?.spellId == spell.id) pushRoute(HomeRoute(HomeTab.Groups))
+                                        }
                                         +spell.name.take(1).uppercase()
                                     }
                                 }
+                            }
+                            button {
+                                className = ClassName("rail-spell-btn rail-spell-add")
+                                title = "New spell"
+                                onClick = { setCreateSpellOpen(true) }
+                                +"+"
                             }
                         }
                         // End drop strip, only while dragging: a chip target always inserts
@@ -950,6 +963,16 @@ val AppFrame =
                             pushRoute(GroupRoute(relayUrl.normalizeRelayUrl(), groupId, inviteCode))
                         }
                     }
+            }
+
+            if (createSpellOpen) {
+                CreateSpellModal {
+                    onDismiss = { setCreateSpellOpen(false) }
+                    onCreated = { spell ->
+                        setCreateSpellOpen(false)
+                        pushRoute(SpellRoute(spell.id))
+                    }
+                }
             }
 
             // Quick profile modal for a friend tapped in the home sidebar. No groupId

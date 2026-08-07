@@ -168,6 +168,7 @@ import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
 import org.nostr.nostrord.ui.screens.profile.ProfilePageScreen
 import org.nostr.nostrord.ui.screens.relay.RelayPageScreen
 import org.nostr.nostrord.ui.screens.settings.SettingsScreen
+import org.nostr.nostrord.ui.screens.spell.CreateSpellModal
 import org.nostr.nostrord.ui.screens.spell.SpellScreen
 import org.nostr.nostrord.ui.theme.NostrordAnimation
 import org.nostr.nostrord.ui.theme.NostrordColors
@@ -200,6 +201,8 @@ fun AppFrame() {
     // channel list. `groups` stays the full joined list for restore validation and
     // history labels, which must keep resolving subgroup routes.
     val railRoots by vm.railRootGroups.collectAsState()
+    val railSpells by AppModule.spellLibrary.pinned.collectAsState()
+    var createSpellOpen by remember { mutableStateOf(false) }
     val railUnread by vm.railUnreadCounts.collectAsState()
     val groupParents by vm.groupParents.collectAsState()
     val notificationUnread by vm.notificationUnread.collectAsState()
@@ -497,8 +500,7 @@ fun AppFrame() {
                     }
                     // Spells sit below the groups behind a divider: a saved query is a
                     // destination like a group, but must never be mistaken for one.
-                    val railSpells = remember { SpellPresets.forRail() }
-                    if (railSpells.isNotEmpty()) {
+                    run {
                         HorizontalDivider(modifier = Modifier.width(32.dp), color = NostrordColors.Divider)
                         railSpells.forEach { spell ->
                             RailButton(
@@ -509,6 +511,10 @@ fun AppFrame() {
                                 history.navigate(SpellRoute(spell.id))
                                 closeDrawer()
                             }
+                        }
+                        RailButton(icon = Icons.Outlined.AutoAwesome, label = "New spell") {
+                            createSpellOpen = true
+                            closeDrawer()
                         }
                     }
                     // Add-group is the last scrollable item (after the groups) so the group
@@ -551,6 +557,16 @@ fun AppFrame() {
                 }
             }
         }
+    }
+
+    if (createSpellOpen) {
+        CreateSpellModal(
+            onDismiss = { createSpellOpen = false },
+            onCreated = { spell ->
+                createSpellOpen = false
+                history.navigate(SpellRoute(spell.id))
+            },
+        )
     }
 
     val sidebarContent: @Composable () -> Unit = {

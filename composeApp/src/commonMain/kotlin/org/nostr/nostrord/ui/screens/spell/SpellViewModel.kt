@@ -17,7 +17,6 @@ import org.nostr.nostrord.network.managers.GroupLoadingState
 import org.nostr.nostrord.network.managers.key
 import org.nostr.nostrord.nostr.Spell
 import org.nostr.nostrord.nostr.SpellContext
-import org.nostr.nostrord.nostr.SpellPresets
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
 
@@ -30,9 +29,10 @@ import org.nostr.nostrord.utils.epochSeconds
 class SpellViewModel(
     private val repo: NostrRepositoryApi = AppModule.nostrRepository,
     val spellId: String,
+    resolveSpell: (String) -> Spell? = { AppModule.spellLibrary.spellById(it) },
 ) : ViewModel() {
     /** Null when the id names a spell this build does not know (stale link, unsynced custom). */
-    val spell: Spell? = SpellPresets.railSpellById(spellId)
+    val spell: Spell? = resolveSpell(spellId)
 
     private val key: String? = spell?.key
 
