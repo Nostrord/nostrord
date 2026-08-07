@@ -71,6 +71,7 @@ import org.nostr.nostrord.storage.getLastActiveAt
 import org.nostr.nostrord.storage.isDmCacheMigratedFor
 import org.nostr.nostrord.storage.isGroupFetchLazy
 import org.nostr.nostrord.storage.isKind10009RepublishPendingFor
+import org.nostr.nostrord.storage.isNotifPrefsPendingFor
 import org.nostr.nostrord.storage.loadDmLastRead
 import org.nostr.nostrord.storage.loadDmMessages
 import org.nostr.nostrord.storage.loadDmProcessedWrapIds
@@ -95,6 +96,7 @@ import org.nostr.nostrord.storage.saveGroupFetchLazy
 import org.nostr.nostrord.storage.saveKind10000TimestampFor
 import org.nostr.nostrord.storage.saveKind30078TimestampFor
 import org.nostr.nostrord.storage.saveMuteListSnapshotFor
+import org.nostr.nostrord.storage.saveNotifPrefsPendingFor
 import org.nostr.nostrord.storage.saveRelayListFor
 import org.nostr.nostrord.storage.setDmCacheMigratedFor
 import org.nostr.nostrord.utils.AppError
@@ -119,8 +121,12 @@ private const val GIFT_WRAP_BACKDATE_SECONDS = 2L * 24 * 60 * 60
 // last minute proves the socket is alive; below this, probing is pure overhead.
 private const val FOREGROUND_PROBE_MIN_SILENCE_MS = 60_000L
 
-/** Coalescing window for kind:30078 notification-prefs publishes: a burst of toggles is one event. */
-private const val NOTIF_PREFS_PUBLISH_DEBOUNCE_MS = 3_000L
+/**
+ * Coalescing window for kind:30078 notification-prefs publishes: a burst of toggles is
+ * one event. Short on purpose — with a NIP-07 or bunker signer this is the delay before
+ * the signing prompt appears, and anything longer reads as a popup out of nowhere.
+ */
+private const val NOTIF_PREFS_PUBLISH_DEBOUNCE_MS = 600L
 
 /**
  * Repository for Nostr operations.
@@ -781,6 +787,15 @@ class NostrRepository(
     /** True while a relay's payload is being written into the settings, so the echo doesn't republish it. */
     private var notifPrefsApplyingRemote = false
 
+    /**
+     * A local change that has not reached a relay: the signer declined, was unavailable,
+     * or every relay rejected. Muting is a local preference first, so the change stands
+     * either way, but while this is set an incoming remote event must NOT overwrite it
+     * (the other device's list is older than what the user just did here) and the next
+     * opportunity retries the publish.
+     */
+    private var notifPrefsUnpublished = false
+
     private var notifPrefsPublishJob: Job? = null
     private var notifPrefsWatchJob: Job? = null
 
@@ -794,13 +809,18 @@ class NostrRepository(
         notifPrefsWatchJob?.cancel()
         notifPrefsPublishJob?.cancel()
         notifPrefsCreatedAt = SecureStorage.loadKind30078TimestampFor(pubkey, Nip78.D_NOTIFICATIONS)
+        notifPrefsUnpublished = SecureStorage.isNotifPrefsPendingFor(pubkey)
         notifPrefsWatchJob = scope.launch {
             // drop(1): the current value is what initialize() just loaded from disk, not a change.
             settings.muteState.drop(1).collect {
                 if (notifPrefsApplyingRemote) return@collect
+                markNotifPrefsUnpublished(pubkey)
                 schedulePublishNotificationPrefs()
             }
         }
+        // A change from a previous session never made it out (declined prompt, offline):
+        // retry once the session is up rather than leaving it device-local forever.
+        if (notifPrefsUnpublished) schedulePublishNotificationPrefs()
     }
 
     private fun stopNotificationPrefsSync() {
@@ -809,11 +829,19 @@ class NostrRepository(
         notifPrefsPublishJob?.cancel()
         notifPrefsPublishJob = null
         notifPrefsCreatedAt = 0L
+        notifPrefsUnpublished = false
+    }
+
+    private fun markNotifPrefsUnpublished(pubkey: String) {
+        notifPrefsUnpublished = true
+        SecureStorage.saveNotifPrefsPendingFor(pubkey, true)
     }
 
     /**
-     * Coalesces a burst of level changes into one event. Toggling three groups in a row
-     * is one publish, not three replaceable events racing each other at the relay.
+     * Coalesces a burst of level changes into one event, so toggling three groups in a
+     * row is one signature prompt and one replaceable event rather than three racing at
+     * the relay. Kept short: with a NIP-07 or bunker signer this delay is the gap between
+     * the click and the extension's prompt, and a long one reads as an unprompted popup.
      */
     private fun schedulePublishNotificationPrefs() {
         notifPrefsPublishJob?.cancel()
@@ -849,12 +877,20 @@ class NostrRepository(
             if (publishToGeneralPurposeRelays(message, eventId) is Result.Success) {
                 notifPrefsCreatedAt = signedEvent.createdAt
                 SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, signedEvent.createdAt)
+                notifPrefsUnpublished = false
+                SecureStorage.saveNotifPrefsPendingFor(pubKey, false)
+            } else {
+                markNotifPrefsUnpublished(pubKey)
+                AppModule.postSystemMessage("Mute saved on this device. Could not reach a relay to sync it.")
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Throwable) {
-            // A signer without NIP-44 encryption, or a dead relay set: the levels stay
-            // local and the next change retries. Never fatal to muting itself.
+            // Declined prompt, a signer without NIP-44, or a dead relay set. The levels
+            // stand locally; say so instead of failing silently, and retry on the next
+            // change or the next session.
+            markNotifPrefsUnpublished(pubKey)
+            AppModule.postSystemMessage("Mute saved on this device only. Approve the signing request to sync it.")
         }
     }
 
@@ -872,6 +908,10 @@ class NostrRepository(
         }
         val dTag = tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
         if (dTag != Nip78.D_NOTIFICATIONS) return
+        // A local change is still waiting to be signed/published: it is newer than
+        // anything a relay can hand back, so applying this would undo the mute the user
+        // just made. Keep ours; the pending publish supersedes the event.
+        if (notifPrefsUnpublished) return
         val createdAt = event["created_at"]?.jsonPrimitive?.longOrNull ?: 0L
         // <=, not <: a same-second replay carries no new information, and applying it
         // would fight a local change made in that same second.
@@ -890,8 +930,9 @@ class NostrRepository(
                     return@launch
                 }
             val decoded = Nip78.decodeNotifications(plaintext) ?: return@launch
-            // Superseded while decrypting (newer event, account switch): drop it.
+            // Superseded while decrypting (newer event, local change, account switch).
             if (createdAt <= notifPrefsCreatedAt) return@launch
+            if (notifPrefsUnpublished) return@launch
             if (sessionManager.getPublicKey() != pubKey) return@launch
             notifPrefsCreatedAt = createdAt
             SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, createdAt)
