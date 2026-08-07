@@ -973,6 +973,16 @@ class NostrGroupClient(
                     put("limit", 1)
                 },
             )
+            // NIP-78 per-group notification levels, on the same REQ for the same reason:
+            // one more own-authored replaceable event, no extra subscription.
+            add(
+                buildJsonObject {
+                    putJsonArray("kinds") { add(30078) }
+                    putJsonArray("authors") { add(pubkey) }
+                    putJsonArray("#d") { add("nostrord.notifications.v1") }
+                    put("limit", 1)
+                },
+            )
         }
         sendJson(req)
         return subId

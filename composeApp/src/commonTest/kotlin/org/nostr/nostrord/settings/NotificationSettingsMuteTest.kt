@@ -86,6 +86,28 @@ class NotificationSettingsMuteTest {
     }
 
     @Test
+    fun applyRemoteLevelsReplacesRatherThanMerges() {
+        val settings = settingsFor("mute-test-remote")
+        val originalDefault = settings.defaultLevel.value
+        try {
+            settings.setDefaultLevel(NotificationLevel.ALL)
+            settings.setGroupLevel("stale", NotificationLevel.MUTED)
+
+            // Another device unmuted "stale" and muted "fresh". A merge would resurrect
+            // "stale"; a replaceable event means the newer map wins whole.
+            settings.applyRemoteGroupLevels(mapOf("fresh" to NotificationLevel.MUTED))
+
+            assertEquals(mapOf("fresh" to NotificationLevel.MUTED), settings.groupLevels.value)
+            assertFalse(settings.isMuted("stale"))
+            assertTrue(settings.isMuted("fresh"))
+            // The device-global default is untouched by a per-account sync.
+            assertEquals(NotificationLevel.ALL, settings.defaultLevel.value)
+        } finally {
+            settings.setDefaultLevel(originalDefault)
+        }
+    }
+
+    @Test
     fun mentionsRepliesIsNotMuted() {
         val settings = settingsFor("mute-test-mentions")
         settings.setGroupLevel("groupF", NotificationLevel.MENTIONS_REPLIES)
