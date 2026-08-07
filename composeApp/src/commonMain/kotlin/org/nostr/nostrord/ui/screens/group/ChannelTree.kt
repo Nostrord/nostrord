@@ -64,6 +64,25 @@ fun aggregateUnread(
     unreadCounts: Map<String, Int>,
 ): Int = channelTree(rootId, childrenByParent, emptyMap()).sumOf { unreadCounts[it.id] ?: 0 }
 
+/**
+ * [aggregateUnread] with muted subtrees removed, for badge rollups. Muting a root
+ * silences its whole tree (its channels are part of the same "server"); inside a live
+ * root, an individually muted channel drops out on its own. The underlying counts stay
+ * tracked either way, so opening a muted group still lands on its unread divider.
+ */
+fun aggregateUnreadUnmuted(
+    rootId: String,
+    childrenByParent: Map<String, Set<String>>,
+    unreadCounts: Map<String, Int>,
+    isMuted: (String) -> Boolean,
+): Int = if (isMuted(rootId)) {
+    0
+} else {
+    channelTree(rootId, childrenByParent, emptyMap())
+        .filterNot { isMuted(it.id) }
+        .sumOf { unreadCounts[it.id] ?: 0 }
+}
+
 /** A channel the user can see but not read/post without joining (private or closed, not a member). */
 fun isLockedChannel(meta: GroupMetadata?, isJoined: Boolean): Boolean = !isJoined && meta != null && (!meta.isPublic || !meta.isOpen)
 

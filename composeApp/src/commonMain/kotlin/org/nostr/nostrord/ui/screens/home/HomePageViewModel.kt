@@ -27,10 +27,12 @@ import org.nostr.nostrord.network.UserGroupRef
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.notifications.NotificationHistoryStore
+import org.nostr.nostrord.settings.MuteState
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.loadFollowingCacheFor
 import org.nostr.nostrord.storage.saveFollowingCacheFor
 import org.nostr.nostrord.ui.screens.group.aggregateUnread
+import org.nostr.nostrord.ui.screens.group.aggregateUnreadUnmuted
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
@@ -128,6 +130,10 @@ class HomePageViewModel(
     // test dispatcher: with the real Default here, advanceUntilIdle can't see the transform's
     // in-flight work and the assertion races it.
     private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    // Per-group notification levels, for the badge rollups. Taken as a flow rather than the
+    // whole settings object so a test drives mute state without touching SecureStorage;
+    // the default silences nothing.
+    private val muteState: StateFlow<MuteState> = MutableStateFlow(MuteState()),
 ) : ViewModel() {
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
@@ -332,12 +338,26 @@ class HomePageViewModel(
 
     /**
      * Rail badge counts: each root's own unread plus all its descendant channels', so a
-     * message in a subgroup still surfaces when the group is closed.
+     * message in a subgroup still surfaces when the group is closed. Muted groups report
+     * zero here and surface through [railMutedActivity] as a dot instead.
      */
     val railUnreadCounts: StateFlow<Map<String, Int>> =
-        combine(railRootGroups, repo.childrenByParent, repo.unreadCounts) { roots, children, unread ->
-            roots.associate { it.meta.id to aggregateUnread(it.meta.id, children, unread) }
+        combine(railRootGroups, repo.childrenByParent, repo.unreadCounts, muteState) { roots, children, unread, mute ->
+            roots.associate { it.meta.id to aggregateUnreadUnmuted(it.meta.id, children, unread, mute::isMuted) }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /**
+     * Muted rail entries that have unread traffic behind the silence. The rail marks these
+     * with a dim dot: no number (that is the point of muting) but still a hint that the
+     * group moved.
+     */
+    val railMutedActivity: StateFlow<Set<String>> =
+        combine(railRootGroups, repo.childrenByParent, repo.unreadCounts, muteState) { roots, children, unread, mute ->
+            roots.mapNotNullTo(HashSet()) { root ->
+                val id = root.meta.id
+                id.takeIf { aggregateUnreadUnmuted(id, children, unread, mute::isMuted) == 0 && aggregateUnread(id, children, unread) > 0 }
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     /**
      * The Home page's "My groups" list. Without a query: root groups only (same predicate
