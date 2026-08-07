@@ -2687,7 +2687,10 @@ val ChatScreen =
                     this.isGroupClosed = !group.isOpen
                     onConfirm = { listPrivately ->
                         setPendingJoin { null }
-                        launchApp { repo.joinGroup(group.id, intent.inviteCode, listPrivately) }
+                        // Through the ViewModel, not the repo: it is what records the rejection
+                        // reason that joinErrorDialog below renders. Calling the repo directly
+                        // made a rejected join look like a no-op.
+                        vm.joinGroup(intent.inviteCode, listPrivately)
                     }
                     onClose = { setPendingJoin { null } }
                 }

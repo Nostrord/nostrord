@@ -25,6 +25,7 @@ import org.nostr.nostrord.ui.screens.group.rootGroupId
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
 import org.nostr.nostrord.ui.screens.home.railKey
 import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
+import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.accountDisplayLabel
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.launchApp
@@ -340,7 +341,16 @@ val AppFrame =
                         repo.switchRelay(r.relayUrl)
                     }
                     if (code != null) {
-                        repo.joinGroup(r.groupId, code)
+                        // No ViewModel on the deep-link path, so the rejection reason goes to the
+                        // system snackbar; swallowing it made a bad invite code look like nothing
+                        // happened at all.
+                        val join = repo.joinGroup(r.groupId, code)
+                        if (join is org.nostr.nostrord.utils.Result.Error) {
+                            val reason = (join.error as? AppError.Group.JoinFailed)?.cause?.message
+                            AppModule.postSystemMessage(
+                                if (reason.isNullOrBlank()) "Could not join the group." else "Could not join: $reason",
+                            )
+                        }
                     }
                     // A forwarded / deep-linked group we are not a member of isn't in our joined
                     // list, so its kind:39000 never loads and the rail shows the raw id. Fetch the
