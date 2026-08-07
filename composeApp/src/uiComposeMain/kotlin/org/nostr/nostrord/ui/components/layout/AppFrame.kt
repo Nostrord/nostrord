@@ -75,6 +75,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -187,7 +188,13 @@ import kotlin.math.roundToInt
 fun AppFrame() {
     // HomePageViewModel re-arms its per-account state when the active account changes
     // (it observes repo.activePubkey), so a single long-lived instance is correct here.
-    val vm = viewModel { HomePageViewModel(AppModule.nostrRepository, AppModule.notificationHistoryStore) }
+    val vm = viewModel {
+        HomePageViewModel(
+            AppModule.nostrRepository,
+            AppModule.notificationHistoryStore,
+            muteState = AppModule.notificationSettings.muteState,
+        )
+    }
     // railGroups (not myGroups): the rail + back-history label only read meta/relayUrl, so this
     // meta-only projection (distinctUntilChanged) skips the member-avatar metadata waves that would
     // otherwise recompose the whole rail dozens of times on home open.
@@ -197,6 +204,8 @@ fun AppFrame() {
     // history labels, which must keep resolving subgroup routes.
     val railRoots by vm.railRootGroups.collectAsState()
     val railUnread by vm.railUnreadCounts.collectAsState()
+    val railMutedActivity by vm.railMutedActivity.collectAsState()
+    val muteState by AppModule.notificationSettings.muteState.collectAsState()
     val groupParents by vm.groupParents.collectAsState()
     val notificationUnread by vm.notificationUnread.collectAsState()
     val dmUnread by AppModule.nostrRepository.totalDmUnread.collectAsState()
@@ -456,6 +465,9 @@ fun AppFrame() {
                             picture = group.meta.picture,
                             groupId = group.meta.id,
                             unread = railUnread[group.meta.id] ?: 0,
+                            muted = muteState.isMuted(group.meta.id),
+                            mutedActivity = group.meta.id in railMutedActivity,
+                            onToggleMute = { AppModule.notificationSettings.toggleMute(group.meta.id) },
                             active = activeRootId == group.meta.id &&
                                 activeRelay == group.relayUrl.normalizeRelayUrl() &&
                                 !showNotifications,
@@ -969,6 +981,11 @@ private fun RailGroupButton(
     picture: String?,
     groupId: String,
     unread: Int,
+    muted: Boolean = false,
+    // Muted and holding unread traffic: shown as a dim dot, since the count is the
+    // noise the user muted.
+    mutedActivity: Boolean = false,
+    onToggleMute: () -> Unit = {},
     active: Boolean = false,
     dragging: Boolean = false,
     dropIndicator: Boolean = false,
@@ -990,6 +1007,7 @@ private fun RailGroupButton(
     val indicatorColor = NostrordColors.Primary
     val isHovered by interactionSource.collectIsHoveredAsState()
     val highlighted = active || isHovered
+    var menuOffset by remember { mutableStateOf<Offset?>(null) }
     // Smoothly morph the corner radius (16dp -> 12dp) rather than snapping the shape,
     // matching the softer rail feel on the main branch.
     val cornerRadius by animateDpAsState(
@@ -1028,9 +1046,19 @@ private fun RailGroupButton(
                     onDragEnd = { currentOnDragEnd() },
                     onDragCancel = { currentOnDragCancel() },
                 )
-            },
+            }
+            // Secondary click only: long-press already belongs to drag-reorder here, so
+            // touch reaches muting through the channel row or the group info modal.
+            .secondaryClickMenu(groupId) { menuOffset = it },
         contentAlignment = Alignment.Center,
     ) {
+        GroupContextMenu(
+            visible = menuOffset != null,
+            muted = muted,
+            onDismiss = { menuOffset = null },
+            onToggleMute = onToggleMute,
+            anchorOffsetPx = menuOffset,
+        )
         // Left pill marker: grows from 0 to 20dp on hover and 36dp when active (web .rail-item::before).
         val pillHeight by animateDpAsState(
             targetValue = if (active) {
@@ -1074,6 +1102,8 @@ private fun RailGroupButton(
             }
             if (unread > 0) {
                 RailBadge(count = unread, modifier = Modifier.align(Alignment.BottomEnd))
+            } else if (mutedActivity) {
+                RailMutedDot(modifier = Modifier.align(Alignment.BottomEnd))
             }
         }
     }
@@ -1098,6 +1128,18 @@ private fun RailBadge(
             fontWeight = FontWeight.Bold,
         )
     }
+}
+
+/** Muted-with-unread marker: the badge's footprint without the count. */
+@Composable
+private fun RailMutedDot(modifier: Modifier = Modifier) {
+    Box(
+        modifier =
+        modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(NostrordColors.TextMuted),
+    )
 }
 
 @Composable

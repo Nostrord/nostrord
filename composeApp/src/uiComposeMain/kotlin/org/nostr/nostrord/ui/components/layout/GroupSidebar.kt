@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.components.layout
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
@@ -112,6 +114,7 @@ fun GroupSidebar(
     val groupAdmins by vm.groupAdmins.collectAsState()
     val joinedGroupsByRelay by vm.joinedGroupsByRelay.collectAsState()
     val unreadCounts by AppModule.nostrRepository.unreadCounts.collectAsState()
+    val muteState by AppModule.notificationSettings.muteState.collectAsState()
     val kind10009Relays by AppModule.nostrRepository.kind10009Relays.collectAsState()
     val relayMetadata by vm.relayMetadata.collectAsState()
 
@@ -292,6 +295,10 @@ fun GroupSidebar(
                         depth = entry.depth - 1,
                         locked = isLockedChannel(channel, isJoined = entry.id in joinedHere),
                         unread = unreadCounts[entry.id] ?: 0,
+                        // Muting the root silences the whole tree, so a channel inside a
+                        // muted group reads as muted without an override of its own.
+                        muted = muteState.isMuted(entry.id) || muteState.isMuted(rootId),
+                        onToggleMute = { AppModule.notificationSettings.toggleMute(entry.id) },
                         active = route.groupId == entry.id,
                         // Only first-level channels reorder: their order is the root's child
                         // tag positions; nested foreign rows just render.
@@ -536,6 +543,8 @@ private fun ChannelRow(
     depth: Int,
     locked: Boolean,
     unread: Int,
+    muted: Boolean = false,
+    onToggleMute: () -> Unit = {},
     active: Boolean,
     draggable: Boolean = false,
     dragging: Boolean = false,
@@ -550,6 +559,7 @@ private fun ChannelRow(
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val highlighted = isHovered || active
+    var menuOffset by remember { mutableStateOf<Offset?>(null) }
     val indicatorColor = NostrordColors.Primary
     // pointerInput's coroutine only ever sees the lambdas captured when it launched,
     // but the drop math lives in callbacks the sidebar recreates every recomposition
@@ -581,11 +591,21 @@ private fun ChannelRow(
             .clip(NostrordShapes.shapeMedium)
             .background(if (highlighted) NostrordColors.HoverBackground else Color.Transparent)
             .hoverable(interactionSource)
-            .clickable(onClick = onClick)
+            .secondaryClickMenu(groupId) { menuOffset = it }
+            // Long-press is free on a channel row (reorder has its own drag handle), so
+            // touch reaches the menu here even though the rail chip can't offer it.
+            .combinedClickable(onClick = onClick, onLongClick = { menuOffset = Offset.Zero })
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs + Spacing.xxs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs + Spacing.xxs),
     ) {
+        GroupContextMenu(
+            visible = menuOffset != null,
+            muted = muted,
+            onDismiss = { menuOffset = null },
+            onToggleMute = onToggleMute,
+            anchorOffsetPx = menuOffset,
+        )
         if (draggable) {
             Icon(
                 imageVector = Icons.Default.DragIndicator,
@@ -619,7 +639,11 @@ private fun ChannelRow(
         )
         Text(
             name,
-            color = if (highlighted) NostrordColors.TextPrimary else NostrordColors.TextSecondary,
+            color = when {
+                muted -> NostrordColors.TextMuted
+                highlighted -> NostrordColors.TextPrimary
+                else -> NostrordColors.TextSecondary
+            },
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -634,20 +658,39 @@ private fun ChannelRow(
                 modifier = Modifier.size(12.dp),
             )
         }
+        if (muted) {
+            Icon(
+                imageVector = Icons.Outlined.NotificationsOff,
+                contentDescription = "Muted",
+                tint = NostrordColors.TextMuted,
+                modifier = Modifier.size(12.dp),
+            )
+        }
         if (unread > 0) {
-            Box(
-                modifier =
-                Modifier
-                    .clip(CircleShape)
-                    .background(NostrordColors.BadgeBackground)
-                    .padding(horizontal = 5.dp, vertical = 1.dp),
-            ) {
-                Text(
-                    if (unread > 99) "99+" else "$unread",
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
+            if (muted) {
+                // Dot, not a count: the number is exactly the noise muting removes.
+                Box(
+                    modifier =
+                    Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(NostrordColors.TextMuted),
                 )
+            } else {
+                Box(
+                    modifier =
+                    Modifier
+                        .clip(CircleShape)
+                        .background(NostrordColors.BadgeBackground)
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                ) {
+                    Text(
+                        if (unread > 99) "99+" else "$unread",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
