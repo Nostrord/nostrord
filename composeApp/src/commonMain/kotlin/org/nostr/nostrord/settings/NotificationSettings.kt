@@ -135,6 +135,17 @@ class NotificationSettings {
         )
     }
 
+    /** Drops a group's override so it tracks [defaultLevel] again. */
+    fun clearGroupLevel(groupId: String) {
+        val pubkey = currentPubkey ?: return
+        _groupLevels.update { it - groupId }
+        syncMuteState()
+        SecureStorage.saveGroupNotificationLevelsFor(
+            pubkey,
+            _groupLevels.value.mapValues { it.value.name },
+        )
+    }
+
     /**
      * One-click mute from a group row. Unmuting returns the group to the global
      * default rather than pinning it to [NotificationLevel.ALL], so a later change

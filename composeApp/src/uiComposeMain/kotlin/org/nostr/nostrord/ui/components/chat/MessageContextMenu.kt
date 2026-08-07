@@ -258,7 +258,7 @@ fun ThreadMessageContextMenu(
 
 /** Popup chrome shared by the chat and thread menus: cursor-anchored position + scale/fade in. */
 @Composable
-private fun ContextMenuPopup(
+internal fun ContextMenuPopup(
     onDismiss: () -> Unit,
     anchorOffsetPx: Offset?,
     anchorWidthPx: Int,
@@ -355,7 +355,7 @@ internal class MessageMenuPositionProvider(
  */
 /** The menu card chrome (width, shadow, border), shared by the chat and thread menu contents. */
 @Composable
-private fun ContextMenuSurface(content: @Composable ColumnScope.() -> Unit) {
+internal fun ContextMenuSurface(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier =
         Modifier

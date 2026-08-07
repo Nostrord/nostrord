@@ -87,6 +87,7 @@ enum class SettingsSection(val label: String) {
     Media("Media"),
     Notifications("Notifications"),
     MutedUsers("Muted users"),
+    MutedGroups("Muted groups"),
     Security("Security"),
 }
 
@@ -258,6 +259,11 @@ fun SettingsScreen(
         MutedUsersPanelContent(mutedUsersVm)
     }
 
+    val mutedGroupsVm = viewModel { MutedGroupsViewModel(AppModule.nostrRepository, AppModule.notificationSettings) }
+    val mutedGroupsContent: @Composable () -> Unit = {
+        MutedGroupsPanelContent(mutedGroupsVm)
+    }
+
     val securityContent: @Composable () -> Unit = {
         SecurityPanelContent()
     }
@@ -312,6 +318,7 @@ fun SettingsScreen(
                 mediaContent = mediaContent,
                 notificationsContent = notificationsContent,
                 mutedUsersContent = mutedUsersContent,
+                mutedGroupsContent = mutedGroupsContent,
                 securityContent = securityContent,
             )
         } else {
@@ -329,6 +336,7 @@ fun SettingsScreen(
                 mediaContent = mediaContent,
                 notificationsContent = notificationsContent,
                 mutedUsersContent = mutedUsersContent,
+                mutedGroupsContent = mutedGroupsContent,
                 securityContent = securityContent,
             )
         }
@@ -352,6 +360,7 @@ private fun DesktopSettings(
     mediaContent: @Composable () -> Unit,
     notificationsContent: @Composable () -> Unit,
     mutedUsersContent: @Composable () -> Unit,
+    mutedGroupsContent: @Composable () -> Unit,
     securityContent: @Composable () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -399,7 +408,7 @@ private fun DesktopSettings(
                         .padding(top = 24.dp, start = 40.dp, end = 20.dp, bottom = 80.dp),
                 ) {
                     Box(modifier = Modifier.widthIn(max = 660.dp)) {
-                        SettingsPanel(activeSection, profileContent, backupContent, relaysContent, dmRelaysContent, appearanceContent, mediaContent, notificationsContent, mutedUsersContent, securityContent)
+                        SettingsPanel(activeSection, profileContent, backupContent, relaysContent, dmRelaysContent, appearanceContent, mediaContent, notificationsContent, mutedUsersContent, mutedGroupsContent, securityContent)
                     }
                 }
 
@@ -430,6 +439,7 @@ private fun MobileSettings(
     mediaContent: @Composable () -> Unit,
     notificationsContent: @Composable () -> Unit,
     mutedUsersContent: @Composable () -> Unit,
+    mutedGroupsContent: @Composable () -> Unit,
     securityContent: @Composable () -> Unit,
 ) {
     if (!showPanel) {
@@ -471,7 +481,7 @@ private fun MobileSettings(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 24.dp),
             ) {
-                SettingsPanel(activeSection, profileContent, backupContent, relaysContent, dmRelaysContent, appearanceContent, mediaContent, notificationsContent, mutedUsersContent, securityContent)
+                SettingsPanel(activeSection, profileContent, backupContent, relaysContent, dmRelaysContent, appearanceContent, mediaContent, notificationsContent, mutedUsersContent, mutedGroupsContent, securityContent)
             }
         }
     }
@@ -531,6 +541,9 @@ private fun SettingsSidebar(
     }
     SettingsNavItem("Muted users", activeSection == SettingsSection.MutedUsers, compact = compact) {
         onSelectSection(SettingsSection.MutedUsers)
+    }
+    SettingsNavItem("Muted groups", activeSection == SettingsSection.MutedGroups, compact = compact) {
+        onSelectSection(SettingsSection.MutedGroups)
     }
     if (PassphraseSettings.isApplicable) {
         SettingsNavItem("Security", activeSection == SettingsSection.Security, compact = compact) {
@@ -647,6 +660,7 @@ private fun SettingsPanel(
     mediaContent: @Composable () -> Unit,
     notificationsContent: @Composable () -> Unit,
     mutedUsersContent: @Composable () -> Unit,
+    mutedGroupsContent: @Composable () -> Unit,
     securityContent: @Composable () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -669,6 +683,7 @@ private fun SettingsPanel(
             SettingsSection.Media -> mediaContent()
             SettingsSection.Notifications -> notificationsContent()
             SettingsSection.MutedUsers -> mutedUsersContent()
+            SettingsSection.MutedGroups -> mutedGroupsContent()
             SettingsSection.Security -> securityContent()
         }
     }
