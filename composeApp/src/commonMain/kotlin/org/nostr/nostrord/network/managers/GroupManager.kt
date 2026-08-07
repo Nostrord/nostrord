@@ -228,6 +228,9 @@ class GroupManager(
      * re-emitted metadata event (relay replaying, or a relay that doesn't actually honor
      * 9008) doesn't resurrect the group into "Other Groups".
      */
+    // Groups deleted or forgotten on this device, keyed by [droppedKey] (relay + group). Relay-scoped
+    // for the same reason the left markers are: a bare id blocks the kind:10009 merge for the same-id
+    // group on EVERY relay, and unlike a left marker nothing self-heals it.
     private val deletedGroupIds = mutableSetOf<String>()
 
     // Debounce mux refresh: coalesces rapid calls (auth + EOSE + CLOSED) into one.
@@ -640,7 +643,20 @@ class GroupManager(
      * True when the group was deleted or left on THIS device. Stale kind:10009
      * merges skip these so a lagging relay cannot resurrect them.
      */
-    fun isLocallyDropped(groupId: String, relayUrl: String? = null): Boolean = groupId in deletedGroupIds || isRecentlyLeft(relayUrl, groupId)
+    fun isLocallyDropped(groupId: String, relayUrl: String? = null): Boolean = isDropped(relayUrl, groupId) || isRecentlyLeft(relayUrl, groupId)
+
+    /**
+     * Key of a dropped-group entry. Relay first, so the relay part can never contain the
+     * separator and splitting on the FIRST '|' is unambiguous even for a group id that has one.
+     */
+    private fun droppedKey(relayUrl: String, groupId: String): String = "${relayUrl.normalizeRelayUrl()}|$groupId"
+
+    /** Whether [groupId] was deleted/forgotten on [relayUrl]; a null relay scans every relay. */
+    private fun isDropped(relayUrl: String?, groupId: String): Boolean = if (relayUrl != null) {
+        droppedKey(relayUrl, groupId) in deletedGroupIds
+    } else {
+        deletedGroupIds.any { it.substringAfter('|', "") == groupId }
+    }
     private val LEFT_GROUP_GRACE_MS = 5_000L
 
     // Relay-of-origin per groupId, recorded from the WebSocket that delivered
@@ -1613,7 +1629,7 @@ class GroupManager(
             // them before the OK (the old order) silently dropped the durable left protection
             // when the relay rejected or timed out the request. Still BEFORE the joined-set
             // write below, so the additive kind:10009 merge can't drop the fresh join.
-            deletedGroupIds.remove(groupId)
+            deletedGroupIds.remove(droppedKey(groupRelayUrl, groupId))
             persistDroppedGroups()
             recentlyLeftAt.remove(recentLeaveKey(groupRelayUrl, groupId))
             clearLeft(groupRelayUrl, groupId)
@@ -2083,7 +2099,7 @@ class GroupManager(
             _groupMembers.update { it - idsToRemove }
             _liveKitParticipants.update { it - idsToRemove }
             idsToRemove.forEach { loadingRegistry.remove(it) }
-            deletedGroupIds.addAll(idsToRemove)
+            deletedGroupIds.addAll(idsToRemove.map { droppedKey(normalizedGroupRelay, it) })
             persistDroppedGroups(pubKey)
             recomputeSubgroupTopology()
 
@@ -2104,7 +2120,7 @@ class GroupManager(
         // Once a deletion has been processed, don't re-process it. The joinGroup()
         // method clears the id from deletedGroupIds, so a future deletion after
         // re-join will still be handled correctly.
-        if (groupId in deletedGroupIds) return false
+        if (isDropped(relayUrl, groupId)) return false
 
         val idsToRemove = setOf(groupId)
         // Intentionally do NOT remove from _joinedGroupsByRelay / kind:10009 — orphaned groups
@@ -2129,7 +2145,7 @@ class GroupManager(
         _groupAdmins.update { it - idsToRemove }
         _groupMembers.update { it - idsToRemove }
         idsToRemove.forEach { loadingRegistry.remove(it) }
-        deletedGroupIds.addAll(idsToRemove)
+        deletedGroupIds.addAll(idsToRemove.map { droppedKey(relayUrl, it) })
         persistDroppedGroups(pubKey)
         recomputeSubgroupTopology()
         return false
@@ -2158,7 +2174,7 @@ class GroupManager(
                 SecureStorage.saveJoinedGroupsForRelay(pubKey, normalized, updatedPerRelay)
             } catch (_: Exception) {}
         }
-        deletedGroupIds.add(groupId)
+        deletedGroupIds.add(droppedKey(normalized, groupId))
         persistDroppedGroups(pubKey)
         return true
     }
@@ -3758,7 +3774,7 @@ class GroupManager(
      * so returning to this relay later is instant without a network re-fetch.
      */
     fun handleGroupMetadata(metadata: GroupMetadata, relayUrl: String) {
-        if (metadata.id in deletedGroupIds) return
+        if (isDropped(relayUrl, metadata.id)) return
         val normalized = relayUrl.normalizeRelayUrl()
         pendingFetchSeenGroups[normalized]?.add(metadata.id)
         muxMetaSeenIds[normalized]?.add(metadata.id)
@@ -4245,7 +4261,7 @@ class GroupManager(
         val valid = stored.filter {
             !isJoinedOn(it.relayUrl, it.groupId) &&
                 leftAtOn(it.relayUrl, it.groupId) == null &&
-                it.groupId !in deletedGroupIds
+                !isDropped(it.relayUrl, it.groupId)
         }
         if (valid.isEmpty()) return
         // Keep in-memory entries: a live registration this session is fresher than the slot.
@@ -4269,7 +4285,7 @@ class GroupManager(
         // Our own put-user echoed back (some relays emit one for the group creator, and we
         // are the actor when we add ourselves) is not an external add.
         if (actorPubkey != null && actorPubkey == currentPubkey) return
-        if (isRecentlyLeft(relayUrl, groupId) || groupId in deletedGroupIds) return
+        if (isRecentlyLeft(relayUrl, groupId) || isDropped(relayUrl, groupId)) return
         val relay = (relayUrl ?: getRelayForGroup(groupId) ?: currentRelayUrl ?: return).normalizeRelayUrl()
         // Per relay: the same id joined elsewhere is a different group. Matching across all
         // relays swallowed the invite, so a group we are a relay-side member of never got a
@@ -4416,7 +4432,7 @@ class GroupManager(
                 discardPendingInvite(groupId)
                 return@launch
             }
-            deletedGroupIds.remove(groupId)
+            deletedGroupIds.remove(droppedKey(relay, groupId))
             persistDroppedGroups(pubkey)
             recentlyLeftAt.remove(recentLeaveKey(relay, groupId))
             clearLeft(relay, groupId)
