@@ -11,6 +11,7 @@ import org.nostr.nostrord.auth.signerLabel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.SpellPresets
 import org.nostr.nostrord.ui.navigation.DmRoute
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
@@ -19,6 +20,7 @@ import org.nostr.nostrord.ui.navigation.HomeTab
 import org.nostr.nostrord.ui.navigation.NotificationsRoute
 import org.nostr.nostrord.ui.navigation.RelayRoute
 import org.nostr.nostrord.ui.navigation.SettingsRoute
+import org.nostr.nostrord.ui.navigation.SpellRoute
 import org.nostr.nostrord.ui.navigation.UserRoute
 import org.nostr.nostrord.ui.screens.group.moveChannelBefore
 import org.nostr.nostrord.ui.screens.group.rootGroupId
@@ -62,6 +64,7 @@ import org.nostr.nostrord.web.screens.NotificationsSidebar
 import org.nostr.nostrord.web.screens.ProfilePage
 import org.nostr.nostrord.web.screens.RelayScreen
 import org.nostr.nostrord.web.screens.SettingsScreen
+import org.nostr.nostrord.web.screens.SpellScreen
 import org.nostr.nostrord.web.screens.ThreadsScreen
 import react.FC
 import react.Props
@@ -489,6 +492,31 @@ val AppFrame =
                                 }
                             }
                         }
+                        // Spells sit below the groups behind a divider: a saved query is a
+                        // destination like a group, but must never be mistaken for one.
+                        val spells = SpellPresets.forRail()
+                        if (spells.isNotEmpty()) {
+                            div { className = ClassName("rail-divider") }
+                            spells.forEach { spell ->
+                                div {
+                                    key = spell.id
+                                    className = ClassName("rail-group")
+                                    button {
+                                        className =
+                                            ClassName(
+                                                if ((route as? SpellRoute)?.spellId == spell.id && !notificationsOpen) {
+                                                    "rail-spell-btn active"
+                                                } else {
+                                                    "rail-spell-btn"
+                                                },
+                                            )
+                                        title = spell.name
+                                        onClick = { pushRoute(SpellRoute(spell.id)) }
+                                        +spell.name.take(1).uppercase()
+                                    }
+                                }
+                            }
+                        }
                         // End drop strip, only while dragging: a chip target always inserts
                         // BEFORE it, so this is the only way to land after the last group.
                         // Hidden for the last chip itself, which is already there.
@@ -817,6 +845,11 @@ val AppFrame =
                             this.vm = notifVm
                             onOpenDrawer = { setDrawerOpen(true) }
                             onOpenRoute = { pushRoute(it) }
+                        }
+                    r is SpellRoute ->
+                        SpellScreen {
+                            spellId = r.spellId
+                            onOpenDrawer = { setDrawerOpen(true) }
                         }
                     r is UserRoute ->
                         ProfilePage {

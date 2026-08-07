@@ -85,6 +85,7 @@ fun persistedRouteHash(route: HashRoute?): String? = when (route) {
     null -> "" // default Groups home is the empty hash
     is HomeRoute -> route.toHash()
     is GroupRoute -> GroupRoute(route.relayUrl, route.groupId).toHash()
+    is SpellRoute -> route.toHash()
     else -> null
 }
 
@@ -97,7 +98,7 @@ fun persistedRouteHash(route: HashRoute?): String? = when (route) {
 fun restoredRoute(saved: String?): HashRoute? {
     val hash = saved?.takeIf { it.isNotBlank() } ?: return null
     return when (val route = parseHashRoute(hash)) {
-        is GroupRoute, is HomeRoute -> route
+        is GroupRoute, is HomeRoute, is SpellRoute -> route
         else -> null
     }
 }
@@ -142,6 +143,15 @@ data object NotificationsRoute : HashRoute
  */
 data object SettingsRoute : HashRoute
 
+/**
+ * Route for a spell feed pinned in the rail: #/s/<spell-id>. [spellId] is the preset slug for a
+ * built-in ("preset:mentions") or the kind:777 event id for a saved one, so the hash is stable
+ * across devices once the spell is published.
+ */
+data class SpellRoute(
+    val spellId: String,
+) : HashRoute
+
 /** The Home page tabs, in pill order. [Groups] is the default home (no hash). */
 enum class HomeTab { Groups, Friends, Recommended, People }
 
@@ -156,6 +166,7 @@ data class HomeRoute(val tab: HomeTab) : HashRoute
 private const val GROUP_HASH_PREFIX = "#/g/"
 private const val RELAY_HASH_PREFIX = "#/r/"
 private const val USER_HASH_PREFIX = "#/u/"
+private const val SPELL_HASH_PREFIX = "#/s/"
 private const val DM_HASH_PREFIX = "#/dm"
 private const val NOTIFICATIONS_HASH = "#/notifications"
 private const val SETTINGS_HASH = "#/settings"
@@ -168,6 +179,7 @@ fun HashRoute.toHash(): String = when (this) {
     is GroupRoute -> toHash()
     is RelayRoute -> toHash()
     is UserRoute -> toHash()
+    is SpellRoute -> toHash()
     is DmRoute -> toHash()
     is NotificationsRoute -> NOTIFICATIONS_HASH
     is SettingsRoute -> SETTINGS_HASH
@@ -179,7 +191,17 @@ fun HashRoute.toHash(): String = when (this) {
     }
 }
 
-fun parseHashRoute(hash: String): HashRoute? = parseGroupHash(hash) ?: parseRelayHash(hash) ?: parseUserHash(hash) ?: parseDmHash(hash) ?: parseNotificationsHash(hash) ?: parseSettingsHash(hash) ?: parseHomeTabHash(hash)
+fun parseHashRoute(hash: String): HashRoute? = parseGroupHash(hash) ?: parseRelayHash(hash) ?: parseUserHash(hash) ?: parseSpellHash(hash) ?: parseDmHash(hash) ?: parseNotificationsHash(hash) ?: parseSettingsHash(hash) ?: parseHomeTabHash(hash)
+
+fun SpellRoute.toHash(): String = "$SPELL_HASH_PREFIX${encodeSegment(spellId)}"
+
+/** Parses a `#/s/<spell-id>` hash; null for any other hash. */
+fun parseSpellHash(hash: String): SpellRoute? {
+    if (!hash.startsWith(SPELL_HASH_PREFIX)) return null
+    val seg = hash.removePrefix(SPELL_HASH_PREFIX).substringBefore('?')
+    if (seg.isEmpty() || seg.contains('/')) return null
+    return SpellRoute(decodeSegment(seg))
+}
 
 fun RelayRoute.toHash(): String = "$RELAY_HASH_PREFIX${encodeSegment(relayUrl.removePrefix("wss://").removePrefix("ws://"))}"
 

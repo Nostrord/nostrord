@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -113,6 +114,7 @@ import org.nostr.nostrord.auth.removeAccountDialogTitle
 import org.nostr.nostrord.auth.signerLabel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.SpellPresets
 import org.nostr.nostrord.startup.ExternalLaunchContext
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
@@ -143,6 +145,7 @@ import org.nostr.nostrord.ui.navigation.NotificationsRoute
 import org.nostr.nostrord.ui.navigation.PlatformBackHandler
 import org.nostr.nostrord.ui.navigation.RelayRoute
 import org.nostr.nostrord.ui.navigation.SettingsRoute
+import org.nostr.nostrord.ui.navigation.SpellRoute
 import org.nostr.nostrord.ui.navigation.UserRoute
 import org.nostr.nostrord.ui.navigation.persistedRouteHash
 import org.nostr.nostrord.ui.navigation.restoredRoute
@@ -165,6 +168,7 @@ import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
 import org.nostr.nostrord.ui.screens.profile.ProfilePageScreen
 import org.nostr.nostrord.ui.screens.relay.RelayPageScreen
 import org.nostr.nostrord.ui.screens.settings.SettingsScreen
+import org.nostr.nostrord.ui.screens.spell.SpellScreen
 import org.nostr.nostrord.ui.theme.NostrordAnimation
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
@@ -490,6 +494,22 @@ fun AppFrame() {
                                 .clip(NostrordShapes.shapeSmall)
                                 .background(NostrordColors.Primary),
                         )
+                    }
+                    // Spells sit below the groups behind a divider: a saved query is a
+                    // destination like a group, but must never be mistaken for one.
+                    val railSpells = remember { SpellPresets.forRail() }
+                    if (railSpells.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.width(32.dp), color = NostrordColors.Divider)
+                        railSpells.forEach { spell ->
+                            RailButton(
+                                icon = Icons.Outlined.AutoAwesome,
+                                label = spell.name,
+                                active = (route as? SpellRoute)?.spellId == spell.id && !showNotifications,
+                            ) {
+                                history.navigate(SpellRoute(spell.id))
+                                closeDrawer()
+                            }
+                        }
                     }
                     // Add-group is the last scrollable item (after the groups) so the group
                     // list keeps all the rail space and scrolls together with it.
@@ -850,6 +870,8 @@ private fun FrameContent(
                     onOpenNotifications = onOpenNotifications,
                     onOpenDrawer = onOpenDrawer,
                 )
+            is SpellRoute ->
+                SpellScreen(spellId = route.spellId, onOpenDrawer = onOpenDrawer)
             is UserRoute ->
                 ProfilePageScreen(
                     pubkey = route.pubkey,
@@ -1567,6 +1589,7 @@ private fun navEntryLabel(route: HashRoute?, groupName: (String) -> String?): St
     is RelayRoute -> route.relayUrl.removePrefix("wss://").removePrefix("ws://")
     is UserRoute -> runCatching { Nip19.encodeNpub(route.pubkey).take(12) + "…" }.getOrDefault("Profile")
     is DmRoute -> if (route.pubkey == null) "Direct messages" else "Direct message"
+    is SpellRoute -> SpellPresets.railSpellById(route.spellId)?.name ?: "Spell"
     is NotificationsRoute -> "Notifications"
     is SettingsRoute -> "Settings"
 }
