@@ -11406,3 +11406,21 @@ button.hierarchy-crumb-item:hover {
         transform: translate(-50%, 0);
     }
 }
+
+/* Muted group card (Home / My groups): mirrors the rail chip so the same group does not
+   read as two different states on two surfaces. */
+.group-card.muted .group-card-avatar {
+    opacity: 0.45;
+}
+
+.group-card-muted {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    color: var(--color-text-muted);
+}
+
+.group-card-muted .ico {
+    width: 14px;
+    height: 14px;
+}
