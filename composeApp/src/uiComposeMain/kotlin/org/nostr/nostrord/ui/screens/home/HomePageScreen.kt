@@ -107,6 +107,7 @@ fun HomePageScreen(
     val friendsGroupsLoading by vm.friendsGroupsLoading.collectAsState()
     val recommendedGroupsLoading by vm.recommendedGroupsLoading.collectAsState()
     val relayMetadata by vm.relayMetadata.collectAsState()
+    val muteState by AppModule.notificationSettings.muteState.collectAsState()
     val dmEnabled by AppModule.dmSettings.dmEnabled.collectAsState()
     // Membership per (relay, id), to flag the "Joined" badge on cards in mixed lists: ids
     // repeat across relays, so a flat id match badges a group you never joined.
@@ -350,6 +351,7 @@ fun HomePageScreen(
                                                 // Every card in My groups is joined; the badge
                                                 // earns its place only in the mixed lists.
                                                 isJoined = false,
+                                                muted = muteState.isMuted(group.meta.id),
                                                 onRelayClick = { onOpenRelay(group.relayUrl) },
                                                 onClick = { onOpenGroup(JoinedGroup(group.relayUrl, group.meta)) },
                                             )

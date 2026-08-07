@@ -70,6 +70,7 @@ val HomePage =
         val friendsGroups = useStateFlow(vm.friendsGroups)
         val recommendedGroups = useStateFlow(vm.recommendedGroups)
         val myGroupsLoading = useStateFlow(vm.myGroupsLoading)
+        val muteState = useStateFlow(AppModule.notificationSettings.muteState)
         val friendsGroupsLoading = useStateFlow(vm.friendsGroupsLoading)
         val recommendedGroupsLoading = useStateFlow(vm.recommendedGroupsLoading)
         val relayMeta = useStateFlow(vm.relayMetadata)
@@ -222,7 +223,12 @@ val HomePage =
                                         myGroups.forEach { group ->
                                             // Every card here is joined; the badge earns its
                                             // place only in the mixed lists.
-                                            discoverGroupCard(group, relayMeta[group.relayUrl]?.icon, isJoined = false) {
+                                            discoverGroupCard(
+                                                group,
+                                                relayMeta[group.relayUrl]?.icon,
+                                                isJoined = false,
+                                                muted = muteState.isMuted(group.meta.id),
+                                            ) {
                                                 props.onOpenGroup(JoinedGroup(group.relayUrl, group.meta))
                                             }
                                         }
@@ -328,6 +334,9 @@ internal fun ChildrenBuilder.discoverGroupCard(
     showJoinCta: Boolean = false,
     interactive: Boolean = true,
     showRelay: Boolean = true,
+    // Silenced group: the card recedes and carries a bell-off mark, matching the rail chip
+    // so the same group doesn't read as two different states on two surfaces.
+    muted: Boolean = false,
     onOpen: () -> Unit,
 ) {
     val meta = dg.meta
@@ -341,7 +350,13 @@ internal fun ChildrenBuilder.discoverGroupCard(
         key = "${dg.relayUrl}/${meta.id}"
         // Non-interactive in onboarding: the card itself does nothing (no pointer); only
         // the Join button acts, so the user can join several groups without leaving.
-        className = ClassName(if (interactive) "group-card" else "group-card static")
+        className =
+            ClassName(
+                buildString {
+                    append(if (interactive) "group-card" else "group-card static")
+                    if (muted) append(" muted")
+                },
+            )
         if (interactive) onClick = { onOpen() }
         div {
             className = ClassName("group-card-head")
@@ -358,6 +373,13 @@ internal fun ChildrenBuilder.discoverGroupCard(
                     div {
                         className = ClassName("group-card-name")
                         +name
+                    }
+                    if (muted) {
+                        span {
+                            className = ClassName("group-card-muted")
+                            title = "Muted"
+                            icon(Ic.NotificationsOff)
+                        }
                     }
                     // The onboarding card carries its own trailing Join/Joined action
                     // (below); only the plain Home card shows the inline "Joined" badge.
