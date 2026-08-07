@@ -2091,6 +2091,28 @@ body {
     opacity: 0.4;
 }
 
+/* Muted channel: the label recedes to muted text, matching the native ChannelRow. */
+.group-side-row.muted .group-side-row-label {
+    color: var(--color-text-muted);
+}
+
+/* Unread inside a muted group: presence without a number, since the number is the
+   noise muting removes. Mirrors the native RailMutedDot / ChannelRow dot. */
+.muted-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    background: var(--color-text-muted);
+    border-radius: var(--radius-full);
+}
+
+/* On the rail the dot replaces the badge, so it inherits the badge's corner anchor
+   and drops the pill's padding/border. */
+.rail-badge.muted-dot {
+    padding: 0;
+    border: 0;
+}
+
 .group-side-row.drag-over::before,
 .group-side-drop-end.drag-over::before {
     content: "";
@@ -7655,6 +7677,13 @@ body {
 }
 
 .member-name.dimmed {
+    color: var(--color-text-muted);
+}
+
+/* Per-group notification level on a Muted groups row, beside the group name. */
+.member-level {
+    flex-shrink: 0;
+    font-size: 12px;
     color: var(--color-text-muted);
 }
 

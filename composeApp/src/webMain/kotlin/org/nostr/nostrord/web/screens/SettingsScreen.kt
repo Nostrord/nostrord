@@ -14,12 +14,14 @@ import org.nostr.nostrord.notifications.playNotificationSound
 import org.nostr.nostrord.settings.AppTheme
 import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.ui.Identifier
+import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.UserRoute
 import org.nostr.nostrord.ui.screens.backup.BackupViewModel
 import org.nostr.nostrord.ui.screens.backup.MIN_BACKUP_PASSWORD
 import org.nostr.nostrord.ui.screens.backup.backupSecurityTips
 import org.nostr.nostrord.ui.screens.profile.EditProfileViewModel
 import org.nostr.nostrord.ui.screens.settings.DmRelaySettingsViewModel
+import org.nostr.nostrord.ui.screens.settings.MutedGroupsViewModel
 import org.nostr.nostrord.ui.screens.settings.MutedUsersViewModel
 import org.nostr.nostrord.ui.screens.settings.SecurityViewModel
 import org.nostr.nostrord.utils.Result
@@ -28,6 +30,7 @@ import org.nostr.nostrord.utils.toRelayUrl
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
+import org.nostr.nostrord.web.components.AvatarKind
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.IdentifierRow
 import org.nostr.nostrord.web.components.UploadButton
@@ -64,7 +67,7 @@ external interface SettingsScreenProps : Props {
 }
 
 private val sections =
-    listOf("Profile", "Backup Keys", "Relays (NIP-65)", "Direct Messages", "Appearance", "Media", "Notifications", "Muted users", "Security")
+    listOf("Profile", "Backup Keys", "Relays (NIP-65)", "Direct Messages", "Appearance", "Media", "Notifications", "Muted users", "Muted groups", "Security")
 
 /**
  * Settings — real port of the Compose SettingsScreen: a full-screen overlay with a section
@@ -162,6 +165,7 @@ val SettingsScreen =
                     "Media" -> MediaPanel()
                     "Notifications" -> NotificationsPanel()
                     "Muted users" -> MutedUsersPanel()
+                    "Muted groups" -> MutedGroupsPanel()
                     "Security" -> SecurityPanel()
                 }
             }
@@ -845,6 +849,87 @@ private val MutedUsersPanel =
             }
         }
     }
+
+/**
+ * Every group with a notification level of its own, so an override can be found and
+ * undone without opening the group. Compose parity: MutedGroupsPanelContent.kt.
+ */
+private val MutedGroupsPanel =
+    FC<Props> {
+        val vm = useViewModel { MutedGroupsViewModel(AppModule.nostrRepository, AppModule.notificationSettings) }
+        val rows = useStateFlow(vm.rows)
+        val defaultLevel = useStateFlow(vm.defaultLevel)
+
+        div {
+            className = ClassName("settings-card")
+            div {
+                className = ClassName("settings-info-text")
+                +(
+                    "Muted groups never notify and drop their unread count to a dot. " +
+                        "These overrides are stored per account and sync to your other devices."
+                    )
+            }
+        }
+
+        div {
+            className = ClassName("settings-card")
+            div {
+                className = ClassName("settings-section-head")
+                +"MUTED GROUPS"
+            }
+            if (rows.isEmpty()) {
+                div {
+                    className = ClassName("settings-info-text")
+                    +"No group overrides yet. Right-click a group in the sidebar, or open its info panel, to mute it."
+                }
+            }
+            rows.forEach { row ->
+                div {
+                    key = row.groupId
+                    className = ClassName("member-row")
+                    // Row opens the group; the route change closes the settings overlay.
+                    if (row.relayUrl.isNotBlank()) {
+                        onClick = { pushRoute(GroupRoute(row.relayUrl, row.groupId)) }
+                    }
+                    WebAvatar {
+                        url = row.picture
+                        seed = row.groupId
+                        this.name = row.name
+                        kind = AvatarKind.GROUP
+                        cls = "member-avatar"
+                    }
+                    span {
+                        className = ClassName("member-name")
+                        +row.name
+                    }
+                    span {
+                        className = ClassName("member-level")
+                        +webLevelLabel(row.level)
+                    }
+                    button {
+                        className = ClassName("btn-ghost")
+                        onClick = {
+                            it.stopPropagation()
+                            vm.clearOverride(row.groupId)
+                        }
+                        +(if (row.level == NotificationLevel.MUTED) "Unmute" else "Reset")
+                    }
+                }
+            }
+            if (rows.isNotEmpty()) {
+                div {
+                    className = ClassName("settings-info-text")
+                    +"Clearing an override returns the group to the global default (${webLevelLabel(defaultLevel).lowercase()})."
+                }
+            }
+        }
+    }
+
+private fun webLevelLabel(level: NotificationLevel): String = when (level) {
+    NotificationLevel.ALL -> "All messages"
+    NotificationLevel.MENTIONS_REPLIES -> "Mentions & replies"
+    NotificationLevel.MUTED -> "Muted"
+}
 
 // ── Notifications ────────────────────────────────────────────────────────────
 

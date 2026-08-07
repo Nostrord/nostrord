@@ -32,6 +32,8 @@ import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.BunkerStatusBanner
+import org.nostr.nostrord.web.components.GroupContextMenu
+import org.nostr.nostrord.web.components.GroupMenuAnchor
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.ImageViewerHost
 import org.nostr.nostrord.web.components.WebAvatar
@@ -99,11 +101,17 @@ private const val RAIL_SCROLL_STEP = 3.0
 val AppFrame =
     FC<Props> {
         val repo = AppModule.nostrRepository
-        val vm = useViewModel { HomePageViewModel(repo, AppModule.notificationHistoryStore) }
+        val vm = useViewModel {
+            HomePageViewModel(repo, AppModule.notificationHistoryStore, muteState = AppModule.notificationSettings.muteState)
+        }
         // Channel model: the rail shows only root groups; a subgroup lives in its root's
         // channel list, with the root chip aggregating the subtree's unread.
         val railRoots = useStateFlow(vm.railRootGroups)
         val railUnread = useStateFlow(vm.railUnreadCounts)
+        val railMutedActivity = useStateFlow(vm.railMutedActivity)
+        val muteState = useStateFlow(AppModule.notificationSettings.muteState)
+        // Open rail context menu: which group, and where it was right-clicked.
+        val (railMenu, setRailMenu) = useState<GroupMenuAnchor?> { null }
         val groupParents = useStateFlow(vm.groupParents)
         val friends = useStateFlow(vm.friends)
         val friendsLoading = useStateFlow(vm.friendsLoading)
@@ -463,6 +471,10 @@ val AppFrame =
                                 // Kill any native HTML drag started inside the chip; it would
                                 // take over the pointer stream the reorder needs.
                                 onDragStart = { it.preventDefault() }
+                                onContextMenu = { e ->
+                                    e.preventDefault()
+                                    setRailMenu(GroupMenuAnchor(group.meta.id, e.clientX.toDouble(), e.clientY.toDouble()))
+                                }
                                 button {
                                     className =
                                         ClassName(
@@ -496,6 +508,9 @@ val AppFrame =
                                         className = ClassName("rail-badge")
                                         +(if (unread > 99) "99+" else "$unread")
                                     }
+                                } else if (group.meta.id in railMutedActivity) {
+                                    // Muted with traffic behind it: a dot, no number.
+                                    span { className = ClassName("rail-badge muted-dot") }
                                 }
                             }
                         }
@@ -981,6 +996,17 @@ val AppFrame =
                     onCancel = { setConfirmLogout(false) },
                     onConfirm = { performLogout() },
                 )
+            }
+
+            // Rail chip context menu (right-click): mute without opening the group.
+            railMenu?.let { anchor ->
+                GroupContextMenu {
+                    x = anchor.x
+                    y = anchor.y
+                    muted = muteState.isMuted(anchor.groupId)
+                    onClose = { setRailMenu(null) }
+                    onToggleMute = { AppModule.notificationSettings.toggleMute(anchor.groupId) }
+                }
             }
 
             // Zap modal host: mounted once so any WebZapController.request(...) from a
