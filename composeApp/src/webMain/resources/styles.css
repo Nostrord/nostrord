@@ -11413,11 +11413,26 @@ button.hierarchy-crumb-item:hover {
     opacity: 0.45;
 }
 
+/* Sits at the row's trailing edge because .group-card-name takes the free space. As an
+   action it earns that position: a tap unmutes without opening the group. */
 .group-card-muted {
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
     color: var(--color-text-muted);
+    border-radius: var(--radius-sm);
+}
+
+.group-card-muted.action {
+    cursor: pointer;
+}
+
+.group-card-muted.action:hover {
+    color: var(--color-text-primary);
+    background: var(--color-hover);
 }
 
 .group-card-muted .ico {

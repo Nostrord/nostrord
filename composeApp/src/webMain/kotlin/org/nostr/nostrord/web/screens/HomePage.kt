@@ -228,6 +228,7 @@ val HomePage =
                                                 relayMeta[group.relayUrl]?.icon,
                                                 isJoined = false,
                                                 muted = muteState.isMuted(group.meta.id),
+                                                onUnmute = { AppModule.notificationSettings.toggleMute(group.meta.id) },
                                             ) {
                                                 props.onOpenGroup(JoinedGroup(group.relayUrl, group.meta))
                                             }
@@ -337,6 +338,9 @@ internal fun ChildrenBuilder.discoverGroupCard(
     // Silenced group: the card recedes and carries a bell-off mark, matching the rail chip
     // so the same group doesn't read as two different states on two surfaces.
     muted: Boolean = false,
+    // Unmute straight from the card. Null leaves the mark inert (discovery lists, where
+    // the account has no level for the group).
+    onUnmute: (() -> Unit)? = null,
     onOpen: () -> Unit,
 ) {
     val meta = dg.meta
@@ -375,9 +379,18 @@ internal fun ChildrenBuilder.discoverGroupCard(
                         +name
                     }
                     if (muted) {
+                        // A span, not a button: the card itself is a <button> and nesting one
+                        // inside it is invalid. stopPropagation keeps the tap off the card's
+                        // own open-the-group handler (same pattern as the relay host link).
                         span {
-                            className = ClassName("group-card-muted")
-                            title = "Muted"
+                            className = ClassName(if (onUnmute != null) "group-card-muted action" else "group-card-muted")
+                            title = if (onUnmute != null) "Unmute group" else "Muted"
+                            onUnmute?.let { unmute ->
+                                onClick = {
+                                    it.stopPropagation()
+                                    unmute()
+                                }
+                            }
                             icon(Ic.NotificationsOff)
                         }
                     }

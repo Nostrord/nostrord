@@ -352,6 +352,7 @@ fun HomePageScreen(
                                                 // earns its place only in the mixed lists.
                                                 isJoined = false,
                                                 muted = muteState.isMuted(group.meta.id),
+                                                onUnmute = { AppModule.notificationSettings.toggleMute(group.meta.id) },
                                                 onRelayClick = { onOpenRelay(group.relayUrl) },
                                                 onClick = { onOpenGroup(JoinedGroup(group.relayUrl, group.meta)) },
                                             )
