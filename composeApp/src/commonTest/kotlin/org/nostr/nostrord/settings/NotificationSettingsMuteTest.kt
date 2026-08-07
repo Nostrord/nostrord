@@ -108,6 +108,16 @@ class NotificationSettingsMuteTest {
     }
 
     @Test
+    fun remoteLevelsWithNoActiveAccountAreDropped() {
+        // Guards the account-switch window: an in-flight decrypt that lands after clear()
+        // must not write the previous account's groups into the next one.
+        val settings = settingsFor("mute-test-remote-noaccount")
+        settings.clear()
+        settings.applyRemoteGroupLevels(mapOf("ghost" to NotificationLevel.MUTED))
+        assertEquals(emptyMap(), settings.groupLevels.value)
+    }
+
+    @Test
     fun mentionsRepliesIsNotMuted() {
         val settings = settingsFor("mute-test-mentions")
         settings.setGroupLevel("groupF", NotificationLevel.MENTIONS_REPLIES)
