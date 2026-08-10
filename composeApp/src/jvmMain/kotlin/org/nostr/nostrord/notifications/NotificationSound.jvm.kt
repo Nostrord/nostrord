@@ -1,8 +1,13 @@
 package org.nostr.nostrord.notifications
 
 import javazoom.jl.player.Player
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.BufferedInputStream
 import kotlin.concurrent.thread
+
+// Desktop playback goes to the media mixer; no OS focus mode gates it.
+actual val notificationSoundSuppression: StateFlow<SoundSuppression?> = MutableStateFlow(null)
 
 // Anchors resource loading so we don't rely on anonymous-class `javaClass`.
 private class ClassLoaderAnchor

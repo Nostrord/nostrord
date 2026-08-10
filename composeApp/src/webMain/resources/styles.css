@@ -6881,8 +6881,18 @@ body {
     font-weight: 600;
     cursor: pointer;
 }
-.settings-test-sound:hover {
+.settings-test-sound:hover:not(:disabled) {
     text-decoration: underline;
+}
+.settings-test-sound:disabled {
+    color: var(--color-text-muted);
+    cursor: default;
+}
+/* Shown when the OS silences the chime (Do Not Disturb / silent ringer). */
+.settings-sound-notice {
+    color: var(--color-warning);
+    font-size: 12px;
+    line-height: 16px;
 }
 
 /* Fenced code block + inline code (mirrors native CodeBlockContent / Monospace) */

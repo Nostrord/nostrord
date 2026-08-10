@@ -1,5 +1,11 @@
 package org.nostr.nostrord.notifications
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+// Browsers expose no system-wide mute state to a page.
+actual val notificationSoundSuppression: StateFlow<SoundSuppression?> = MutableStateFlow(null)
+
 actual fun playNotificationSound() {
     try {
         val audio = js("new Audio('message-incoming.mp3')")

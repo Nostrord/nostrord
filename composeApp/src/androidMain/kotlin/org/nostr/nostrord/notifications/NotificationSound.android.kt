@@ -2,11 +2,22 @@ package org.nostr.nostrord.notifications
 
 import android.annotation.SuppressLint
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.nostr.nostrord.R
+
+private val suppression = MutableStateFlow<SoundSuppression?>(null)
+
+actual val notificationSoundSuppression: StateFlow<SoundSuppression?> = suppression.asStateFlow()
 
 /**
  * Must be called once from Application.onCreate() before [playNotificationSound].
@@ -15,8 +26,25 @@ object AndroidNotificationSoundInit {
     @SuppressLint("StaticFieldLeak") // Application context is safe to hold statically
     internal var appContext: Context? = null
 
+    // Both broadcasts are system-protected, so the receiver stays not-exported. It lives
+    // for the process lifetime: the suppression state has to stay live while Settings is
+    // open, and the notification shade doesn't pause the activity.
+    private val systemStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            suppression.value = currentSuppression(context.applicationContext)
+        }
+    }
+
     fun initialize(context: Context) {
-        appContext = context.applicationContext
+        if (appContext != null) return
+        val app = context.applicationContext
+        appContext = app
+        suppression.value = currentSuppression(app)
+        val filter = IntentFilter().apply {
+            addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
+            addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
+        }
+        ContextCompat.registerReceiver(app, systemStateReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 }
 
@@ -27,7 +55,7 @@ object AndroidNotificationSoundInit {
  * streams, and only USAGE_NOTIFICATION routes there — the MediaPlayer default
  * (USAGE_MEDIA) is audible through both.
  */
-private fun shouldStayQuiet(context: Context): Boolean {
+private fun currentSuppression(context: Context): SoundSuppression? {
     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
     // Match the DND filters explicitly: INTERRUPTION_FILTER_UNKNOWN also fails the
     // "== ALL" test, and treating it as DND would mute the sound for good.
@@ -38,15 +66,22 @@ private fun shouldStayQuiet(context: Context): Boolean {
         -> true
         else -> false
     }
-    if (dnd) return true
+    if (dnd) return SoundSuppression.DoNotDisturb
     val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    return am != null && am.ringerMode != AudioManager.RINGER_MODE_NORMAL
+    if (am != null && am.ringerMode != AudioManager.RINGER_MODE_NORMAL) {
+        return SoundSuppression.SilentRinger
+    }
+    return null
 }
 
 actual fun playNotificationSound() {
     val context = AndroidNotificationSoundInit.appContext ?: return
     try {
-        if (shouldStayQuiet(context)) return
+        // Re-read rather than trust the broadcast state: a missed broadcast would
+        // otherwise leak an audible chime under DND.
+        val quiet = currentSuppression(context)
+        suppression.value = quiet
+        if (quiet != null) return
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
