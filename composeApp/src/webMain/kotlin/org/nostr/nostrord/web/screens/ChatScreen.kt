@@ -35,6 +35,7 @@ import org.nostr.nostrord.ui.screens.group.pluralizeSystemAction
 import org.nostr.nostrord.ui.scroll.ChatScrollPolicy
 import org.nostr.nostrord.ui.scroll.JumpPillTarget
 import org.nostr.nostrord.ui.text.MarkdownEmphasis
+import org.nostr.nostrord.ui.text.MarkdownMedia
 import org.nostr.nostrord.utils.ChatSearch
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
@@ -3564,7 +3565,7 @@ private val BLOCKQUOTE_REGEX = Regex("^[ \\t]*>[ \\t]?.*(?:\\r?\\n[ \\t]*>[ \\t]
 private val BLOCKQUOTE_LINE_PREFIX = Regex("^[ \\t]*>[ \\t]?", RegexOption.MULTILINE)
 
 internal fun ChildrenBuilder.renderMessageContent(
-    content: String,
+    rawContent: String,
     tags: List<List<String>>,
     userMetadata: Map<String, UserMetadata>,
     messagesById: Map<String, NostrGroupClient.NostrMessage>,
@@ -3572,6 +3573,9 @@ internal fun ChildrenBuilder.renderMessageContent(
     onEventRef: (String) -> Unit,
     onGroupRef: (String, String?) -> Unit,
 ) {
+    // Markdown image embeds collapse to their bare url so URL_REGEX sees a plain link; the
+    // surrounding `![alt](` / `)` would otherwise render as literal text. Mirrors native.
+    val content = MarkdownMedia.unwrapImages(rawContent)
     val emojiMap = extractEmojiMap(tags)
     val posters = extractVideoPosters(tags)
     val dims = Nip68.extractImetaDimensions(tags)

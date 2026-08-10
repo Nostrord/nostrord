@@ -3,6 +3,7 @@ package org.nostr.nostrord.ui.components.chat
 import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.nostr.Nip68
 import org.nostr.nostrord.ui.text.MarkdownEmphasis
+import org.nostr.nostrord.ui.text.MarkdownMedia
 
 /**
  * # Chat Message Content Parser
@@ -179,15 +180,19 @@ object MessageContentParser {
      * - Pass 1: Extract code blocks first (they protect content from formatting)
      * - Pass 2: Parse remaining content (URLs, mentions, formatting, hashtags, emojis)
      *
-     * @param content Raw message content
+     * @param rawContent Raw message content
      * @param emojiMap Map of shortcode to image URL from NIP-30 emoji tags
      * @return List of parsed parts in order, preserving original text positions
      */
     fun parse(
-        content: String,
+        rawContent: String,
         emojiMap: Map<String, String> = emptyMap(),
     ): List<ParsedPart> {
-        if (content.isEmpty()) return emptyList()
+        if (rawContent.isEmpty()) return emptyList()
+
+        // Markdown image embeds collapse to their bare url so the media passes below see a
+        // plain link; the surrounding `![alt](` / `)` would otherwise render as literal text.
+        val content = MarkdownMedia.unwrapImages(rawContent)
 
         // Check cache first — avoids 8 regex passes for previously seen messages
         val cacheKey = if (emojiMap.isEmpty()) content else "$content\u0000${emojiMap.hashCode()}"
