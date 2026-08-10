@@ -9,6 +9,7 @@ import org.nostr.nostrord.network.upload.MediaUploadService
 import org.nostr.nostrord.network.upload.mediaServerDisplayName
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.notifications.NotificationPermission
+import org.nostr.nostrord.notifications.notificationSoundSuppression
 import org.nostr.nostrord.notifications.playNotificationSound
 import org.nostr.nostrord.settings.AppTheme
 import org.nostr.nostrord.settings.NotificationLevel
@@ -852,6 +853,7 @@ private val NotificationsPanel =
         val settings = AppModule.notificationSettings
         val service = AppModule.notificationService
         val soundEnabled = useStateFlow(settings.soundEnabled)
+        val soundSuppression = useStateFlow(notificationSoundSuppression)
         val systemEnabled = useStateFlow(settings.systemNotificationsEnabled)
         val defaultLevel = useStateFlow(settings.defaultLevel)
         val permission = useStateFlow(service.permission)
@@ -864,8 +866,15 @@ private val NotificationsPanel =
             if (soundEnabled) {
                 button {
                     className = ClassName("settings-test-sound")
+                    disabled = soundSuppression != null
                     onClick = { playNotificationSound() }
                     +"Test sound"
+                }
+                soundSuppression?.let {
+                    div {
+                        className = ClassName("settings-sound-notice")
+                        +it.notice
+                    }
                 }
             }
             // Desktop notifications live in the same box, separated by a divider (native layout).

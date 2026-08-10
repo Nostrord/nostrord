@@ -879,6 +879,7 @@ private fun NotificationsPanelContent() {
     val notificationService = AppModule.notificationService
 
     val soundEnabled by settings.soundEnabled.collectAsState()
+    val soundSuppression by org.nostr.nostrord.notifications.notificationSoundSuppression.collectAsState()
     val systemEnabled by settings.systemNotificationsEnabled.collectAsState()
     val defaultLevel by settings.defaultLevel.collectAsState()
     val permission by notificationService.permission.collectAsState()
@@ -904,14 +905,30 @@ private fun NotificationsPanelContent() {
                     onCheckedChange = { settings.setSoundEnabled(it) },
                 )
                 if (soundEnabled) {
+                    // The system mutes the chime regardless of this setting, so the test
+                    // button would look broken instead of blocked.
+                    val suppression = soundSuppression
                     Spacer(Modifier.height(Spacing.sm))
                     TextButton(
                         onClick = {
                             org.nostr.nostrord.notifications.playNotificationSound()
                         },
+                        enabled = suppression == null,
                         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
                     ) {
-                        Text("Test sound", color = NostrordColors.Primary, fontSize = 13.sp)
+                        Text(
+                            "Test sound",
+                            color = if (suppression == null) NostrordColors.Primary else NostrordColors.TextMuted,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    if (suppression != null) {
+                        Text(
+                            suppression.notice,
+                            color = NostrordColors.Warning,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                        )
                     }
                 }
             }
