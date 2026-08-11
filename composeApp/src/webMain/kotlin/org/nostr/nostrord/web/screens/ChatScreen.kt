@@ -24,6 +24,8 @@ import org.nostr.nostrord.nostr.Nip68
 import org.nostr.nostrord.nostr.Nip84
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
+import org.nostr.nostrord.ui.mentions.MentionAutocomplete
+import org.nostr.nostrord.ui.mentions.MentionCtx
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.screens.group.GroupMembership
@@ -57,6 +59,8 @@ import org.nostr.nostrord.web.components.ChatVideo
 import org.nostr.nostrord.web.components.EmojiPicker
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.LiveSpaceBar
+import org.nostr.nostrord.web.components.MentionMatch
+import org.nostr.nostrord.web.components.MentionPopup
 import org.nostr.nostrord.web.components.Spoiler
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
@@ -66,6 +70,9 @@ import org.nostr.nostrord.web.components.confirmDialog
 import org.nostr.nostrord.web.components.copyToClipboard
 import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.memberSkeleton
+import org.nostr.nostrord.web.components.mentionDisplayName
+import org.nostr.nostrord.web.components.mentionHighlight
+import org.nostr.nostrord.web.components.mentionMatches
 import org.nostr.nostrord.web.components.messageSendStatus
 import org.nostr.nostrord.web.components.messageSkeleton
 import org.nostr.nostrord.web.components.reactionBadges
@@ -200,74 +207,14 @@ private fun processMentions(content: String, userMetadata: Map<String, UserMetad
     }.getOrDefault(match.value)
 }
 
-private fun displayName(pubkey: String, meta: UserMetadata?): String = meta?.displayName?.takeIf { it.isNotBlank() }
-    ?: meta?.name?.takeIf { it.isNotBlank() }
-    ?: shortNpub(pubkey)
-
-/** Active mention being typed in the composer: the trigger (@ or %), its query, and start index. */
-private data class MentionCtx(val trigger: Char, val query: String, val start: Int)
-
-/** A single autocomplete suggestion: how to show it, a subtitle, and the `nostr:` ref to insert. */
-private data class MentionMatch(
-    val label: String,
-    val picture: String?,
-    val seed: String,
-    val group: Boolean,
-    val ref: String,
-    val sub: String,
-)
-
-/**
- * Find the mention being typed at [cursor]: the nearest `@`/`%` that starts a word and runs
- * unbroken (no whitespace) up to the cursor. Returns null when there's no active mention.
- */
-private fun detectMention(text: String, cursor: Int): MentionCtx? {
-    val before = text.take(cursor)
-    val idx = maxOf(before.lastIndexOf('@'), before.lastIndexOf('%'))
-    if (idx < 0) return null
-    val boundary = idx == 0 || before[idx - 1].isWhitespace()
-    if (!boundary) return null
-    val query = before.substring(idx + 1)
-    if (query.any { it.isWhitespace() }) return null
-    return MentionCtx(before[idx], query, idx)
-}
+private fun displayName(pubkey: String, meta: UserMetadata?): String = mentionDisplayName(pubkey, meta)
 
 /** A mention requested from the profile modal, inserted into the composer draft. */
 private data class MentionRequest(val name: String, val pubkey: String, val nonce: Int)
 
-/** A run of composer text, flagged as a resolved @mention (gold) or plain. */
-private data class HlSeg(val text: String, val mention: Boolean)
-
 /** Per-message values that depend only on the message (+ group/relay), precomputed once per
  *  message-list change so the row list doesn't re-encode bech32 + re-serialize JSON every render. */
 private data class RowMeta(val nevent: String, val eventJson: String, val link: String)
-
-/**
- * Split [text] into plain / mention runs for the composer's colored mirror. Only the literal
- * [tokens] (e.g. "@alice", "%my group") that are resolved mentions are tinted — same rule as
- * native's MentionVisualTransformation (it colors the chosen mentions, not every "@word").
- */
-private fun highlightSegments(text: String, tokens: Collection<String>): List<HlSeg> {
-    if (text.isEmpty()) return emptyList()
-    val colored = BooleanArray(text.length)
-    tokens.forEach { token ->
-        if (token.isEmpty()) return@forEach
-        var i = text.indexOf(token)
-        while (i >= 0) {
-            for (j in i until i + token.length) colored[j] = true
-            i = text.indexOf(token, i + token.length)
-        }
-    }
-    val segs = mutableListOf<HlSeg>()
-    var start = 0
-    for (k in 1..text.length) {
-        if (k == text.length || colored[k] != colored[start]) {
-            segs.add(HlSeg(text.substring(start, k), colored[start]))
-            start = k
-        }
-    }
-    return segs
-}
 
 /** Markdown-toolbar button (prototype FmtBtn). Unsupported tokens render disabled. */
 private fun ChildrenBuilder.fmtBtn(ic: Ic, label: String, disabled: Boolean = false, onSelect: () -> Unit) {
@@ -399,52 +346,12 @@ private val ChatComposer =
         }
 
         // Autocomplete suggestions for the active mention (members for @, groups for %).
-        val mentionMatches: List<MentionMatch> =
-            when (mention?.trigger) {
-                '@' -> {
-                    val normalizedQuery = mention.query.normalizeForSearch()
-                    members.asSequence()
-                        .map { pk -> pk to displayName(pk, userMetadata[pk]) }
-                        .filter { (_, nm) -> mention.query.isBlank() || nm.normalizeForSearch().contains(normalizedQuery) }
-                        .take(6)
-                        .map { (pk, nm) ->
-                            MentionMatch(
-                                nm,
-                                userMetadata[pk]?.picture,
-                                pk,
-                                group = false,
-                                ref = "nostr:" + Nip19.encodeNpub(pk),
-                                sub = shortNpub(pk) + pk.takeLast(4),
-                            )
-                        }
-                        .toList()
-                }
-                '%' -> {
-                    val normalizedQuery = mention.query.normalizeForSearch()
-                    allGroups.asSequence()
-                        .filter { mg ->
-                            mention.query.isBlank() ||
-                                (mg.meta.name ?: mg.meta.id).normalizeForSearch().contains(normalizedQuery)
-                        }
-                        .take(6)
-                        .map { mg ->
-                            // Encode the naddr with the group's OWN hosting relay (and that relay's
-                            // pubkey), not the current chat relay, so the mention navigates correctly.
-                            val gRelayHost = mg.relayUrl.removePrefix("wss://").removePrefix("ws://").trimEnd('/')
-                            val ref = "nostr:" + Nip19.encodeNaddr(mg.meta.id, mg.relayUrl, 39000, props.relayPubkeyOf(mg.relayUrl))
-                            MentionMatch(mg.meta.name ?: mg.meta.id, mg.meta.picture, mg.meta.id, group = true, ref = ref, sub = gRelayHost)
-                        }
-                        .toList()
-                }
-                else -> emptyList()
-            }
+        val mentionMatches = mentionMatches(mention, members, userMetadata, allGroups, props.relayPubkeyOf)
 
         // Replace the typed "@query"/"%query" with the chosen suggestion.
         fun insertMention(mm: MentionMatch) {
             val m = mention ?: return
-            val cursorEnd = (m.start + 1 + m.query.length).coerceAtMost(draft.length)
-            val inserted = if (mm.group) "%${mm.label}" else "@${mm.label}"
-            setDraft(draft.take(m.start) + inserted + " " + draft.substring(cursorEnd))
+            setDraft(MentionAutocomplete.insert(draft, m, mm.label).text)
             if (mm.group) {
                 setGroupMentions { it + (mm.label to mm.ref) }
             } else {
@@ -736,43 +643,13 @@ private val ChatComposer =
                 // Mention popup floats above the frame (anchored to the area, the
                 // frame's overflow:hidden would clip it inside the input row).
                 if (mention != null && mentionMatches.isNotEmpty()) {
-                    div {
+                    MentionPopup {
                         key = "mention-popup"
-                        className = ClassName("mention-popup")
-                        div {
-                            className = ClassName("mention-header")
-                            +(if (mention.trigger == '%') "GROUPS" else "MEMBERS")
-                        }
-                        val sel = mentionSelected.coerceIn(0, mentionMatches.size - 1)
-                        mentionMatches.forEachIndexed { idx, mm ->
-                            div {
-                                key = mm.ref
-                                className = ClassName(if (idx == sel) "mention-row selected" else "mention-row")
-                                onMouseDown = { e ->
-                                    e.preventDefault()
-                                    insertMention(mm)
-                                }
-                                onMouseEnter = { setMentionSelected(idx) }
-                                WebAvatar {
-                                    url = mm.picture
-                                    seed = mm.seed
-                                    this.name = mm.label
-                                    kind = if (mm.group) AvatarKind.GROUP else AvatarKind.USER
-                                    cls = "mention-avatar"
-                                }
-                                div {
-                                    className = ClassName("mention-text")
-                                    span {
-                                        className = ClassName("mention-name")
-                                        +mm.label
-                                    }
-                                    span {
-                                        className = ClassName("mention-key")
-                                        +mm.sub
-                                    }
-                                }
-                            }
-                        }
+                        matches = mentionMatches
+                        trigger = mention.trigger
+                        selected = mentionSelected
+                        onPick = { insertMention(it) }
+                        onHover = { setMentionSelected(it) }
                     }
                 }
 
@@ -879,17 +756,7 @@ private val ChatComposer =
                             div {
                                 className = ClassName("composer-highlight")
                                 ref = composerHighlightRef
-                                val tokens = mentions.keys.map { "@$it" } + groupMentions.keys.map { "%$it" }
-                                highlightSegments(draft, tokens).forEach { seg ->
-                                    if (seg.mention) {
-                                        span {
-                                            className = ClassName("msg-mention")
-                                            +seg.text
-                                        }
-                                    } else {
-                                        +seg.text
-                                    }
-                                }
+                                mentionHighlight(draft, mentions.keys.map { "@$it" } + groupMentions.keys.map { "%$it" })
                             }
                             textarea {
                                 ref = composerInputRef
@@ -912,7 +779,7 @@ private val ChatComposer =
                                     if (showHints) setShowHints(false)
                                     setDraft(v)
                                     val cursor = (event.currentTarget.asDynamic().selectionStart as? Int) ?: v.length
-                                    setMention(detectMention(v, cursor))
+                                    setMention(MentionAutocomplete.detect(v, cursor))
                                     setMentionSelected(0)
                                 }
                                 onKeyDown = { event ->

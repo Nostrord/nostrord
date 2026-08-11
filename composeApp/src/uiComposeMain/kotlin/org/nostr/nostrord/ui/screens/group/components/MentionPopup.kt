@@ -19,31 +19,22 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
+import org.nostr.nostrord.ui.mentions.MentionAutocomplete
 import org.nostr.nostrord.ui.screens.group.model.MemberInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.NostrordTypography
 import org.nostr.nostrord.ui.theme.Spacing
-import org.nostr.nostrord.utils.normalizeForSearch
 import org.nostr.nostrord.utils.shortNpub
 
 /**
- * Get filtered members based on query for mention popup.
- * Used by MessageInput to know the count for keyboard navigation.
+ * Members offered for `@query`. Also used by the composers to know the count for keyboard
+ * navigation, so the highlighted row and the rendered list can never disagree.
  */
 fun getFilteredMembers(
     members: List<MemberInfo>,
     query: String,
-): List<MemberInfo> = if (query.isEmpty()) {
-    members.take(8)
-} else {
-    val normalizedQuery = query.normalizeForSearch()
-    members
-        .filter { member ->
-            member.displayName.normalizeForSearch().contains(normalizedQuery) ||
-                member.pubkey.contains(query, ignoreCase = true)
-        }.take(8)
-}
+): List<MemberInfo> = MentionAutocomplete.filter(members, query) { listOf(it.displayName, it.pubkey) }
 
 @Composable
 fun MentionPopup(
