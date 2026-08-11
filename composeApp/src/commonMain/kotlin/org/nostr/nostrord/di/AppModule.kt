@@ -30,6 +30,7 @@ import org.nostr.nostrord.network.managers.UnreadManager
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.EventDeduplicator
 import org.nostr.nostrord.network.outbox.RelayListManager
+import org.nostr.nostrord.network.toCachedEvent
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.notifications.FocusTracker
@@ -257,6 +258,9 @@ object AppModule {
             },
             onThreadEventReceived = { groupId, event ->
                 unreadManager.onThreadEventReceived(groupId, event)
+            },
+            onThreadEventCached = { event ->
+                metadataManager.handleCachedEvent(event.toCachedEvent())
             },
         ).also { gm ->
             // Feed + popup for "an admin added you to a group" (kind:9000, live or catch-up).

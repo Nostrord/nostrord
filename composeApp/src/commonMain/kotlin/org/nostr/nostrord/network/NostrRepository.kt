@@ -4722,8 +4722,8 @@ class NostrRepository(
         }
     }
 
-    override suspend fun requestEventById(eventId: String, relayHints: List<String>, author: String?) {
-        metadataManager.requestEventById(eventId, relayHints, author) { msg, client ->
+    override suspend fun requestEventById(eventId: String, relayHints: List<String>, author: String?, groupId: String?) {
+        metadataManager.requestEventById(eventId, relayHints, author, groupId) { msg, client ->
             handleRelayMessage(msg, client)
         }
     }

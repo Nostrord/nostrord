@@ -1789,7 +1789,7 @@ private fun QuotedEvent(
     LaunchedEffect(eventId, relayHints, author, retryTick) {
         if (!cachedEvents.containsKey(eventId)) {
             eventNotFound = false
-            AppModule.nostrRepository.requestEventById(eventId, relayHints, author)
+            AppModule.nostrRepository.requestEventById(eventId, relayHints, author, currentGroupId)
             // Poll every 500ms up to 5s — yields the coroutine instead of blocking 5s solid
             repeat(10) {
                 kotlinx.coroutines.delay(500)
@@ -1924,8 +1924,9 @@ private fun QuotedEvent(
                     )
                     Text(
                         // Deleted and unreachable look identical from here (the relay just does
-                        // not serve it), so the copy must not claim either one.
-                        text = "Event removed or unavailable",
+                        // not serve it), so the copy must not claim either one. The nevent's kind
+                        // hint names what is missing even though the event never resolved.
+                        text = if (kind == 11) "Thread removed or unavailable" else "Event removed or unavailable",
                         color = NostrordColors.TextMuted,
                         style = NostrordTypography.Caption,
                     )
@@ -2014,7 +2015,7 @@ private fun QuotedEvent(
                 .padding(Spacing.md),
         ) {
             Text(
-                text = "Loading event...",
+                text = if (kind == 11) "Loading thread..." else "Loading event...",
                 color = NostrordColors.TextMuted,
                 style = NostrordTypography.Caption,
             )

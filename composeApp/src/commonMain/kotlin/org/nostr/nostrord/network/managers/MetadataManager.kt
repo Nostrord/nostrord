@@ -405,8 +405,14 @@ class MetadataManager(
         eventId: String,
         relayHints: List<String> = emptyList(),
         author: String? = null,
+        /** Group the reference was seen in. Some NIP-29 relays answer an ids-only REQ with
+         *  nothing and require the `#h` filter even for a lookup by id. */
+        groupId: String? = null,
         messageHandler: (String, NostrGroupClient) -> Unit,
     ) {
+        suspend fun NostrGroupClient.reqEvent() {
+            if (groupId != null) requestGroupMessageById(groupId, eventId) else requestEventById(eventId)
+        }
         // Skip if already cached or already in-flight
         if (_cachedEvents.value.containsKey(eventId)) return
         // Disk fallback: resolve a previously-seen event from the persistent cache before any
@@ -447,7 +453,7 @@ class MetadataManager(
             val connected = connectionManager.getAllConnectedClients()
             connected.forEach { client ->
                 try {
-                    client.requestEventById(eventId)
+                    client.reqEvent()
                 } catch (_: Exception) {
                 }
             }
@@ -463,7 +469,7 @@ class MetadataManager(
                     scope.launch {
                         if (client.awaitAuthOrTimeout(EVENT_FETCH_AUTH_TIMEOUT_MS) && !_cachedEvents.value.containsKey(eventId)) {
                             try {
-                                client.requestEventById(eventId)
+                                client.reqEvent()
                             } catch (_: Exception) {
                             }
                         }
@@ -481,7 +487,7 @@ class MetadataManager(
                     try {
                         val existing = connectionManager.getClientForRelay(hint)
                         if (existing == null || !existing.isConnected()) {
-                            connectionManager.getOrConnectRelay(hint, messageHandler)?.requestEventById(eventId)
+                            connectionManager.getOrConnectRelay(hint, messageHandler)?.reqEvent()
                         }
                     } catch (_: Exception) {
                     }

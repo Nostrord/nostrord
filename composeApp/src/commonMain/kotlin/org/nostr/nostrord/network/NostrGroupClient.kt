@@ -131,6 +131,19 @@ data class CachedEvent(
 )
 
 /**
+ * The same event as a generic cached one, for the by-id lookups the quote cards do. The group
+ * stores are keyed by group and kind; a renderer resolving a bare nevent has neither.
+ */
+fun NostrGroupClient.NostrMessage.toCachedEvent(): CachedEvent = CachedEvent(
+    id = id,
+    pubkey = pubkey,
+    kind = kind,
+    content = content,
+    createdAt = createdAt,
+    tags = tags,
+)
+
+/**
  * Result of publishing an event to a relay.
  * Represents the relay's OK response per NIP-01.
  */
