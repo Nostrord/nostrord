@@ -61,8 +61,10 @@ import org.nostr.nostrord.network.outbox.RelayListManager
 import org.nostr.nostrord.settings.AppTheme
 import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.storage.PassphraseSettings
+import org.nostr.nostrord.ui.Identifier
 import org.nostr.nostrord.ui.Screen
 import org.nostr.nostrord.ui.components.ConfirmDialog
+import org.nostr.nostrord.ui.components.IdentifierRow
 import org.nostr.nostrord.ui.components.RadioCircle
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.cards.InfoCard
@@ -1502,8 +1504,10 @@ private fun DmEncryptionPanelContent() {
                             }
                         }
                     }
+                    // Same field as the private key on Backup: monospace, copy button, no wrapping
+                    // of a value the user has to move to another device by hand.
                     revealedKey?.let {
-                        Text(text = it, style = NostrordTypography.Caption, color = NostrordColors.TextPrimary)
+                        IdentifierRow(ids = listOf(Identifier("hex", it)))
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { if (revealedKey == null) vm.revealKey() else vm.hideKey() }) {
