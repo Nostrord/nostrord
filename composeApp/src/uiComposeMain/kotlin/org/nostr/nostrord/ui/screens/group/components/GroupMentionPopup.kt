@@ -30,27 +30,19 @@ import coil3.compose.LocalPlatformContext
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import org.nostr.nostrord.ui.mentions.MentionAutocomplete
 import org.nostr.nostrord.ui.screens.group.model.GroupInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.NostrordTypography
 import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.ui.util.generateColorFromString
-import org.nostr.nostrord.utils.normalizeForSearch
 
+/** Groups offered for `%query`; the count also drives keyboard navigation in the composers. */
 fun getFilteredGroups(
     groups: List<GroupInfo>,
     query: String,
-): List<GroupInfo> = if (query.isEmpty()) {
-    groups.take(8)
-} else {
-    val normalizedQuery = query.normalizeForSearch()
-    groups
-        .filter { group ->
-            group.name.normalizeForSearch().contains(normalizedQuery) ||
-                group.id.contains(query, ignoreCase = true)
-        }.take(8)
-}
+): List<GroupInfo> = MentionAutocomplete.filter(groups, query) { listOf(it.name, it.id) }
 
 @Composable
 fun GroupMentionPopup(

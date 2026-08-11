@@ -75,6 +75,8 @@ import org.nostr.nostrord.network.upload.uploadMedia
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.components.upload.MessageUploadButton
+import org.nostr.nostrord.ui.mentions.MentionAutocomplete
+import org.nostr.nostrord.ui.mentions.MentionCtx
 import org.nostr.nostrord.ui.screens.group.model.GroupInfo
 import org.nostr.nostrord.ui.screens.group.model.MemberInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
@@ -231,28 +233,14 @@ fun MessageInput(
         }
     }
 
+    // Only one trigger can be active at a caret, so each state block asks for its own.
     fun findMentionContext(text: String, cursorPosition: Int, trigger: Char): Pair<Int, String> {
-        if (cursorPosition <= 0 || cursorPosition > text.length) return Pair(-1, "")
-        val triggerIndex = text.substring(0, cursorPosition).lastIndexOf(trigger)
-        if (triggerIndex == -1) return Pair(-1, "")
-        val charBefore = text.getOrNull(triggerIndex - 1)
-        if (charBefore != null && !charBefore.isWhitespace()) return Pair(-1, "")
-        val queryPart = text.substring(triggerIndex + 1, cursorPosition)
-        if (queryPart.contains(' ') || queryPart.contains('\n')) return Pair(-1, "")
-        return Pair(triggerIndex, queryPart)
+        val ctx = MentionAutocomplete.detect(text, cursorPosition)?.takeIf { it.trigger == trigger }
+            ?: return Pair(-1, "")
+        return Pair(ctx.start, ctx.query)
     }
 
-    // The Android IME can briefly report a stale/zeroed cursor while composing,
-    // which makes findMentionContext fail for one frame. As long as the trigger
-    // token still runs unbroken to the end of the text, treat the mention as
-    // active so the popup doesn't flicker closed mid-typing.
-    fun triggerStillActive(text: String, startIndex: Int, trigger: Char): Boolean {
-        if (startIndex < 0 || startIndex >= text.length || text[startIndex] != trigger) return false
-        val charBefore = text.getOrNull(startIndex - 1)
-        if (charBefore != null && !charBefore.isWhitespace()) return false
-        val token = text.substring(startIndex + 1)
-        return !token.contains(' ') && !token.contains('\n')
-    }
+    fun triggerStillActive(text: String, startIndex: Int, trigger: Char): Boolean = MentionAutocomplete.sustain(text, MentionCtx(trigger, "", startIndex)) != null
 
     fun updateMentionState(value: TextFieldValue) {
         val (index, query) = findMentionContext(value.text, value.selection.start, '@')
@@ -348,21 +336,12 @@ fun MessageInput(
     }
 
     fun handleMemberSelect(member: MemberInfo) {
-        val currentText = textFieldValue.text
-        val beforeMention = currentText.substring(0, mentionStartIndex)
-        val afterMention = if (mentionStartIndex + 1 + mentionQuery.length < currentText.length) {
-            currentText.substring(mentionStartIndex + 1 + mentionQuery.length).trimStart()
-        } else {
-            ""
-        }
-        val mentionPart = "@${member.displayName} "
-        val newText = if (afterMention.isEmpty()) {
-            "$beforeMention$mentionPart"
-        } else {
-            "$beforeMention$mentionPart$afterMention"
-        }
-        val cursorPosition = beforeMention.length + mentionPart.length
-        textFieldValue = TextFieldValue(newText, TextRange(cursorPosition))
+        val inserted = MentionAutocomplete.insert(
+            textFieldValue.text,
+            MentionCtx(MentionAutocomplete.USER, mentionQuery, mentionStartIndex),
+            member.displayName,
+        )
+        textFieldValue = TextFieldValue(inserted.text, TextRange(inserted.cursor))
         if (!mentions.containsKey(member.displayName)) {
             onMentionsChange(mentions + (member.displayName to member.pubkey))
         }
@@ -373,21 +352,12 @@ fun MessageInput(
     }
 
     fun handleGroupSelect(group: GroupInfo) {
-        val currentText = textFieldValue.text
-        val beforeMention = currentText.substring(0, groupMentionStartIndex)
-        val afterMention = if (groupMentionStartIndex + 1 + groupMentionQuery.length < currentText.length) {
-            currentText.substring(groupMentionStartIndex + 1 + groupMentionQuery.length).trimStart()
-        } else {
-            ""
-        }
-        val mentionPart = "%${group.name} "
-        val newText = if (afterMention.isEmpty()) {
-            "$beforeMention$mentionPart"
-        } else {
-            "$beforeMention$mentionPart$afterMention"
-        }
-        val cursorPosition = beforeMention.length + mentionPart.length
-        textFieldValue = TextFieldValue(newText, TextRange(cursorPosition))
+        val inserted = MentionAutocomplete.insert(
+            textFieldValue.text,
+            MentionCtx(MentionAutocomplete.GROUP, groupMentionQuery, groupMentionStartIndex),
+            group.name,
+        )
+        textFieldValue = TextFieldValue(inserted.text, TextRange(inserted.cursor))
         if (!groupMentions.containsKey(group.name)) {
             onGroupMentionsChange(groupMentions + (group.name to group))
         }
@@ -1425,7 +1395,9 @@ private val emojiRegex = Regex(
         "]+",
 )
 
-private class MentionVisualTransformation(
+/** Tints the resolved `@user` / `%group` tokens in a composer (and shapes emoji with the emoji
+ *  font). Shared by the chat and thread composers so a chosen mention reads the same everywhere. */
+internal class MentionVisualTransformation(
     private val mentionedNames: Set<String>,
     private val mentionColor: Color,
     private val emojiFontFamily: FontFamily? = null,
