@@ -40,6 +40,7 @@ import org.nostr.nostrord.web.components.IdentifierRow
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.icon
+import org.nostr.nostrord.web.components.noticeCard
 import org.nostr.nostrord.web.components.useEscClose
 import org.nostr.nostrord.web.navigation.pushRoute
 import react.FC
@@ -1309,13 +1310,13 @@ private val DmEncryptionPanel =
 
                 when (state) {
                     is DmEncryptionManager.State.AnnouncedElsewhere -> {
-                        div {
-                            className = ClassName("settings-status-line")
-                            +(
-                                "This account already announced an encryption key from another device. " +
-                                    "Ask that device to send it, or paste it here from its Show key screen."
-                                )
-                        }
+                        noticeCard(
+                            title = "Key held on another device",
+                            body = "This account already announced an encryption key from another device. " +
+                                "Ask that device to send it, or paste it here from its Show key screen.",
+                            alert = true,
+                            ic = Ic.Key,
+                        )
                         when (pairingState) {
                             is DmPairingManager.State.Requesting ->
                                 div {
@@ -1328,10 +1329,13 @@ private val DmEncryptionPanel =
                                     +pairingState.reason
                                 }
                             else ->
-                                button {
-                                    className = ClassName("settings-outline-btn")
-                                    onClick = { vm.requestKeyFromOtherDevice() }
-                                    +"Ask my other device"
+                                div {
+                                    className = ClassName("settings-form-actions")
+                                    button {
+                                        className = ClassName("btn-text btn-sm accent")
+                                        onClick = { vm.requestKeyFromOtherDevice() }
+                                        +"Ask my other device"
+                                    }
                                 }
                         }
                         input {
@@ -1341,58 +1345,69 @@ private val DmEncryptionPanel =
                             placeholder = "Encryption key"
                             onChange = { vm.setImportInput(it.target.value) }
                         }
-                        button {
-                            className = ClassName("settings-outline-btn")
-                            disabled = importInput.isBlank()
-                            onClick = { vm.importKey() }
-                            +"Import key"
+                        div {
+                            className = ClassName("settings-form-actions")
+                            button {
+                                className = ClassName("btn-primary btn-sm")
+                                disabled = importInput.isBlank()
+                                onClick = { vm.importKey() }
+                                +"Import key"
+                            }
+                        }
                         }
                     }
                     is DmEncryptionManager.State.Active -> {
                         div {
-                            className = ClassName("settings-status-line")
+                            className = ClassName("settings-status-line success")
                             +"Active. Senders are addressing ${state.encPubkey.take(12)}…"
                         }
                         // Another device of this account is asking for the key. The code comes from
                         // the request itself, so matching it proves which device asked.
                         (pairingState as? DmPairingManager.State.IncomingRequest)?.let { request ->
+                            noticeCard(
+                                title = "Another device wants this key",
+                                body = "Approve only if that device is showing code ${request.code}.",
+                                alert = true,
+                                ic = Ic.Key,
+                            )
                             div {
-                                className = ClassName("settings-tip")
-                                +"Another device wants this key. Approve only if it is showing code ${request.code}."
-                            }
-                            button {
-                                className = ClassName("settings-outline-btn")
-                                onClick = { vm.declinePairing() }
-                                +"Decline"
-                            }
-                            button {
-                                className = ClassName("settings-outline-btn")
-                                onClick = { vm.approvePairing() }
-                                +"Send key"
+                                className = ClassName("settings-form-actions")
+                                button {
+                                    className = ClassName("btn-text btn-sm")
+                                    onClick = { vm.declinePairing() }
+                                    +"Decline"
+                                }
+                                button {
+                                    className = ClassName("btn-primary btn-sm")
+                                    onClick = { vm.approvePairing() }
+                                    +"Send key"
+                                }
                             }
                         }
+                        // Same field as the private key on Backup: monospace, copy button, no
+                        // wrapping of a value the user has to move to another device by hand.
                         revealedKey?.let {
-                            div {
-                                className = ClassName("settings-status-line")
-                                +it
+                            IdentifierRow { ids = listOf(Identifier("hex", it)) }
+                        }
+                        div {
+                            className = ClassName("settings-form-actions")
+                            button {
+                                className = ClassName("btn-text btn-sm accent")
+                                onClick = { if (revealedKey == null) vm.revealKey() else vm.hideKey() }
+                                +(if (revealedKey == null) "Show key" else "Hide key")
                             }
-                        }
-                        button {
-                            className = ClassName("settings-outline-btn")
-                            onClick = { if (revealedKey == null) vm.revealKey() else vm.hideKey() }
-                            +(if (revealedKey == null) "Show key" else "Hide key")
-                        }
-                        button {
-                            className = ClassName("settings-outline-btn")
-                            disabled = busy
-                            onClick = { vm.rotate() }
-                            +"Replace key"
-                        }
-                        button {
-                            className = ClassName("settings-outline-btn")
-                            disabled = busy
-                            onClick = { vm.disable() }
-                            +(if (busy) "Working…" else "Turn off")
+                            button {
+                                className = ClassName("btn-text btn-sm accent")
+                                disabled = busy
+                                onClick = { vm.rotate() }
+                                +"Replace key"
+                            }
+                            button {
+                                className = ClassName("btn-text btn-sm danger")
+                                disabled = busy
+                                onClick = { vm.disable() }
+                                +(if (busy) "Working…" else "Turn off")
+                            }
                         }
                         div {
                             className = ClassName("settings-tip")
@@ -1419,11 +1434,14 @@ private val DmEncryptionPanel =
                                 +"A key from an earlier session is still saved here. Turning this on advertises it again."
                             }
                         }
-                        button {
-                            className = ClassName("settings-outline-btn")
-                            disabled = busy
-                            onClick = { vm.enable() }
-                            +(if (busy) "Publishing…" else "Turn on")
+                        div {
+                            className = ClassName("settings-form-actions")
+                            button {
+                                className = ClassName("btn-primary btn-sm")
+                                disabled = busy
+                                onClick = { vm.enable() }
+                                +(if (busy) "Publishing…" else "Turn on")
+                            }
                         }
                     }
                 }
@@ -1454,10 +1472,13 @@ private fun react.ChildrenBuilder.dmArchiveSection(
                 className = ClassName("settings-status-line")
                 +"Archiving ${progress.done} of ${progress.total}…"
             }
-            button {
-                className = ClassName("settings-outline-btn")
-                onClick = { vm.cancelArchive() }
-                +"Stop"
+            div {
+                className = ClassName("settings-form-actions")
+                button {
+                    className = ClassName("btn-text btn-sm danger")
+                    onClick = { vm.cancelArchive() }
+                    +"Stop"
+                }
             }
         }
         confirmOpen -> {
@@ -1496,10 +1517,13 @@ private fun react.ChildrenBuilder.dmArchiveSection(
                     +"Archived ${progress.done} of ${progress.total}."
                 }
             }
-            button {
-                className = ClassName("settings-outline-btn")
-                onClick = { vm.askToArchive() }
-                +"Archive history to this key"
+            div {
+                className = ClassName("settings-form-actions")
+                button {
+                    className = ClassName("btn-text btn-sm accent")
+                    onClick = { vm.askToArchive() }
+                    +"Archive history to this key"
+                }
             }
         }
     }
