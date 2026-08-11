@@ -210,4 +210,17 @@ class Nip19Test {
         val entity = Nip19.Entity.Naddr("id", pubkeyHex, 30023)
         assertEquals(pubkeyHex, Nip19.getPrimaryId(entity))
     }
+
+    @Test
+    fun `decoding is memoized but never caches a secret key`() {
+        val npub = Nip19.encodeNpub("aa".repeat(32))
+        val first = Nip19.decode(npub)
+        assertEquals(first, Nip19.decode(npub))
+
+        // An nsec must not survive in any long-lived structure; it still decodes correctly.
+        val nsec = Nip19.encodeNsec("bb".repeat(32))
+        val secret = Nip19.decode(nsec)
+        assertTrue(secret is Nip19.Entity.Nsec)
+        assertEquals("bb".repeat(32), (secret as Nip19.Entity.Nsec).privkey)
+    }
 }
