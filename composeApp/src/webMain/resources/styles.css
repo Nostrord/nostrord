@@ -5382,6 +5382,28 @@ body {
     background: var(--color-hover);
 }
 
+/* Ghost variants that carry meaning through color, for rows of quiet actions where one is
+   affirmative and one destructive (mirrors the native TextButton palette). */
+.btn-text.accent,
+.btn-ghost.accent {
+    color: var(--color-primary);
+}
+
+.btn-text.danger,
+.btn-ghost.danger {
+    color: var(--color-error);
+}
+
+.btn-text.accent:hover:not(:disabled),
+.btn-ghost.accent:hover:not(:disabled) {
+    color: var(--color-primary);
+}
+
+.btn-text.danger:hover:not(:disabled),
+.btn-ghost.danger:hover:not(:disabled) {
+    color: var(--color-error);
+}
+
 .btn-primary {
     color: #ffffff;
     background: var(--color-primary);
@@ -8267,7 +8289,9 @@ body {
 
 .settings-form-actions {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
+    gap: 8px;
     margin-top: 8px;
 }
 
@@ -8466,6 +8490,11 @@ body {
     margin-bottom: 14px;
     font-size: 13px;
     color: var(--color-text-secondary);
+}
+
+/* A state line that reports something working (a key being advertised, a job finished). */
+.settings-status-line.success {
+    color: var(--color-success);
 }
 
 /* Mobile-only back row (settings panel → section list). */
