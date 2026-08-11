@@ -1190,6 +1190,30 @@ fun SecureStorage.savePersistedNotifications(
     }
 }
 
+// Ids of events already announced in the feed, kept apart from the feed itself: the feed is
+// capped at the last few entries, so its ids alone cannot answer "did this already notify?"
+// once an entry falls off the tail.
+private fun announcedNotificationsKey(pubkey: String): String = "notification_announced_${pubkeyDigest(pubkey)}"
+
+fun SecureStorage.getAnnouncedNotificationIds(pubkey: String): List<String> {
+    val raw = getStringPref(announcedNotificationsKey(pubkey), "").ifBlank { return emptyList() }
+    return try {
+        Json.decodeFromString(raw)
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+fun SecureStorage.saveAnnouncedNotificationIds(
+    pubkey: String,
+    ids: Collection<String>,
+) {
+    try {
+        saveStringPref(announcedNotificationsKey(pubkey), Json.encodeToString(ids.toList()))
+    } catch (_: Exception) {
+    }
+}
+
 // Per-account, per-group notification level overrides (issue #70). Stored as a
 // groupId -> NotificationLevel.name map so each account keeps its own muting /
 // "mentions & replies only" choices. The settings layer maps the names back to
