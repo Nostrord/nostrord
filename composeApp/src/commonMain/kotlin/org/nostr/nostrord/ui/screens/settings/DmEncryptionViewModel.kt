@@ -208,6 +208,67 @@ class DmEncryptionViewModel(
         repo.dismissDmPairing()
     }
 
+    // ── Chat history backup file (JSONL, interchangeable with Jumble's export) ───────────────
+
+    private val _historyBusy = MutableStateFlow(false)
+    val historyBusy: StateFlow<Boolean> = _historyBusy.asStateFlow()
+
+    /** Outcome of the last export/import, for the status line under the buttons. */
+    private val _historyStatus = MutableStateFlow<String?>(null)
+    val historyStatus: StateFlow<String?> = _historyStatus.asStateFlow()
+
+    fun clearHistoryStatus() {
+        _historyStatus.value = null
+    }
+
+    /**
+     * Hand the backup body to [write], which returns whether the file was actually written (the
+     * user can cancel a save dialog). The file is plaintext, which the UI states up front.
+     */
+    fun export(write: suspend (content: String) -> Boolean) {
+        if (_historyBusy.value) return
+        _historyBusy.value = true
+        _historyStatus.value = null
+        viewModelScope.launch {
+            val body = repo.exportDmHistory()
+            val lines = if (body.isBlank()) 0 else body.count { it == '\n' } + 1
+            _historyStatus.value =
+                when {
+                    lines == 0 -> "There are no messages to export."
+                    write(body) -> "Exported $lines messages."
+                    else -> null
+                }
+            _historyBusy.value = false
+        }
+    }
+
+    /** [read] returns the chosen file's text, or null when the user cancelled. */
+    fun import(read: suspend () -> String?) {
+        if (_historyBusy.value) return
+        _historyBusy.value = true
+        _historyStatus.value = null
+        viewModelScope.launch {
+            val text = read()
+            if (text == null) {
+                _historyBusy.value = false
+                return@launch
+            }
+            _historyStatus.value =
+                when (val result = repo.importDmHistory(text)) {
+                    is Result.Error -> result.error.message
+                    is Result.Success -> {
+                        val s = result.data
+                        buildString {
+                            append("Restored ${s.imported} messages.")
+                            if (s.duplicates > 0) append(" ${s.duplicates} were already here.")
+                            if (s.skipped > 0) append(" ${s.skipped} lines skipped.")
+                        }
+                    }
+                }
+            _historyBusy.value = false
+        }
+    }
+
     fun importKey() {
         val input = _importInput.value.trim()
         if (input.isEmpty()) return

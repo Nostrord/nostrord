@@ -45,6 +45,7 @@ import org.nostr.nostrord.network.managers.ConnectionStats
 import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmHistoryFile
 import org.nostr.nostrord.network.managers.DmManager
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.network.managers.DmPairingManager
@@ -2372,6 +2373,38 @@ class NostrRepository(
             )
         }
         return Result.Success(Unit)
+    }
+
+    override suspend fun exportDmHistory(): String {
+        val myPub = sessionManager.getPublicKey() ?: return ""
+        val cached =
+            try {
+                cacheStore.loadByKind(myPub, DM_CACHE_KIND)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return ""
+            }
+        return DmHistoryFile.render(cached.mapNotNull { it.toDmMessage(myPub).rumorJson })
+    }
+
+    override suspend fun importDmHistory(text: String): Result<DmImportSummary> {
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val parsed = DmHistoryFile.parse(text)
+        if (parsed.rumors.isEmpty()) {
+            return Result.Error(AppError.Unknown("No messages this account can restore were found in that file."))
+        }
+        // Filing goes through DmManager, so the persistence collector writes the restored rumors to
+        // the cache exactly like relay-delivered ones. Nothing is published.
+        var imported = 0
+        parsed.rumors.forEach { if (dmManager.importRumor(it, myPub)) imported++ }
+        return Result.Success(
+            DmImportSummary(
+                imported = imported,
+                duplicates = parsed.rumors.size - imported,
+                skipped = parsed.skipped,
+            ),
+        )
     }
 
     override fun cancelDmArchive() {

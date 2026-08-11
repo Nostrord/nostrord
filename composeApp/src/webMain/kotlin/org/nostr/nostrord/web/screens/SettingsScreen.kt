@@ -5,6 +5,7 @@ import org.nostr.nostrord.auth.logoutConfirmBody
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmHistoryFile
 import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
@@ -43,6 +44,9 @@ import org.nostr.nostrord.web.components.icon
 import org.nostr.nostrord.web.components.noticeCard
 import org.nostr.nostrord.web.components.useEscClose
 import org.nostr.nostrord.web.navigation.pushRoute
+import org.w3c.dom.url.URL
+import org.w3c.files.Blob
+import org.w3c.files.BlobPropertyBag
 import react.FC
 import react.Props
 import react.dom.html.ReactHTML.button
@@ -54,12 +58,20 @@ import react.dom.html.ReactHTML.select
 import react.dom.html.ReactHTML.span
 import react.dom.html.ReactHTML.textarea
 import react.useEffect
+import react.useRef
 import react.useState
 import web.cssom.ClassName
+import web.dom.document
+import web.file.File
+import web.html.HTMLAnchorElement
+import web.html.HTMLInputElement
 import web.html.InputType
 import web.html.checkbox
+import web.html.file
 import web.html.password
 import web.html.text
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 external interface SettingsScreenProps : Props {
     var onClose: () -> Unit
@@ -692,6 +704,7 @@ private val DmRelaysPanel =
 
         if (dmEnabled) {
             DmEncryptionPanel()
+            DmChatHistoryPanel()
         }
 
         // Relay editor only matters while DMs are on; hidden with the rest of the feature when off.
@@ -1827,4 +1840,111 @@ private fun react.ChildrenBuilder.levelRadio(
             }
         }
     }
+}
+
+// ── Chat history backup file ─────────────────────────────────────────────────
+
+/**
+ * Export/import of the decrypted history as a JSONL file, interchangeable with Jumble's backup.
+ * Available to every account: unlike the encryption key, a backup helps a local signer too.
+ */
+private val DmChatHistoryPanel =
+    FC<Props> {
+        val vm = useViewModel { DmEncryptionViewModel(AppModule.nostrRepository) }
+        val busy = useStateFlow(vm.historyBusy)
+        val status = useStateFlow(vm.historyStatus)
+        val fileInput = useRef<HTMLInputElement>(null)
+
+        div {
+            className = ClassName("settings-card")
+            div {
+                className = ClassName("settings-section-head")
+                +"CHAT HISTORY"
+            }
+            div {
+                className = ClassName("settings-tip")
+                +(
+                    "Export your messages as a backup file, or import one to restore them on this " +
+                        "device. Importing never publishes anything."
+                    )
+            }
+            div {
+                className = ClassName("settings-tip warning")
+                +(
+                    "The file is not encrypted: anyone who opens it reads your conversations. Keep it " +
+                        "somewhere you would keep your private key."
+                    )
+            }
+            status?.let {
+                div {
+                    className = ClassName("settings-success")
+                    +it
+                }
+            }
+            // Hidden input: the visible button drives it, so the control matches the rest of the page.
+            input {
+                ref = fileInput
+                className = ClassName("upload-file-input")
+                type = InputType.file
+                accept = ".jsonl,.json,application/jsonl,application/json"
+                onChange = { event ->
+                    val picked = event.target.files?.item(0)
+                    event.target.value = "" // so re-picking the same file fires onChange again
+                    if (picked != null) vm.import { readTextFile(picked) }
+                }
+            }
+            div {
+                className = ClassName("settings-form-actions")
+                button {
+                    className = ClassName("btn-text btn-sm accent")
+                    disabled = busy
+                    onClick = { fileInput.current?.click() }
+                    +"Import"
+                }
+                button {
+                    className = ClassName("btn-text btn-sm accent")
+                    disabled = busy
+                    onClick = {
+                        vm.export { content ->
+                            downloadTextFile(content, DmHistoryFile.fileName(), DmHistoryFile.MIME_TYPE)
+                            true
+                        }
+                    }
+                    +(if (busy) "Working…" else "Export")
+                }
+            }
+        }
+    }
+
+/**
+ * Reads the picked file as text. Plain `FileReader` over dynamic rather than the wrappers' typed
+ * handler: its `EventHandler` needs generic parameters this call site cannot name.
+ */
+private suspend fun readTextFile(file: File): String? = suspendCoroutine { cont ->
+    val reader: dynamic = js("new FileReader()")
+    var settled = false
+    reader.onload = {
+        if (!settled) {
+            settled = true
+            cont.resume(reader.result as? String)
+        }
+    }
+    reader.onerror = {
+        if (!settled) {
+            settled = true
+            cont.resume(null)
+        }
+    }
+    reader.readAsText(file)
+}
+
+/** Saves [content] through an object-URL anchor, the browser's only "write a file" affordance. */
+private fun downloadTextFile(content: String, fileName: String, mimeType: String) {
+    val blob = Blob(arrayOf(content), BlobPropertyBag(type = mimeType))
+    val url = URL.createObjectURL(blob)
+    val anchor = document.createElement("a") as HTMLAnchorElement
+    anchor.href = url
+    anchor.download = fileName
+    anchor.click()
+    URL.revokeObjectURL(url)
 }

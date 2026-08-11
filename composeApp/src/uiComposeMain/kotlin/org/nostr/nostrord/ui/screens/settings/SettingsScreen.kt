@@ -55,6 +55,7 @@ import org.nostr.nostrord.auth.AuthMethod
 import org.nostr.nostrord.auth.logoutConfirmBody
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmHistoryFile
 import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.outbox.RelayListManager
@@ -81,6 +82,10 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.NostrordTypography
 import org.nostr.nostrord.ui.theme.Spacing
+import org.nostr.nostrord.utils.rememberTextFilePicker
+import org.nostr.nostrord.utils.rememberTextFileSaver
+import org.nostr.nostrord.utils.supportsTextFilePick
+import org.nostr.nostrord.utils.supportsTextFileSave
 
 enum class SettingsSection(val label: String) {
     Profile("Profile"),
@@ -1335,7 +1340,74 @@ private fun DmSettingsPanelContent(
         // Relay editor only matters while DMs are on; hidden with the rest of the feature when off.
         if (dmEnabled) {
             DmEncryptionPanelContent()
+            DmChatHistoryPanelContent()
             DmRelayPanelContent()
+        }
+    }
+}
+
+/**
+ * Backup file for the decrypted history: plain JSONL, one rumor per line, interchangeable with
+ * Jumble's export. Offered to every account, not only the ones that can hold an encryption key.
+ */
+@Composable
+private fun DmChatHistoryPanelContent() {
+    if (!supportsTextFileSave && !supportsTextFilePick) return
+    val activeAccountId by AppModule.accountStore.activeId.collectAsState()
+    val vm = viewModel(key = activeAccountId) { DmEncryptionViewModel(AppModule.nostrRepository) }
+    val busy by vm.historyBusy.collectAsState()
+    val status by vm.historyStatus.collectAsState()
+    val saveFile = rememberTextFileSaver()
+    val picker = rememberTextFilePicker(onError = { vm.clearHistoryStatus() }) { content -> vm.import { content } }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = NostrordShapes.cardShape,
+        colors = CardDefaults.cardColors(containerColor = NostrordColors.Surface),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+        ) {
+            Text(text = "Chat history", style = NostrordTypography.Button, color = NostrordColors.TextPrimary)
+            Text(
+                text = "Export your messages as a backup file, or import one to restore them on this " +
+                    "device. Importing never publishes anything.",
+                style = NostrordTypography.Caption,
+                color = NostrordColors.TextSecondary,
+            )
+            Text(
+                text = "The file is not encrypted: anyone who opens it reads your conversations. Keep it " +
+                    "somewhere you would keep your private key.",
+                style = NostrordTypography.Caption,
+                color = NostrordColors.Warning,
+            )
+            status?.let {
+                Text(text = it, style = NostrordTypography.Caption, color = NostrordColors.Success)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (supportsTextFilePick) {
+                    TextButton(onClick = { picker.launch() }, enabled = !busy) {
+                        Text("Import", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                    }
+                }
+                if (supportsTextFileSave) {
+                    TextButton(
+                        onClick = {
+                            vm.export { content ->
+                                saveFile(content, DmHistoryFile.fileName())
+                            }
+                        },
+                        enabled = !busy,
+                    ) {
+                        Text(
+                            if (busy) "Working…" else "Export",
+                            color = NostrordColors.Primary,
+                            style = NostrordTypography.Button,
+                        )
+                    }
+                }
+            }
         }
     }
 }
