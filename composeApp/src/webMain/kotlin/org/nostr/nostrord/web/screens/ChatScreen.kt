@@ -2142,6 +2142,7 @@ val ChatScreen =
                                                 this.myPubkey = myPubkey
                                                 this.userMetadata = userMetadata
                                                 this.messagesById = messagesById
+                                                this.groupId = group.id
                                                 onEventRef = { id -> scrollToMessage(id) }
                                                 onGroupRef = { gid, relay -> props.onNavigateGroup(gid, relay) }
                                                 canZap =
@@ -2746,6 +2747,9 @@ external interface MessageRowProps : Props {
     var myPubkey: String?
     var userMetadata: Map<String, UserMetadata>
     var messagesById: Map<String, NostrGroupClient.NostrMessage>
+
+    /** Group this row belongs to; scopes a quoted event's by-id REQ with `#h`. */
+    var groupId: String
     var onEventRef: (String) -> Unit
     var onGroupRef: (String, String?) -> Unit
     var replyTo: ReplyPreviewData?
@@ -3087,6 +3091,7 @@ private val MessageRow =
                         props.onUser,
                         props.onEventRef,
                         props.onGroupRef,
+                        props.groupId,
                     )
                     // Send-state icon (own messages: clock while sending, check when
                     // delivered) flows inline after the content so no extra line shifts
@@ -3439,6 +3444,9 @@ internal fun ChildrenBuilder.renderMessageContent(
     onUser: (String) -> Unit,
     onEventRef: (String) -> Unit,
     onGroupRef: (String, String?) -> Unit,
+    /** Group this message was read in: a quoted event is looked up with `#h`, which some
+     *  NIP-29 relays require even for a lookup by id. */
+    groupId: String?,
 ) {
     // Markdown image embeds collapse to their bare url so URL_REGEX sees a plain link; the
     // surrounding `![alt](` / `)` would otherwise render as literal text. Mirrors native.
@@ -3451,16 +3459,16 @@ internal fun ChildrenBuilder.renderMessageContent(
     var qLast = 0
     for (q in BLOCKQUOTE_REGEX.findAll(content)) {
         if (q.range.first > qLast) {
-            renderBody(content.substring(qLast, q.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+            renderBody(content.substring(qLast, q.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
         }
         div {
             className = ClassName("msg-quote")
-            renderBody(q.value.replace(BLOCKQUOTE_LINE_PREFIX, ""), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+            renderBody(q.value.replace(BLOCKQUOTE_LINE_PREFIX, ""), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
         }
         qLast = q.range.last + 1
     }
     if (qLast < content.length) {
-        renderBody(content.substring(qLast), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+        renderBody(content.substring(qLast), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
     }
 }
 
@@ -3475,11 +3483,14 @@ private fun ChildrenBuilder.renderBody(
     onUser: (String) -> Unit,
     onEventRef: (String) -> Unit,
     onGroupRef: (String, String?) -> Unit,
+    /** Group this message was read in: a quoted event is looked up with `#h`, which some
+     *  NIP-29 relays require even for a lookup by id. */
+    groupId: String?,
 ) {
     var last = 0
     for (block in CODE_BLOCK_REGEX.findAll(content)) {
         if (block.range.first > last) {
-            renderInline(content.substring(last, block.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+            renderInline(content.substring(last, block.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
         }
         val lang = block.groupValues[1].takeIf { it.isNotBlank() }
         div {
@@ -3498,7 +3509,7 @@ private fun ChildrenBuilder.renderBody(
         last = block.range.last + 1
     }
     if (last < content.length) {
-        renderInline(content.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+        renderInline(content.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
     }
 }
 
@@ -3513,11 +3524,14 @@ private fun ChildrenBuilder.renderInline(
     onUser: (String) -> Unit,
     onEventRef: (String) -> Unit,
     onGroupRef: (String, String?) -> Unit,
+    /** Group this message was read in: a quoted event is looked up with `#h`, which some
+     *  NIP-29 relays require even for a lookup by id. */
+    groupId: String?,
 ) {
     var last = 0
     for (m in INLINE_CODE_REGEX.findAll(text)) {
         if (m.range.first > last) {
-            renderEntities(text.substring(last, m.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+            renderEntities(text.substring(last, m.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
         }
         code {
             className = ClassName("msg-code")
@@ -3526,7 +3540,7 @@ private fun ChildrenBuilder.renderInline(
         last = m.range.last + 1
     }
     if (last < text.length) {
-        renderEntities(text.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef)
+        renderEntities(text.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
     }
 }
 
@@ -3540,6 +3554,9 @@ private fun ChildrenBuilder.renderEntities(
     onUser: (String) -> Unit,
     onEventRef: (String) -> Unit,
     onGroupRef: (String, String?) -> Unit,
+    /** Group this message was read in: a quoted event is looked up with `#h`, which some
+     *  NIP-29 relays require even for a lookup by id. */
+    groupId: String?,
 ) {
     var last = 0
     for (match in URL_REGEX.findAll(content)) {
@@ -3623,6 +3640,7 @@ private fun ChildrenBuilder.renderEntities(
                         author = entity.author
                         kind = entity.kind
                         localById = messagesById
+                        this.groupId = groupId
                         onScrollTo = onEventRef
                         this.onUser = onUser
                         this.onGroupRef = onGroupRef
@@ -3634,6 +3652,7 @@ private fun ChildrenBuilder.renderEntities(
                         author = null
                         kind = null
                         localById = messagesById
+                        this.groupId = groupId
                         onScrollTo = onEventRef
                         this.onUser = onUser
                         this.onGroupRef = onGroupRef
@@ -3642,13 +3661,13 @@ private fun ChildrenBuilder.renderEntities(
                     if (entity.kind == 39000) {
                         if (standalone) {
                             GroupLinkCard {
-                                groupId = entity.identifier
+                                this.groupId = entity.identifier
                                 relayUrl = entity.relays.firstOrNull()
                                 onNavigate = onGroupRef
                             }
                         } else {
                             GroupMentionChip {
-                                groupId = entity.identifier
+                                this.groupId = entity.identifier
                                 relayUrl = entity.relays.firstOrNull()
                                 onNavigate = onGroupRef
                             }
@@ -3731,6 +3750,9 @@ private external interface QuotedEventProps : Props {
     /** nevent kind hint (null for a bare note) — shown on the not-found card. */
     var kind: Int?
     var localById: Map<String, NostrGroupClient.NostrMessage>
+
+    /** Group the reference was read in; scopes the by-id REQ with `#h`. */
+    var groupId: String?
     var onScrollTo: (String) -> Unit
     var onUser: (String) -> Unit
     var onGroupRef: (String, String?) -> Unit
@@ -3766,7 +3788,7 @@ private val QuotedEvent =
         useEffect(props.eventId, retryTick) {
             setNotFound(false)
             if (props.eventId !in cached && local == null) {
-                launchApp { repo.requestEventById(props.eventId, props.relays, props.author) }
+                launchApp { repo.requestEventById(props.eventId, props.relays, props.author, props.groupId) }
             }
         }
         // Give up after 5s of no resolution. Re-runs when content arrives (cancels the timer).
@@ -3839,7 +3861,7 @@ private val QuotedEvent =
         useEffect(replyParentId) {
             val pid = replyParentId ?: return@useEffect
             if (pid !in cached && replyLocal == null) {
-                launchApp { repo.requestEventById(pid, props.relays, null) }
+                launchApp { repo.requestEventById(pid, props.relays, null, props.groupId) }
             }
         }
         useEffect(replyPubkey) {
@@ -4027,6 +4049,7 @@ private val QuotedEvent =
                                 props.onUser,
                                 props.onScrollTo,
                                 props.onGroupRef,
+                                props.groupId,
                             )
                         }
                     }
@@ -4062,6 +4085,7 @@ private val QuotedEvent =
                             props.onUser,
                             props.onScrollTo,
                             props.onGroupRef,
+                            props.groupId,
                         )
                     }
                 }

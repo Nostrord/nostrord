@@ -596,7 +596,10 @@ class FakeNostrRepository : NostrRepositoryApi {
         eventId: String,
         relayHints: List<String>,
         author: String?,
-    ) {}
+        groupId: String?,
+    ) {
+        calls += "requestEventById:$eventId:${groupId ?: "-"}"
+    }
 
     override suspend fun requestAddressableEvent(
         kind: Int,

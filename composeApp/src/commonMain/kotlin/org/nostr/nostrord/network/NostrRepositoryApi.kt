@@ -809,6 +809,8 @@ interface NostrRepositoryApi {
         eventId: String,
         relayHints: List<String> = emptyList(),
         author: String? = null,
+        /** Group the reference was seen in, so the REQ can carry `#h` for relays that demand it. */
+        groupId: String? = null,
     )
 
     suspend fun requestAddressableEvent(

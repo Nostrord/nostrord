@@ -93,6 +93,8 @@ class GroupManager(
     // [onNewMessagesFlushed]: threads live in their own stores and never enter the chat
     // batch, so notifications would otherwise never see a thread reply.
     private val onThreadEventReceived: ((groupId: String, event: NostrGroupClient.NostrMessage) -> Unit)? = null,
+    /** Mirrors a thread event into the generic by-id event cache the quote cards read. */
+    private val onThreadEventCached: ((event: NostrGroupClient.NostrMessage) -> Unit)? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val eventDeduplicator = EventDeduplicator()
@@ -3278,6 +3280,11 @@ class GroupManager(
         // Notify only on a real insert of a relay-delivered event: a disk hydration is not news,
         // and an un-echoed optimistic send is our own.
         if (inserted && persist && message.relayUrl != null) onThreadEventReceived?.invoke(groupId, message)
+        // A quoted kind:11 (the "Share to chat" announcement) resolves through the by-id event
+        // cache, which the thread stores never reach: without this the card pays a network
+        // round-trip for an event already in memory, and reads as removed when the relay
+        // withholds it. Skipped on disk hydration, whose events the mirror already persisted.
+        if (inserted && persist) onThreadEventCached?.invoke(message)
         // Write-through OUTSIDE the in-memory dedup: the relay echo of an optimistic
         // (relay-less) insert is deduped above, yet it is the first relay-attributed copy
         // and the one that must reach the disk cache. Upserts are idempotent.

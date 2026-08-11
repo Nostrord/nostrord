@@ -1100,6 +1100,8 @@ private fun ChildrenBuilder.threadMessage(
                     onUser = onUser,
                     onEventRef = {},
                     onGroupRef = onGroupRef,
+                    // The event's own NIP-29 `h` tag scopes a quoted reference's by-id REQ.
+                    groupId = msg.tags.firstOrNull { it.size >= 2 && it[0] == "h" }?.get(1),
                 )
                 // Inline send-state icon (clock/check) so no extra line shifts the list.
                 if (myPubkey != null && myPubkey == msg.pubkey) {
