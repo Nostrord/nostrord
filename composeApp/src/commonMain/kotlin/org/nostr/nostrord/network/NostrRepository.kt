@@ -83,6 +83,7 @@ import org.nostr.nostrord.storage.loadDmArchivedRumorIdsFor
 import org.nostr.nostrord.storage.loadDmEncKeys
 import org.nostr.nostrord.storage.loadDmLastRead
 import org.nostr.nostrord.storage.loadDmMessages
+import org.nostr.nostrord.storage.loadDmPairingProcessedFor
 import org.nostr.nostrord.storage.loadDmProcessedWrapIds
 import org.nostr.nostrord.storage.loadDmSeenRelays
 import org.nostr.nostrord.storage.loadDmSendQueue
@@ -97,6 +98,7 @@ import org.nostr.nostrord.storage.saveCurrentRelayUrlFor
 import org.nostr.nostrord.storage.saveDmArchivedRumorIdsFor
 import org.nostr.nostrord.storage.saveDmEncKeys
 import org.nostr.nostrord.storage.saveDmLastRead
+import org.nostr.nostrord.storage.saveDmPairingProcessedFor
 import org.nostr.nostrord.storage.saveDmProcessedWrapIds
 import org.nostr.nostrord.storage.saveDmSeenRelays
 import org.nostr.nostrord.storage.saveDmSendQueue
@@ -268,6 +270,13 @@ class NostrRepository(
     // Per-relay budget for a background event publish (connect + send). Bounds a dead socket so it
     // can't leak the publish job; delivery is best-effort and swallows failures anyway.
     private val PUBLISH_RELAY_TIMEOUT_MS = 8_000L
+
+    // How far back the pairing subscription looks. Long enough to cover a request published while
+    // this app was closed (its client is still sitting on the pairing screen), short enough that a
+    // request the user walked away from days ago never re-prompts. Kept under
+    // DmPairingManager.PROCESSED_RETENTION_SECONDS so a decision always outlives what the relay
+    // will still serve.
+    private val PAIRING_LOOKBACK_SECONDS = 6L * 60 * 60
 
     // DM wrap publish retry: rides out a transiently offline DM relay so a message isn't stranded
     // local-only. Linear backoff, capped; ~a couple minutes of attempts before giving up this session.
@@ -1240,7 +1249,15 @@ class NostrRepository(
             ActiveAccountManager.session.collect { session ->
                 dmPairingManager.clear()
                 pendingPairingRequestId = null
-                if (session == null) dmEncryptionManager.clear() else dmEncryptionManager.loadFor(session.pubkey, session.signer.isRemote)
+                if (session == null) {
+                    dmEncryptionManager.clear()
+                    dmPairingManager.onProcessedChanged = null
+                } else {
+                    dmEncryptionManager.loadFor(session.pubkey, session.signer.isRemote)
+                    val pubkey = session.pubkey
+                    dmPairingManager.hydrateProcessed(SecureStorage.loadDmPairingProcessedFor(pubkey))
+                    dmPairingManager.onProcessedChanged = { SecureStorage.saveDmPairingProcessedFor(pubkey, it) }
+                }
             }
         }
 
@@ -2286,6 +2303,9 @@ class NostrRepository(
             val throwaway = dmPairingManager.beginRequest()
             val signed = signer.signEvent(Nip4e.buildClientKeyRequest(myPub, throwaway, epochSeconds()))
             pendingPairingRequestId = signed.id
+            // Our own request must never prompt us: the throwaway-key guard is in-memory only, so
+            // after a restart the relay replays this event back to us like any other.
+            signed.id?.let { dmPairingManager.markProcessed(it) }
             publishEventToRelays(pairingRelays(myPub), signed)
             Result.Success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -2378,8 +2398,13 @@ class NostrRepository(
     }
 
     /**
-     * Watch our own pairing events. Both kinds are authored by our identity, are rare, and only
-     * matter live, so this is a small `since`-now subscription rather than a history read.
+     * Watch our own pairing events. Both kinds are authored by our identity and are rare, so this
+     * stays a small windowed subscription rather than a history read.
+     *
+     * The window reaches back [PAIRING_LOOKBACK_SECONDS]: the other client publishes its request
+     * once and then just waits on its pairing screen, so a `since`-now filter would hide every
+     * request made before this app happened to subscribe — which is the normal order (the user
+     * opens the requesting client first, then comes here to approve).
      */
     private suspend fun sendPairingReq(myPub: String) {
         val filter =
@@ -2389,7 +2414,7 @@ class NostrRepository(
                     add(Nip4e.KIND_KEY_SHARE)
                 }
                 putJsonArray("authors") { add(myPub) }
-                put("since", epochSeconds())
+                put("since", epochSeconds() - PAIRING_LOOKBACK_SECONDS)
             }
         val req =
             buildJsonArray {
@@ -5631,6 +5656,10 @@ class NostrRepository(
                         val newRelays = dmRelaysWithDefaults(it.pubkey).distinct().toSet()
                         if (newRelays != dmInboxSubscribedRelays) {
                             scope.launch { resendDmInboxReq(it.pubkey) }
+                            // The pairing sub went out before this list resolved, so it is watching
+                            // the defaults only. Another device publishes its request to these
+                            // relays; without re-firing here the request is never even asked for.
+                            scope.launch { sendPairingReq(it.pubkey) }
                         }
                     }
                 }

@@ -11,7 +11,8 @@ import kotlin.test.assertNotNull
 class DmPairingManagerTest {
     private val identity = "a".repeat(64)
 
-    private fun request(throwawayPubkey: String) = Nip4e.buildClientKeyRequest(identity, throwawayPubkey, createdAt = 1L)
+    // Carries an id like the relay-delivered event does: dedup is keyed on it.
+    private fun request(throwawayPubkey: String) = Nip4e.buildClientKeyRequest(identity, throwawayPubkey, createdAt = 1L).let { it.copy(id = it.calculateId()) }
 
     @Test
     fun `requesting shows a code derived from the throwaway key`() {
@@ -62,6 +63,41 @@ class DmPairingManagerTest {
         // Same event arriving from a second relay must stay silent.
         manager.onRequestSeen(request(other.publicKeyHex))
         assertIs<DmPairingManager.State.Idle>(manager.state.value)
+    }
+
+    @Test
+    fun `a declined request stays declined across a restart`() {
+        val other = KeyPair.generate()
+        val event = request(other.publicKeyHex)
+        var persisted: Map<String, Long> = emptyMap()
+
+        val manager = DmPairingManager()
+        manager.onProcessedChanged = { persisted = it }
+        manager.onRequestSeen(event)
+        manager.resolveIncoming(other.publicKeyHex)
+        assertEquals(setOf(event.id), persisted.keys)
+
+        // The subscription looks back in time, so the relay serves the same request again on the
+        // next launch. A fresh manager hydrated from storage must stay quiet.
+        val restarted = DmPairingManager()
+        restarted.hydrateProcessed(persisted)
+        restarted.onRequestSeen(event)
+        assertIs<DmPairingManager.State.Idle>(restarted.state.value)
+    }
+
+    @Test
+    fun `a decision older than the retention window is forgotten`() {
+        val other = KeyPair.generate()
+        val event = request(other.publicKeyHex)
+        val expired = mapOf(event.id!! to 1L)
+
+        val manager = DmPairingManager()
+        manager.hydrateProcessed(expired)
+        manager.onRequestSeen(event)
+
+        // Past the window the relay no longer serves it either; a request this old arriving now is
+        // a new one worth showing.
+        assertIs<DmPairingManager.State.IncomingRequest>(manager.state.value)
     }
 
     @Test

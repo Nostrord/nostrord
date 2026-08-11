@@ -1253,6 +1253,31 @@ fun SecureStorage.saveNip4eAnnouncedAtFor(
     saveStringPref(nip4eAnnouncedAtKey(pubkey), epochSeconds.toString())
 }
 
+private fun dmPairingProcessedKey(pubkey: String): String = "dm_pairing_processed_${pubkeyDigest(pubkey)}"
+
+/**
+ * Pairing requests (kind:4454 event ids) already decided, with the epoch second of the decision.
+ * Persisted because the decision has to outlive the process: the subscription looks back in time,
+ * so a declined request is served again on every restart and would re-prompt forever.
+ */
+fun SecureStorage.loadDmPairingProcessedFor(pubkey: String): Map<String, Long> {
+    if (pubkey.isBlank()) return emptyMap()
+    val raw = getStringPref(dmPairingProcessedKey(pubkey), "") ?: ""
+    if (raw.isBlank()) return emptyMap()
+    return runCatching { Json.decodeFromString<Map<String, Long>>(raw) }.getOrDefault(emptyMap())
+}
+
+fun SecureStorage.saveDmPairingProcessedFor(
+    pubkey: String,
+    processed: Map<String, Long>,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveStringPref(dmPairingProcessedKey(pubkey), Json.encodeToString<Map<String, Long>>(processed))
+    } catch (_: Exception) {
+    }
+}
+
 private fun dmArchivedRumorIdsKey(pubkey: String): String = "dm_archived_rumors_${pubkeyDigest(pubkey)}"
 
 /** Rumor ids whose archive copy a relay accepted, so a re-run resumes instead of republishing. */
