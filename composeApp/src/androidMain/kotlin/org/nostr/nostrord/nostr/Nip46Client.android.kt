@@ -18,6 +18,17 @@ import kotlin.random.Random
 // ("Waiting for signer..." forever) - mirrors the web's 20s timeout.
 private const val SIGNER_RELAY_CONNECT_TIMEOUT_MS = 20_000L
 
+// After the first signer relay is listening, how long the QR flow waits for the
+// rest before drawing the code. kind:24133 is ephemeral, so a connect event the
+// signer publishes to a relay we are not subscribed on is lost for good and the
+// screen waits for a signer that already answered. Short enough to stay
+// imperceptible when every relay is healthy, long enough to cover a slow one.
+private const val REMAINING_RELAY_GRACE_MS = 2_500L
+
+// Backoff bounds for re-opening a signer relay that dropped mid-session.
+private const val RELAY_RECONNECT_BASE_DELAY_MS = 1_000L
+private const val RELAY_RECONNECT_MAX_DELAY_MS = 15_000L
+
 actual class Nip46Client actual constructor(
     existingPrivateKey: String?,
 ) {
@@ -29,7 +40,27 @@ actual class Nip46Client actual constructor(
         }
 
     private var remoteSignerPubkey: String? = null
-    private var relayClients: MutableList<NostrGroupClient> = mutableListOf()
+
+    // Every read is a snapshot and every mutation goes through addClient /
+    // removeClient under this lock: the list is touched from the ws frame
+    // threads (drop watch), the connect fan-out and concurrent sendRequests, so
+    // an unguarded iteration throws ConcurrentModificationException and fails a
+    // request that had nothing wrong with it.
+    private val relayClients: MutableList<NostrGroupClient> = mutableListOf()
+
+    private fun clientsSnapshot(): List<NostrGroupClient> = synchronized(relayClients) { relayClients.toList() }
+
+    private fun addClient(client: NostrGroupClient) {
+        synchronized(relayClients) { relayClients.add(client) }
+    }
+
+    private fun removeClient(client: NostrGroupClient) {
+        synchronized(relayClients) { relayClients.remove(client) }
+    }
+
+    // Set by disconnect(); stops the drop watch from resurrecting sockets.
+    @kotlin.concurrent.Volatile
+    private var closed = false
 
     // Guards ensureRelaysConnected's check-then-act (see its own doc comment):
     // without it, concurrent sendRequest calls racing on an empty relayClients
@@ -58,12 +89,86 @@ actual class Nip46Client actual constructor(
         relays: List<String>,
         name: String,
     ): String {
-        val relayParams = relays.joinToString("&") { "relay=${it.encodeForUri()}" }
+        // Advertise only the relays we are actually subscribed on. kind:24133 is
+        // ephemeral: a connect event published to a relay we are not listening on
+        // is dropped by the relay, not replayed later, and the QR screen then waits
+        // forever for a signer that already answered.
+        val advertised = clientsSnapshot()
+            .map { it.getRelayUrl() }
+            .ifEmpty { relays.map { it.trimEnd('/') }.distinct() }
+        val relayParams = advertised.joinToString("&") { "relay=${it.encodeForUri()}" }
         val metadata = """{"name":"$name"}"""
         val secretParam = nostrConnectSecret?.let { "&secret=${it.encodeForUri()}" } ?: ""
         val permsParam = "&perms=${NIP46_REQUESTED_PERMS.encodeForUri()}"
         val uri = "nostrconnect://${clientKeyPair.publicKeyHex}?$relayParams$secretParam$permsParam&metadata=${metadata.encodeForUri()}"
         return uri
+    }
+
+    /**
+     * Opens one signer relay end to end: WebSocket, durable response
+     * subscription, drop watch. Returns null when either the socket never
+     * opened or the REQ could not be sent — a socket with no live response sub
+     * is deaf, and counting it as a connection is what left the QR screen
+     * waiting for a signer event that could never be delivered. The caller owns
+     * adding the result to [relayClients].
+     */
+    private suspend fun openRelay(relayUrl: String): NostrGroupClient? = try {
+        val client = NostrGroupClient(relayUrl)
+        client.connect { msg -> handleMessage(msg, client) }
+        if (!client.waitForConnection(SIGNER_RELAY_CONNECT_TIMEOUT_MS) || !openResponseSubscription(client)) {
+            client.disconnect()
+            null
+        } else {
+            armDropWatch(client, relayUrl)
+            client
+        }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        null
+    }
+
+    /**
+     * Re-open [relayUrl] when its socket drops. Without this the response
+     * subscription dies with the socket and nothing notices: the only liveness
+     * check is [ensureRelaysConnected] at the head of the next request, and the
+     * QR wait issues no requests at all, so the signer's reply lands on a relay
+     * we left.
+     */
+    private fun armDropWatch(client: NostrGroupClient, relayUrl: String) {
+        client.onConnectionLost = {
+            removeClient(client)
+            clientScope.launch { reconnectRelay(relayUrl) }
+        }
+    }
+
+    private suspend fun reconnectRelay(relayUrl: String) {
+        var delayMs = RELAY_RECONNECT_BASE_DELAY_MS
+        while (!closed) {
+            delay(delayMs)
+            if (closed) return
+            addRelays(listOf(relayUrl))
+            if (clientsSnapshot().any { it.getRelayUrl() == relayUrl }) return
+            delayMs = minOf(delayMs * 2, RELAY_RECONNECT_MAX_DELAY_MS)
+        }
+    }
+
+    /**
+     * Connect [relays] and register them, skipping any already connected, under
+     * [relayConnectMutex]. Every path that grows [relayClients] goes through
+     * here: a session restore's connect racing the first request's
+     * [ensureRelaysConnected] had both running their own fan-out and both
+     * appending, leaving two live sockets to one relay. Each request was then
+     * published twice and each signer reply delivered twice, which is what
+     * earned the "rate-limited: you are noting too much" rejections and got the
+     * relay to drop the socket mid-QR-wait.
+     */
+    private suspend fun addRelays(relays: List<String>) {
+        relayConnectMutex.withLock {
+            val known = clientsSnapshot().mapTo(mutableSetOf()) { it.getRelayUrl() }
+            val missing = relays.map { it.trimEnd('/') }.distinct().filterNot { it in known }
+            if (missing.isEmpty()) return@withLock
+            connectRelaysParallel(missing).forEach { addClient(it) }
+        }
     }
 
     private suspend fun connectRelaysParallel(relays: List<String>): List<NostrGroupClient> = coroutineScope {
@@ -73,75 +178,43 @@ actual class Nip46Client actual constructor(
         relays
             .map { it.trimEnd('/') }
             .distinct()
-            .map { relayUrl ->
-                async {
-                    try {
-                        val cleanUrl = relayUrl.trimEnd('/')
-                        val client = NostrGroupClient(cleanUrl)
-                        client.connect { msg -> handleMessage(msg, client) }
-                        if (!client.waitForConnection(SIGNER_RELAY_CONNECT_TIMEOUT_MS)) {
-                            // WS never opened (timeout) — drop it so callers don't
-                            // treat a dead socket as a live relay connection.
-                            client.disconnect()
-                            null
-                        } else {
-                            openResponseSubscription(client)
-                            client
-                        }
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
-            }.awaitAll()
+            .map { relayUrl -> async { openRelay(relayUrl) } }
+            .awaitAll()
             .filterNotNull()
     }
 
     /**
-     * First-relay-wins variant of [connectRelaysParallel]. Returns as soon as
-     * one relay's WebSocket is open and the durable response sub is sent.
-     * Remaining relays continue connecting in [clientScope] and are appended
-     * to [relayClients] as they become ready, so the listening sub spans all
-     * relays even when this function has already returned. Throws only if
-     * every relay fails — partial failure is acceptable.
+     * QR-flow variant of [connectRelaysParallel]. Unblocks as soon as one relay
+     * is listening, then gives the rest [REMAINING_RELAY_GRACE_MS] to join
+     * before the caller draws the code, so the advertised relay set matches the
+     * set we can actually hear on. Throws only if every relay fails.
      */
     private suspend fun connectRelaysFirstWins(relaysIn: List<String>) {
         val relays = relaysIn.map { it.trimEnd('/') }.distinct()
         if (relays.isEmpty()) throw Exception("Failed to connect to any relay")
         val firstReady = CompletableDeferred<Unit>()
+        val allSettled = CompletableDeferred<Unit>()
         val total = relays.size
-        val failures = java.util.concurrent.atomic.AtomicInteger(0)
+        val settled = java.util.concurrent.atomic.AtomicInteger(0)
 
         for (relayUrl in relays) {
             clientScope.launch {
-                try {
-                    val cleanUrl = relayUrl.trimEnd('/')
-                    val client = NostrGroupClient(cleanUrl)
-                    client.connect { msg -> handleMessage(msg, client) }
-                    if (!client.waitForConnection(SIGNER_RELAY_CONNECT_TIMEOUT_MS)) {
-                        // WS never opened — drop it (mirrors connectRelaysParallel)
-                        // instead of adding a dead socket and completing firstReady.
-                        // Otherwise the QR displays while no listening sub is live,
-                        // so the signer's connect event never arrives and the user
-                        // has to restart the app. Common right after a logout, which
-                        // tears down many sockets at once and slows the next connect.
-                        client.disconnect()
-                        if (failures.incrementAndGet() == total && !firstReady.isCompleted) {
-                            firstReady.completeExceptionally(Exception("Failed to connect to any relay"))
-                        }
-                        return@launch
-                    }
-                    openResponseSubscription(client)
-                    synchronized(relayClients) { relayClients.add(client) }
+                val client = openRelay(relayUrl)
+                if (client != null) {
+                    addClient(client)
                     firstReady.complete(Unit)
-                } catch (_: Exception) {
-                    if (failures.incrementAndGet() == total && !firstReady.isCompleted) {
+                }
+                if (settled.incrementAndGet() == total) {
+                    if (!firstReady.isCompleted) {
                         firstReady.completeExceptionally(Exception("Failed to connect to any relay"))
                     }
+                    allSettled.complete(Unit)
                 }
             }
         }
 
         firstReady.await()
+        withTimeoutOrNull(REMAINING_RELAY_GRACE_MS) { allSettled.await() }
     }
 
     /**
@@ -175,8 +248,10 @@ actual class Nip46Client actual constructor(
      * (`kinds:[24133], #p:[clientPubkey]`) covers both incoming `connect`
      * requests (nostrconnect:// flow) and signer replies (bunker:// flow), so
      * one stable subscription replaces the previous per-request ephemeral REQs.
+     * Returns false when the REQ could not be sent, so the caller drops a socket
+     * that would otherwise sit in [relayClients] connected but deaf.
      */
-    private suspend fun openResponseSubscription(client: NostrGroupClient) {
+    private suspend fun openResponseSubscription(client: NostrGroupClient): Boolean {
         val subId = responseSubscriptionId
             ?: "nip46-resp-${clientKeyPair.publicKeyHex.take(8)}".also { responseSubscriptionId = it }
         val since = (epochMillis() / 1000) - 10
@@ -190,27 +265,37 @@ actual class Nip46Client actual constructor(
             add(subId)
             add(filter)
         }.toString()
-        try {
+        return try {
             client.send(req)
-        } catch (_: Exception) {
+            true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            false
         }
     }
 
+    /**
+     * Ensure at least one relay client is connected before sending a request.
+     * Disconnected clients are replaced with fresh connections.
+     */
     private suspend fun ensureRelaysConnected() {
         relayConnectMutex.withLock {
-            val dead = relayClients.filter { !it.isConnected() }
-            if (dead.isNotEmpty()) {
-                dead.forEach {
-                    try {
-                        it.disconnect()
-                    } catch (_: Exception) {
-                    }
+            // Remove dead clients
+            val dead = clientsSnapshot().filter { !it.isConnected() }
+            dead.forEach {
+                removeClient(it)
+                try {
+                    it.disconnect()
+                } catch (_: Exception) {
                 }
-                relayClients.removeAll(dead)
             }
-            if (relayClients.isNotEmpty()) return@withLock
+
+            // If we still have live clients, we're good
+            if (clientsSnapshot().isNotEmpty()) return@withLock
+
+            // Reconnect using stored relay URLs
             if (relayUrls.isEmpty()) return@withLock
-            relayClients.addAll(connectRelaysParallel(relayUrls))
+            connectRelaysParallel(relayUrls).forEach { addClient(it) }
         }
     }
 
@@ -220,8 +305,8 @@ actual class Nip46Client actual constructor(
     ) {
         this.remoteSignerPubkey = remoteSignerPubkey
         this.relayUrls = relays.map { it.trimEnd('/') }.distinct()
-        relayClients.addAll(connectRelaysParallel(relays))
-        if (relayClients.isEmpty()) throw Exception("Failed to connect to any bunker relay")
+        addRelays(relays)
+        if (clientsSnapshot().isEmpty()) throw Exception("Failed to connect to any bunker relay")
     }
 
     actual suspend fun startListeningForConnection(
@@ -236,9 +321,9 @@ actual class Nip46Client actual constructor(
         // delivering events — first-relay-wins must not race the dispatch.
         pendingRequests["_incoming_connect"] = CompletableDeferred()
 
-        // Return as soon as one relay is listening. Remaining relays finish
-        // in background; the durable sub on each picks up late-arriving
-        // signer events thanks to the `since = now - 10s` filter.
+        // Unblock on the first listening relay, then let the rest join within the
+        // grace window before the caller builds the URI: kind:24133 is ephemeral,
+        // so a relay that subscribes after the signer published replays nothing.
         connectRelaysFirstWins(relays)
     }
 
@@ -266,9 +351,9 @@ actual class Nip46Client actual constructor(
         this.remoteSignerPubkey = remoteSignerPubkey
         this.relayUrls = relays.map { it.trimEnd('/') }.distinct()
 
-        relayClients.addAll(connectRelaysParallel(relays))
+        addRelays(relays)
 
-        if (relayClients.isEmpty()) {
+        if (clientsSnapshot().isEmpty()) {
             throw Exception("Failed to connect to any bunker relay")
         }
 
@@ -315,8 +400,9 @@ actual class Nip46Client actual constructor(
             remoteSignerPubkey
                 ?: throw Exception("Not connected to signer")
 
+        // Ensure relay connections are alive before sending
         ensureRelaysConnected()
-        if (relayClients.isEmpty()) {
+        if (clientsSnapshot().isEmpty()) {
             throw Exception("No bunker relay connections available")
         }
 
@@ -375,7 +461,15 @@ actual class Nip46Client actual constructor(
                 // to slow down. Any other rejection throws immediately.
                 while (true) {
                     publishPacer.awaitTurn(background)
-                    val publishResults = relayClients.map { client ->
+                    // Re-read: a paced request can wait minutes for its turn, and
+                    // a disconnect (logout) in that window leaves nothing to
+                    // publish to. Reporting that as "rejected by every relay"
+                    // reads as a signer fault in the logs when it is a teardown.
+                    val targets = clientsSnapshot()
+                    if (targets.isEmpty()) {
+                        throw Exception("No bunker relay connections available")
+                    }
+                    val publishResults = targets.map { client ->
                         async { client.sendAndAwaitOkOrError(eventMessage, eventId) }
                     }.awaitAll()
                     if (publishResults.any { it is PublishResult.Success }) {
@@ -491,10 +585,10 @@ actual class Nip46Client actual constructor(
                                         add("EVENT")
                                         add(ackEvent.toJsonObject())
                                     }.toString()
-                                relayClients.forEach {
+                                clientsSnapshot().forEach {
                                     try {
                                         it.send(ackMessage)
-                                    } catch (_: Exception) {
+                                    } catch (e: Exception) {
                                     }
                                 }
                             } catch (e: Exception) {
@@ -598,8 +692,12 @@ actual class Nip46Client actual constructor(
     }
 
     actual fun disconnect() {
+        closed = true
         clientScope.coroutineContext.cancelChildren()
-        relayClients.forEach { client ->
+        val open = synchronized(relayClients) { relayClients.toList().also { relayClients.clear() } }
+        open.forEach { client ->
+            // Drop the watch first: a graceful close must not schedule a reconnect.
+            client.onConnectionLost = null
             clientScope.launch {
                 try {
                     client.disconnect()
@@ -607,7 +705,6 @@ actual class Nip46Client actual constructor(
                 }
             }
         }
-        relayClients.clear()
         // Fail any in-flight RPCs so callers unblock immediately instead of
         // waiting out their wrapping withTimeout.
         pendingRequests.values.forEach { it.completeExceptionally(CancellationException("Nip46Client disconnected")) }
