@@ -1,5 +1,7 @@
 package org.nostr.nostrord.nostr
 
+import org.nostr.nostrord.utils.LruCache
+
 /**
  * NIP-19: bech32-encoded entities
  * Supports npub, nsec, note, nprofile, nevent, naddr
@@ -161,7 +163,23 @@ object Nip19 {
     /**
      * Decode any NIP-19 bech32 entity
      */
+    /**
+     * Decoded entities for tokens seen before. Rendering a message re-decodes every reference it
+     * contains on each render, and a decode is base32 + checksum + TLV parsing; entities are
+     * immutable, so sharing them is safe. Secrets are never cached (see [decode]).
+     */
+    private val decodeCache = LruCache<String, Entity>(512)
+
     fun decode(bech32: String): Entity? {
+        decodeCache.get(bech32)?.let { return it }
+        val entity = decodeUncached(bech32) ?: return null
+        // An nsec stays out of any long-lived structure: the app zeroes key material on dispose
+        // and a cache would outlive that.
+        if (entity !is Entity.Nsec) decodeCache.put(bech32, entity)
+        return entity
+    }
+
+    private fun decodeUncached(bech32: String): Entity? {
         val result = Bech32.decode(bech32) ?: return null
         val (hrp, data) = result
 
