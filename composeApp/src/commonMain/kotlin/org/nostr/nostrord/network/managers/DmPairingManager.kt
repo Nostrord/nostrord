@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip4e
+import org.nostr.nostrord.utils.epochSeconds
 
 /**
  * NIP-4e device pairing (kinds 4454 / 4455): moves the encryption key to another device of the
@@ -26,7 +27,7 @@ class DmPairingManager {
         data class Requesting(val code: String) : State
 
         /** Another device of this account is asking us for the key. */
-        data class IncomingRequest(val code: String, val throwawayPubkey: String) : State
+        data class IncomingRequest(val code: String, val throwawayPubkey: String, val eventId: String) : State
 
         data object Completed : State
 
@@ -39,8 +40,19 @@ class DmPairingManager {
     /** Our throwaway keypair while requesting; the only thing that can open the answer. */
     private var requestKey: KeyPair? = null
 
-    /** Requests already answered this session, so a re-delivered 4454 does not re-prompt. */
-    private var answered: Set<String> = emptySet()
+    /**
+     * Requests already decided, by kind:4454 event id, with when they were decided. Persisted by
+     * the owner through [onProcessedChanged]: the subscription looks back in time, so a decision
+     * kept only in memory means every restart re-prompts for the same declined request.
+     */
+    private var processed: Map<String, Long> = emptyMap()
+
+    /** Called whenever [processed] changes, so the owner can persist it. */
+    var onProcessedChanged: ((Map<String, Long>) -> Unit)? = null
+
+    fun hydrateProcessed(stored: Map<String, Long>) {
+        processed = prune(stored)
+    }
 
     /** Begin a request. Returns the throwaway pubkey to publish in the kind:4454. */
     fun beginRequest(): String {
@@ -54,22 +66,40 @@ class DmPairingManager {
 
     /**
      * A kind:4454 from our own account arrived. Ignored when it is our own outstanding request,
-     * or one we already answered; otherwise it becomes a prompt for the user.
+     * or one already decided; otherwise it becomes a prompt for the user.
      */
     fun onRequestSeen(event: Event) {
+        val eventId = event.id ?: return
         val throwaway = Nip4e.throwawayPubkeyFrom(event) ?: return
         if (throwaway == requestKey?.publicKeyHex) return
-        if (throwaway in answered) return
+        if (eventId in processed) return
         if (_state.value is State.Requesting) return
-        _state.value = State.IncomingRequest(Nip4e.pairingCode(throwaway), throwaway)
+        _state.value = State.IncomingRequest(Nip4e.pairingCode(throwaway), throwaway, eventId)
+    }
+
+    /**
+     * Record a request as decided (approved, declined, or made by us), so it never prompts again
+     * while the relay still serves it.
+     */
+    fun markProcessed(eventId: String) {
+        if (eventId.isBlank() || eventId in processed) return
+        processed = prune(processed + (eventId to epochSeconds()))
+        onProcessedChanged?.invoke(processed)
     }
 
     /** Mark an incoming request handled (approved and answered, or declined). */
     fun resolveIncoming(throwawayPubkey: String) {
-        answered = answered + throwawayPubkey
-        if ((_state.value as? State.IncomingRequest)?.throwawayPubkey == throwawayPubkey) {
+        val incoming = _state.value as? State.IncomingRequest
+        if (incoming?.throwawayPubkey == throwawayPubkey) {
+            markProcessed(incoming.eventId)
             _state.value = State.Idle
         }
+    }
+
+    /** Drop decisions older than the window the pairing subscription can still deliver. */
+    private fun prune(all: Map<String, Long>): Map<String, Long> {
+        val now = epochSeconds()
+        return all.filterValues { now - it < PROCESSED_RETENTION_SECONDS }
     }
 
     fun succeeded() {
@@ -89,7 +119,15 @@ class DmPairingManager {
 
     fun clear() {
         requestKey = null
-        answered = emptySet()
+        processed = emptyMap()
         _state.value = State.Idle
+    }
+
+    companion object {
+        /**
+         * Must cover the pairing subscription's lookback, or a decision expires while the relay is
+         * still serving the request it decided and the prompt comes back.
+         */
+        const val PROCESSED_RETENTION_SECONDS = 24L * 60 * 60
     }
 }
