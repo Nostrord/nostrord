@@ -1,6 +1,9 @@
 package org.nostr.nostrord.network.managers
 
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -273,6 +276,13 @@ class GroupManager(
     // NIP-46 bunker AUTH where the 2s awaitAuthOrTimeout races the signer — would
     // leave the relay stuck in _loadingRelays indefinitely (#88). Each
     // markRelayLoading arms a per-relay watchdog; markRelayLoaded / EOSE cancel it.
+    /**
+     * Guards [loadingWatchdogs]. Its entries are written from relay-pipeline threads (arm on REQ,
+     * remove on EOSE), from each watchdog's own finally, and read wholesale by [clear] on account
+     * switch. A plain map iterated while another thread removes throws out of the iterator and
+     * kills the coroutine, so every access goes through this lock.
+     */
+    private val loadingWatchdogsLock = SynchronizedObject()
     private val loadingWatchdogs = mutableMapOf<String, Job>()
     private val loadingWatchdogTimeoutMs = 30_000L
 
@@ -357,26 +367,33 @@ class GroupManager(
         // erase pendingFullFetchRelays, or a genuinely slow EOSE arriving after the
         // timeout would be mis-classified as a partial fetch (isFull=false), skip
         // pruning, and never mark the relay fully fetched.
-        loadingWatchdogs.remove(normalized)?.cancel()
-        loadingWatchdogs[normalized] = scope.launch {
-            try {
-                delay(loadingWatchdogTimeoutMs)
-                _loadingRelays.update { it - normalized }
-            } finally {
-                // Remove self only if still the current watchdog for this relay, so a
-                // watchdog re-armed by a concurrent markRelayLoading isn't evicted
-                // (which would leave it uncancellable and able to clear a later fetch).
-                if (loadingWatchdogs[normalized] === coroutineContext[Job]) {
-                    loadingWatchdogs.remove(normalized)
+        val previous = synchronized(loadingWatchdogsLock) { loadingWatchdogs.remove(normalized) }
+        previous?.cancel()
+        // Lazy so the job is in the map before its body (and its finally) can run; started eagerly
+        // it could self-remove before the entry exists and leave a dead job behind.
+        val watchdog =
+            scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    delay(loadingWatchdogTimeoutMs)
+                    _loadingRelays.update { it - normalized }
+                } finally {
+                    // Remove self only if still the current watchdog for this relay, so a
+                    // watchdog re-armed by a concurrent markRelayLoading isn't evicted
+                    // (which would leave it uncancellable and able to clear a later fetch).
+                    val self = coroutineContext[Job]
+                    synchronized(loadingWatchdogsLock) {
+                        if (loadingWatchdogs[normalized] === self) loadingWatchdogs.remove(normalized)
+                    }
                 }
             }
-        }
+        synchronized(loadingWatchdogsLock) { loadingWatchdogs[normalized] = watchdog }
+        watchdog.start()
     }
 
     fun markRelayLoaded(relayUrl: String) {
         val normalized = relayUrl.normalizeRelayUrl()
         _loadingRelays.update { it - normalized }
-        loadingWatchdogs.remove(normalized)?.cancel()
+        synchronized(loadingWatchdogsLock) { loadingWatchdogs.remove(normalized) }?.cancel()
     }
 
     /**
@@ -2800,7 +2817,7 @@ class GroupManager(
             val normalizedRelay = sourceRelayUrl.normalizeRelayUrl()
             _completeGroupLoadRelays.update { it + normalizedRelay }
             _loadingRelays.update { it - normalizedRelay }
-            loadingWatchdogs.remove(normalizedRelay)?.cancel()
+            synchronized(loadingWatchdogsLock) { loadingWatchdogs.remove(normalizedRelay) }?.cancel()
             val now = epochSeconds()
             val isFull = pendingFullFetchRelays.remove(normalizedRelay) != null
             if (isFull) {
@@ -5404,10 +5421,15 @@ class GroupManager(
         _completeGroupLoadRelays.value = emptySet()
         _fullGroupListFetchedRelays.value = emptySet()
         _loadingRelays.value = emptySet()
-        // Snapshot before cancelling: a watchdog already past its delay may call
-        // loadingWatchdogs.remove() from its finally during iteration.
-        loadingWatchdogs.values.toList().forEach { it.cancel() }
-        loadingWatchdogs.clear()
+        // Snapshot under the lock before cancelling: a watchdog already past its delay removes
+        // itself from its finally, and iterating the live map while it does throws.
+        val watchdogs =
+            synchronized(loadingWatchdogsLock) {
+                val snapshot = loadingWatchdogs.values.toList()
+                loadingWatchdogs.clear()
+                snapshot
+            }
+        watchdogs.forEach { it.cancel() }
         // Without clearing this, an in-flight full fetch from the previous account
         // leaves the relay flagged as "pending", and the new account's expand of
         // OTHER GROUPS is silently skipped by requestFullGroupListForRelay's guard.
