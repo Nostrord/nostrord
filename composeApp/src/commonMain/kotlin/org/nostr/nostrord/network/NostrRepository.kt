@@ -2186,8 +2186,13 @@ class NostrRepository(
         // Same relay set as the DM relay list: senders look for both on our outbox, and our
         // own DM relays are where another device of ours will read it.
         val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays + dmRelaysWithDefaults(myPub)).distinct()
-        publishEventToRelays(targets, signed)
-        Result.Success(Unit)
+        // Wait for a real OK: the toggle flips on Success, so a fire-and-forget publish would let
+        // the UI claim a key is announced that no relay ever took.
+        if (publishWrapJsonAwaitOk(targets, signed.toJsonObject().toString(), signed.id.orEmpty())) {
+            Result.Success(Unit)
+        } else {
+            Result.Error(AppError.Unknown("No relay accepted the encryption key announcement."))
+        }
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Throwable) {
@@ -2416,18 +2421,27 @@ class NostrRepository(
                 add("EVENT")
                 add(event.toJsonObject())
             }.toString()
-        relays.distinct().forEach { url ->
-            // Bound the connect + send per relay so a dead/half-open socket can't hang the caller
-            // (or leak the background publish job) indefinitely.
-            try {
-                withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
-                    val client =
-                        connectionManager.getClientForRelay(url)
-                            ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-                    client?.send(json)
+        // Fan out concurrently: the target set is write + bootstrap + DM relays, and a cold pool
+        // pays a connect per relay. Serially that is one timeout after another, which the caller
+        // sees as a UI action stuck for a minute.
+        coroutineScope {
+            relays.distinct().map { url ->
+                async {
+                    // Bound the connect + send per relay so a dead/half-open socket can't hang the
+                    // caller (or leak the background publish job) indefinitely.
+                    try {
+                        withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
+                            val client =
+                                connectionManager.getClientForRelay(url)
+                                    ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+                            client?.send(json)
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                    }
                 }
-            } catch (_: Throwable) {
-            }
+            }.awaitAll()
         }
     }
 
@@ -2436,21 +2450,28 @@ class NostrRepository(
     private suspend fun publishWrapJsonAwaitOk(relays: List<String>, wrapJson: String, wrapId: String): Boolean {
         if (wrapId.isBlank()) return false
         val frame = """["EVENT",$wrapJson]"""
-        var accepted = false
-        relays.distinct().forEach { url ->
-            try {
-                val result =
-                    withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
-                        val client =
-                            connectionManager.getClientForRelay(url)
-                                ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-                        client?.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
+        // Concurrent for the same reason as publishEventToRelays: a relay that never answers OK
+        // costs the full timeout, and serially those stack into a send that looks hung.
+        return coroutineScope {
+            relays.distinct().map { url ->
+                async {
+                    try {
+                        val result =
+                            withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
+                                val client =
+                                    connectionManager.getClientForRelay(url)
+                                        ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+                                client?.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
+                            }
+                        result is PublishResult.Success
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        false
                     }
-                if (result is PublishResult.Success) accepted = true
-            } catch (_: Throwable) {
-            }
+                }
+            }.awaitAll().any { it }
         }
-        return accepted
     }
 
     // Persisted DM send queue: undelivered wraps by account, mirrored to SecureStorage.
