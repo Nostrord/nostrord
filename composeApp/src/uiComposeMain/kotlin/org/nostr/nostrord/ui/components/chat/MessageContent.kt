@@ -1367,8 +1367,12 @@ private fun ThreadQuoteCard(
     val groupId = extractGroupFromEvent(event)?.first ?: currentGroupId
     val navigate = LocalFrameNavigator.current
     val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
-    val groupName = groupId?.let { gid -> groupsByRelay.values.flatten().firstOrNull { it.id == gid }?.name }
-        ?.takeIf { it.isNotBlank() }
+    // Flattening every relay's group list is an allocation plus a linear scan, and this card sits
+    // in a scrolling list: keyed so it runs when the lists change, not on every recomposition.
+    val groupName = remember(groupsByRelay, groupId) {
+        groupId?.let { gid -> groupsByRelay.values.flatten().firstOrNull { it.id == gid }?.name }
+            ?.takeIf { it.isNotBlank() }
+    }
 
     val title = event.tags.firstOrNull { it.size >= 2 && (it[0] == "subject" || it[0] == "title") }
         ?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
@@ -1867,8 +1871,10 @@ private fun QuotedEvent(
                 // cross-relay forwarded group still shows its name + avatar; fetch a preview from
                 // the relay hint when we don't know it yet (parity with web / GroupLinkCard).
                 val sourceGroup =
-                    groupsByRelay.values.flatten().find { it.id == sourceGroupId }
-                        ?: groups.find { it.id == sourceGroupId }
+                    remember(groupsByRelay, groups, sourceGroupId) {
+                        groupsByRelay.values.flatten().find { it.id == sourceGroupId }
+                            ?: groups.find { it.id == sourceGroupId }
+                    }
                 val previewRelay = sourceRelayUrl ?: relayHints.firstOrNull()
                 LaunchedEffect(sourceGroupId, previewRelay, sourceGroup?.name) {
                     if (sourceGroup?.name == null && previewRelay != null) {
