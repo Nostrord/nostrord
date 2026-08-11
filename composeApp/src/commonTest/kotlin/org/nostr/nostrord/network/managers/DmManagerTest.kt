@@ -286,4 +286,29 @@ class DmManagerTest {
         dm.markFailed(other.id!!, "no DM relay accepted it")
         assertEquals(GroupManager.MessageStatus.Delivered, dm.messageStatus.value[other.id])
     }
+
+    @Test
+    fun `an imported rumor is filed under the peer, and only for this account`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val me = "a".repeat(64)
+        val peer = "b".repeat(64)
+        val stranger = "c".repeat(64)
+        fun rumor(id: String, author: String, recipient: String) = org.nostr.nostrord.nostr.Event(
+            id = id,
+            pubkey = author,
+            createdAt = 1L,
+            kind = 14,
+            tags = listOf(listOf("p", recipient)),
+            content = "hi",
+        )
+
+        assertEquals(true, dm.importRumor(rumor("1".repeat(64), peer, me), me))
+        assertEquals(true, dm.importRumor(rumor("2".repeat(64), me, peer), me))
+        // Same file imported twice must not double the conversation.
+        assertEquals(false, dm.importRumor(rumor("1".repeat(64), peer, me), me))
+        // Someone else's history would invent a conversation this account was never part of.
+        assertEquals(false, dm.importRumor(rumor("3".repeat(64), stranger, peer), me))
+
+        assertEquals(2, dm.messagesByPeer.value[peer]?.size)
+    }
 }

@@ -234,6 +234,15 @@ interface NostrRepositoryApi {
     /** The current encryption private key, for moving it to another device. */
     fun exportDmEncryptionKey(): String?
 
+    /**
+     * The whole DM history as a backup file body (JSONL, one decrypted rumor per line). Empty when
+     * there is nothing stored. The file is NOT encrypted; callers must say so before writing it.
+     */
+    suspend fun exportDmHistory(): String
+
+    /** Restore rumors from a backup file body. See [DmImportSummary] for the partial-restore case. */
+    suspend fun importDmHistory(text: String): Result<DmImportSummary>
+
     /** Progress of the self-archive republish (see DmArchiveManager). */
     val dmArchiveProgress: StateFlow<DmArchiveManager.Progress>
 
@@ -893,3 +902,14 @@ interface NostrRepositoryApi {
         explicitRelays: List<String> = emptyList(),
     ): List<String>
 }
+
+/**
+ * Outcome of restoring a backup file. [skipped] counts lines that were not a usable rumor and
+ * [duplicates] ones already in this account's history, so a restore that filed less than the file
+ * held can say why instead of looking like a silent loss.
+ */
+data class DmImportSummary(
+    val imported: Int,
+    val duplicates: Int,
+    val skipped: Int,
+)

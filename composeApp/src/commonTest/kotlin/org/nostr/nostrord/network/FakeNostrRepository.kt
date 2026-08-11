@@ -172,6 +172,21 @@ class FakeNostrRepository : NostrRepositoryApi {
         return rotateDmEncryptionKeyResult
     }
 
+    var exportedDmHistory: String = ""
+    var importDmHistoryResult: Result<DmImportSummary> = Result.Success(DmImportSummary(0, 0, 0))
+    var importedDmHistoryText: String? = null
+
+    override suspend fun exportDmHistory(): String {
+        calls += "exportDmHistory"
+        return exportedDmHistory
+    }
+
+    override suspend fun importDmHistory(text: String): Result<DmImportSummary> {
+        calls += "importDmHistory"
+        importedDmHistoryText = text
+        return importDmHistoryResult
+    }
+
     var resetDmEncryptionKeyResult: Result<Unit> = Result.Success(Unit)
 
     override suspend fun resetDmEncryptionKey(): Result<Unit> {

@@ -248,6 +248,39 @@ class DmManager(
         return true
     }
 
+    /**
+     * File a rumor restored from a backup file. Same shape as an unwrapped one, minus everything
+     * that only a relay delivery can mean: no delivery status, no wrap link, no seen-on relay.
+     * Returns false when the rumor is not a chat message for this account, or is already known.
+     */
+    fun importRumor(rumor: Event, myPubkey: String): Boolean {
+        if (rumor.kind != Nip17.KIND_CHAT) return false
+        val rumorId = rumor.id ?: return false
+        val recipient = rumor.getTag("p")?.getOrNull(1)
+        // The peer is the other party, and one side of the pair must be us, or the file is
+        // someone else's history and filing it would invent conversations.
+        val peer =
+            when (myPubkey) {
+                rumor.pubkey -> recipient
+                recipient -> rumor.pubkey
+                else -> null
+            } ?: return false
+        if (!markRumorSeen(rumorId)) return false
+        addMessage(
+            peer,
+            DmMessage(
+                id = rumorId,
+                peerPubkey = peer,
+                senderPubkey = rumor.pubkey,
+                content = rumor.content,
+                createdAt = rumor.createdAt,
+                mine = rumor.pubkey == myPubkey,
+                rumorJson = rumor.toJsonString(),
+            ),
+        )
+        return true
+    }
+
     /** Optimistically add a just-sent message so the UI shows it before the self-wrap echoes back. */
     fun addOptimistic(rumor: Event, recipientPubkey: String, myPubkey: String) {
         val rumorId = rumor.id ?: return
