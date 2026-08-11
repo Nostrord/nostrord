@@ -10,9 +10,12 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
+import org.nostr.nostrord.ui.mentions.MentionAutocomplete
+import org.nostr.nostrord.ui.mentions.MentionCtx
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.threadShareLink
 import org.nostr.nostrord.ui.screens.group.GroupMembership
+import org.nostr.nostrord.ui.screens.group.MentionableGroup
 import org.nostr.nostrord.ui.screens.group.ThreadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.canDeleteThreadMessage
@@ -24,7 +27,7 @@ import org.nostr.nostrord.ui.screens.group.threadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.getDateLabel
-import org.nostr.nostrord.utils.shortNpub
+import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.VirtualKeyboard
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
@@ -32,12 +35,17 @@ import org.nostr.nostrord.web.bridge.useViewModel
 import org.nostr.nostrord.web.components.AvatarKind
 import org.nostr.nostrord.web.components.EmojiPicker
 import org.nostr.nostrord.web.components.Ic
+import org.nostr.nostrord.web.components.MentionMatch
+import org.nostr.nostrord.web.components.MentionPopup
 import org.nostr.nostrord.web.components.Portal
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.confirmDialog
 import org.nostr.nostrord.web.components.copyToClipboard
 import org.nostr.nostrord.web.components.icon
+import org.nostr.nostrord.web.components.mentionDisplayName
+import org.nostr.nostrord.web.components.mentionHighlight
+import org.nostr.nostrord.web.components.mentionMatches
 import org.nostr.nostrord.web.components.messageSendStatus
 import org.nostr.nostrord.web.components.reactionBadges
 import org.nostr.nostrord.web.components.sendStateIcon
@@ -79,10 +87,7 @@ private fun ChildrenBuilder.threadsLockedState(title: String, body: String) {
     }
 }
 
-// Mirrors ChatScreen.displayName (private there): profile name, else a short npub.
-private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = meta?.displayName?.takeIf { it.isNotBlank() }
-    ?: meta?.name?.takeIf { it.isNotBlank() }
-    ?: shortNpub(pubkey)
+private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = mentionDisplayName(pubkey, meta)
 
 private fun relativeTime(createdAtSeconds: Long): String {
     val nowSec = (Date.now() / 1000).toLong()
@@ -105,6 +110,296 @@ private data class ThreadCtxMenu(
     val x: Double,
     val y: Double,
 )
+
+private external interface ThreadComposerProps : Props {
+    /** The screen's ThreadsViewModel (shared, not a second instance). */
+    var vm: ThreadsViewModel
+
+    /** Message being answered (null posts top-level), plus the banner's name and preview. */
+    var replyingTo: NostrGroupClient.NostrMessage?
+
+    /** Bumped on EVERY reply pick so re-replying to the same message still refocuses. */
+    var replyNonce: Int
+    var replyParentName: String?
+    var replyParentPreview: String?
+    var onCancelReply: () -> Unit
+
+    /** Cleared after a successful publish so the screen can drop the reply target. */
+    var onSent: () -> Unit
+    var members: List<String>
+    var allGroups: List<MentionableGroup>
+    var userMetadata: Map<String, UserMetadata>
+
+    /** Relay's NIP-11 pubkey, the naddr author of a `%group` mention on that relay. */
+    var relayPubkeyOf: (String) -> String?
+    var onUploadError: (String) -> Unit
+}
+
+/**
+ * The thread reply composer: the DM pill (.dm-composer) plus the `@user` / `%group` autocomplete
+ * and the colored mention mirror the chat composer has. Split out of [ThreadsScreen] so typing
+ * re-renders only this subtree, not the whole thread.
+ */
+private val ThreadComposer =
+    FC<ThreadComposerProps> { props ->
+        val vm = props.vm
+        val (reply, setReply) = useState { "" }
+        val (sending, setSending) = useState { false }
+        val (emojiOpen, setEmojiOpen) = useState { false }
+        val (uploadCount, setUploadCount) = useState { 0 }
+
+        // Active @user / %group mention being typed, and the ones already chosen: displayName ->
+        // pubkey for users (resolved to nostr:npub + a p tag by the repo), name -> nostr:naddr for
+        // groups (spliced into the content at send).
+        val (mention, setMention) = useState<MentionCtx?> { null }
+        val (mentions, setMentions) = useState<Map<String, String>> { emptyMap() }
+        val (groupMentions, setGroupMentions) = useState<Map<String, String>> { emptyMap() }
+        val (mentionSelected, setMentionSelected) = useState { 0 }
+
+        val composerInputRef = useRef<HTMLTextAreaElement>(null)
+        val composerHighlightRef = useRef<HTMLDivElement>(null)
+
+        val suggestions = mentionMatches(mention, props.members, props.userMetadata, props.allGroups, props.relayPubkeyOf)
+
+        useEffect(props.replyingTo?.id, props.replyNonce) {
+            if (props.replyingTo == null) return@useEffect
+            val ta = composerInputRef.current ?: return@useEffect
+            // Re-focusing an already-focused field does not re-open a keyboard the user
+            // dismissed, so blur first in exactly that case (mirrors ChatScreen).
+            if (!VirtualKeyboard.isOpen && document.asDynamic().activeElement === ta.asDynamic()) {
+                ta.blur()
+            }
+            ta.focus()
+        }
+
+        // Keep the mirror's box in step with the auto-growing textarea.
+        useEffect(reply) {
+            val el = composerInputRef.current ?: return@useEffect
+            el.style.height = "auto"
+            el.style.height = "${el.scrollHeight}px"
+        }
+
+        fun isMediaMime(type: String?): Boolean = type != null && (type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/"))
+
+        // Upload a pasted / dropped file and append its URL to the reply draft (parity with DM / group).
+        fun handleMediaFile(file: dynamic) {
+            setUploadCount { it + 1 }
+            launchApp {
+                try {
+                    when (val r = uploadBlob(file)) {
+                        is Result.Success -> setReply { prev -> if (prev.isBlank()) r.data.url else "$prev ${r.data.url}" }
+                        is Result.Error -> props.onUploadError(r.error.message)
+                    }
+                } finally {
+                    setUploadCount { it - 1 }
+                }
+            }
+        }
+
+        /** Replace the typed "@query" / "%query" with the chosen suggestion. */
+        fun insertMention(mm: MentionMatch) {
+            val ctx = mention ?: return
+            setReply(MentionAutocomplete.insert(reply, ctx, mm.label).text)
+            if (mm.group) setGroupMentions { it + (mm.label to mm.ref) } else setMentions { it + (mm.label to mm.seed) }
+            setMention(null)
+            setMentionSelected(0)
+        }
+
+        fun sendReply() {
+            if (reply.isBlank() || sending) return
+            // Resolve %group mentions to their nostr:naddr inline (native does this at send too);
+            // @user mentions are resolved by the repo from the mentions map (+ p tag).
+            var text = reply
+            groupMentions.forEach { (name, ref) -> text = text.replace("%$name", ref) }
+            setSending(true)
+            vm.sendReply(
+                text,
+                parent = props.replyingTo,
+                mentions = mentions,
+                onSuccess = {
+                    setReply("")
+                    setMentions(emptyMap())
+                    setGroupMentions(emptyMap())
+                    setSending(false)
+                    props.onSent()
+                },
+                onFailure = { setSending(false) },
+            )
+        }
+
+        // execCommand keeps the cursor position so an emoji lands where the caret is, not appended.
+        fun insertAtCursor(s: String) {
+            val ta = composerInputRef.current
+            if (ta == null) {
+                setReply { it + s }
+                return
+            }
+            ta.focus()
+            document.asDynamic().execCommand("insertText", false, s)
+        }
+
+        // Same composer as DM (.dm-composer): rounded bar, Enter to send, emoji picker.
+        div {
+            className = ClassName("dm-composer-wrap")
+            // Floats above the pill; .dm-composer-wrap is the positioned ancestor it anchors to.
+            // Every child here carries a stable key: without them, mounting the popup shifts the
+            // siblings after it and React remounts the textarea, which drops the caret mid-word.
+            if (mention != null && suggestions.isNotEmpty()) {
+                MentionPopup {
+                    key = "mention-popup"
+                    matches = suggestions
+                    trigger = mention.trigger
+                    selected = mentionSelected
+                    onPick = { insertMention(it) }
+                    onHover = { setMentionSelected(it) }
+                }
+            }
+            // Reply chip above the composer while answering a specific message.
+            props.replyParentName?.let { parentName ->
+                div {
+                    key = "composer-reply"
+                    className = ClassName("composer-reply")
+                    icon(Ic.Reply)
+                    span {
+                        className = ClassName("composer-reply-label")
+                        +"Replying to"
+                    }
+                    span {
+                        className = ClassName("composer-reply-name")
+                        +parentName
+                    }
+                    props.replyParentPreview?.let { preview ->
+                        span {
+                            className = ClassName("composer-reply-text")
+                            +preview
+                        }
+                    }
+                    button {
+                        className = ClassName("composer-reply-close")
+                        onClick = { props.onCancelReply() }
+                        icon(Ic.Close)
+                    }
+                }
+            }
+            div {
+                key = "composer-pill"
+                className = ClassName("dm-composer")
+                UploadButton {
+                    cls = "dm-composer-btn"
+                    icon = Ic.AttachFile
+                    busy = uploadCount > 0
+                    onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
+                    onPickerClosed = { composerInputRef.current?.focus() }
+                    onUploaded = { upload -> setReply { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
+                    onError = { props.onUploadError(it) }
+                }
+                div {
+                    className = ClassName("composer-input-wrap")
+                    // Colored mirror painted behind the transparent textarea: same text, with the
+                    // resolved @user / %group mentions tinted (native parity).
+                    div {
+                        className = ClassName("composer-highlight")
+                        ref = composerHighlightRef
+                        mentionHighlight(reply, mentions.keys.map { "@$it" } + groupMentions.keys.map { "%$it" })
+                    }
+                    textarea {
+                        ref = composerInputRef
+                        className = ClassName("composer-input")
+                        rows = 1
+                        value = reply
+                        placeholder = "Write a reply..."
+                        onScroll = {
+                            composerHighlightRef.current?.scrollTop = composerInputRef.current?.scrollTop ?: 0.0
+                        }
+                        onChange = { event ->
+                            val v = (event.target as HTMLTextAreaElement).value
+                            setReply(v)
+                            val cursor = (event.currentTarget.asDynamic().selectionStart as? Int) ?: v.length
+                            setMention(MentionAutocomplete.detect(v, cursor))
+                            setMentionSelected(0)
+                        }
+                        onKeyDown = { e ->
+                            val hasMatches = mention != null && suggestions.isNotEmpty()
+                            when {
+                                hasMatches && e.key == "ArrowDown" -> {
+                                    e.preventDefault()
+                                    setMentionSelected { (it + 1).coerceAtMost(suggestions.size - 1) }
+                                }
+                                hasMatches && e.key == "ArrowUp" -> {
+                                    e.preventDefault()
+                                    setMentionSelected { (it - 1).coerceAtLeast(0) }
+                                }
+                                hasMatches && (e.key == "Enter" || e.key == "Tab") -> {
+                                    e.preventDefault()
+                                    insertMention(suggestions[mentionSelected.coerceIn(0, suggestions.size - 1)])
+                                }
+                                mention != null && e.key == "Escape" -> {
+                                    e.preventDefault()
+                                    setMention(null)
+                                }
+                                e.key == "Enter" && !e.shiftKey -> {
+                                    e.preventDefault()
+                                    sendReply()
+                                }
+                            }
+                        }
+                        onBlur = { window.setTimeout({ setMention(null) }, 150) }
+                        onPaste = { event ->
+                            val items = event.asDynamic().clipboardData?.items
+                            val count = (items?.length as? Int) ?: 0
+                            for (i in 0 until count) {
+                                val item = items[i]
+                                val type = item.type.unsafeCast<String?>()
+                                if (item.kind == "file" && isMediaMime(type)) {
+                                    val file = item.getAsFile()
+                                    if (file != null) {
+                                        event.preventDefault()
+                                        handleMediaFile(file)
+                                    }
+                                }
+                            }
+                        }
+                        onDragOver = { it.preventDefault() }
+                        onDrop = { event ->
+                            val files = event.asDynamic().dataTransfer?.files
+                            val count = (files?.length as? Int) ?: 0
+                            if (count > 0) event.preventDefault()
+                            for (i in 0 until count) {
+                                val file = files[i]
+                                if (isMediaMime(file.type.unsafeCast<String?>())) handleMediaFile(file)
+                            }
+                        }
+                    }
+                }
+                button {
+                    className = ClassName(if (emojiOpen) "dm-composer-btn active" else "dm-composer-btn")
+                    title = "Emoji"
+                    onClick = { setEmojiOpen(!emojiOpen) }
+                    icon(Ic.EmojiEmotions)
+                }
+                button {
+                    className = ClassName("dm-composer-btn send")
+                    title = "Send"
+                    disabled = (reply.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
+                    onMouseDown = { e -> e.preventDefault() }
+                    onClick = { sendReply() }
+                    if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
+                }
+                if (emojiOpen) {
+                    div {
+                        className = ClassName("emoji-overlay")
+                        onClick = { setEmojiOpen(false) }
+                        EmojiPicker {
+                            onPick = { emoji ->
+                                insertAtCursor(emoji)
+                                setEmojiOpen(false)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
 external interface ThreadsScreenProps : Props {
     var route: GroupRoute
@@ -208,68 +503,24 @@ val ThreadsScreen =
         }
 
         val (composing, setComposing) = useState { false }
-        val (reply, setReply) = useState { "" }
-        val (sending, setSending) = useState { false }
-        val (emojiOpen, setEmojiOpen) = useState { false }
-        val (uploadCount, setUploadCount) = useState { 0 }
         val (uploadError, setUploadError) = useState<String?> { null }
-        val composerInputRef = useRef<HTMLTextAreaElement>(null)
 
         // Picking Reply should leave the caret in the composer, ready to type (chat parity).
         // Bumped per pick so replying twice to the same message re-focuses.
         val (replyFocusNonce, setReplyFocusNonce) = useState { 0 }
-        useEffect(replyingTo?.id, replyFocusNonce) {
-            if (replyingTo == null) return@useEffect
-            val ta = composerInputRef.current ?: return@useEffect
-            // Re-focusing an already-focused field does not re-open a keyboard the user
-            // dismissed, so blur first in exactly that case (mirrors ChatScreen).
-            if (!VirtualKeyboard.isOpen && document.asDynamic().activeElement === ta.asDynamic()) {
-                ta.blur()
-            }
-            ta.focus()
-        }
 
-        fun isMediaMime(type: String?): Boolean = type != null && (type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/"))
-
-        // Upload a pasted / dropped file and append its URL to the reply draft (parity with DM / group).
-        fun handleMediaFile(file: dynamic) {
-            setUploadCount { it + 1 }
-            launchApp {
-                try {
-                    when (val r = uploadBlob(file)) {
-                        is Result.Success -> setReply { prev -> if (prev.isBlank()) r.data.url else "$prev ${r.data.url}" }
-                        is Result.Error -> setUploadError(r.error.message)
-                    }
-                } finally {
-                    setUploadCount { it - 1 }
-                }
-            }
-        }
-
-        fun sendReply() {
-            if (reply.isBlank() || sending) return
-            setSending(true)
-            vm.sendReply(
-                reply,
-                parent = replyingTo,
-                onSuccess = {
-                    setReply("")
-                    setReplyingTo(null)
-                    setSending(false)
-                },
-                onFailure = { setSending(false) },
-            )
-        }
-
-        // execCommand keeps the cursor position so an emoji lands where the caret is, not appended.
-        fun insertAtCursor(s: String) {
-            val ta = composerInputRef.current
-            if (ta == null) {
-                setReply { it + s }
-                return
-            }
-            ta.focus()
-            document.asDynamic().execCommand("insertText", false, s)
+        // Mention candidates, shared with the new-thread modal: the group's members (admins first,
+        // chat parity) and the groups reachable through your follows.
+        val mentionableMembers = useStateFlow(vm.mentionableMembers)
+        val threadAdmins = useStateFlow(vm.groupAdmins)
+        val mentionableGroups = useStateFlow(vm.mentionableGroups)
+        val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)
+        val mentionMembers = mentionableMembers.sortedWith(
+            compareByDescending<String> { it in threadAdmins }
+                .thenBy { mentionDisplayName(it, userMetadata[it]).lowercase() },
+        )
+        val relayPubkeyOf: (String) -> String? = { r ->
+            relayMetadata[r]?.groupNaddrAuthor ?: relayMetadata[r.normalizeRelayUrl()]?.groupNaddrAuthor
         }
 
         div {
@@ -434,13 +685,17 @@ val ThreadsScreen =
                     Portal {
                         CreateThreadModal {
                             onClose = { setComposing(false) }
-                            onCreate = { title, content, shareToChat ->
+                            onCreate = { title, content, shareToChat, mentions ->
                                 // Open the new thread right away (Discord parity; the optimistic
                                 // root is already in the store, so the detail renders instantly).
-                                vm.createThread(title, content, shareToChat) { rootId ->
+                                vm.createThread(title, content, shareToChat, mentions) { rootId ->
                                     props.onNavigate(route.copy(threadRootId = rootId))
                                 }
                             }
+                            members = mentionMembers
+                            allGroups = mentionableGroups
+                            this.userMetadata = userMetadata
+                            this.relayPubkeyOf = relayPubkeyOf
                         }
                     }
                 }
@@ -525,111 +780,20 @@ val ThreadsScreen =
                                 }
                                 detail.replies.forEach { r -> renderThreadMessage(r, isRoot = false) }
                             }
-                            // Same composer as DM (.dm-composer): rounded bar, Enter to send, emoji picker.
-                            div {
-                                className = ClassName("dm-composer-wrap")
-                                // Reply chip above the composer while answering a specific message.
-                                replyingTo?.let { target ->
-                                    div {
-                                        className = ClassName("composer-reply")
-                                        icon(Ic.Reply)
-                                        span {
-                                            className = ClassName("composer-reply-label")
-                                            +"Replying to"
-                                        }
-                                        span {
-                                            className = ClassName("composer-reply-name")
-                                            +threadDisplayName(target.pubkey, userMetadata[target.pubkey])
-                                        }
-                                        target.content.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { preview ->
-                                            span {
-                                                className = ClassName("composer-reply-text")
-                                                +preview
-                                            }
-                                        }
-                                        button {
-                                            className = ClassName("composer-reply-close")
-                                            onClick = { setReplyingTo(null) }
-                                            icon(Ic.Close)
-                                        }
-                                    }
-                                }
-                                div {
-                                    className = ClassName("dm-composer")
-                                    UploadButton {
-                                        cls = "dm-composer-btn"
-                                        icon = Ic.AttachFile
-                                        busy = uploadCount > 0
-                                        onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
-                                        onPickerClosed = { composerInputRef.current?.focus() }
-                                        onUploaded = { upload -> setReply { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
-                                        onError = { setUploadError(it) }
-                                    }
-                                    textarea {
-                                        ref = composerInputRef
-                                        rows = 1
-                                        value = reply
-                                        placeholder = "Write a reply..."
-                                        onChange = { setReply((it.target as HTMLTextAreaElement).value) }
-                                        onKeyDown = { e ->
-                                            if (e.key == "Enter" && !e.shiftKey) {
-                                                e.preventDefault()
-                                                sendReply()
-                                            }
-                                        }
-                                        onPaste = { event ->
-                                            val items = event.asDynamic().clipboardData?.items
-                                            val count = (items?.length as? Int) ?: 0
-                                            for (i in 0 until count) {
-                                                val item = items[i]
-                                                val type = item.type.unsafeCast<String?>()
-                                                if (item.kind == "file" && isMediaMime(type)) {
-                                                    val file = item.getAsFile()
-                                                    if (file != null) {
-                                                        event.preventDefault()
-                                                        handleMediaFile(file)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        onDragOver = { it.preventDefault() }
-                                        onDrop = { event ->
-                                            val files = event.asDynamic().dataTransfer?.files
-                                            val count = (files?.length as? Int) ?: 0
-                                            if (count > 0) event.preventDefault()
-                                            for (i in 0 until count) {
-                                                val file = files[i]
-                                                if (isMediaMime(file.type.unsafeCast<String?>())) handleMediaFile(file)
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        className = ClassName(if (emojiOpen) "dm-composer-btn active" else "dm-composer-btn")
-                                        title = "Emoji"
-                                        onClick = { setEmojiOpen(!emojiOpen) }
-                                        icon(Ic.EmojiEmotions)
-                                    }
-                                    button {
-                                        className = ClassName("dm-composer-btn send")
-                                        title = "Send"
-                                        disabled = (reply.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
-                                        onMouseDown = { e -> e.preventDefault() }
-                                        onClick = { sendReply() }
-                                        if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
-                                    }
-                                    if (emojiOpen) {
-                                        div {
-                                            className = ClassName("emoji-overlay")
-                                            onClick = { setEmojiOpen(false) }
-                                            EmojiPicker {
-                                                onPick = { emoji ->
-                                                    insertAtCursor(emoji)
-                                                    setEmojiOpen(false)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                            ThreadComposer {
+                                this.vm = vm
+                                this.replyingTo = replyingTo
+                                this.replyNonce = replyFocusNonce
+                                this.replyParentName = replyingTo?.let { threadDisplayName(it.pubkey, userMetadata[it.pubkey]) }
+                                this.replyParentPreview = replyingTo?.content
+                                    ?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
+                                this.onCancelReply = { setReplyingTo(null) }
+                                this.onSent = { setReplyingTo(null) }
+                                this.members = mentionMembers
+                                this.allGroups = mentionableGroups
+                                this.userMetadata = userMetadata
+                                this.relayPubkeyOf = relayPubkeyOf
+                                this.onUploadError = { setUploadError(it) }
                             }
                         }
                     }

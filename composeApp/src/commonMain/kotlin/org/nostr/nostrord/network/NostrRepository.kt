@@ -3821,7 +3821,12 @@ class NostrRepository(
 
     override suspend fun fetchThread(groupId: String, rootId: String) = groupManager.fetchThread(groupId, rootId)
 
-    override suspend fun createThread(groupId: String, title: String, content: String): Result<String> {
+    override suspend fun createThread(
+        groupId: String,
+        title: String,
+        content: String,
+        mentions: Map<String, String>,
+    ): Result<String> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
         return groupManager.createThread(
@@ -3829,6 +3834,7 @@ class NostrRepository(
             title = title,
             content = content,
             pubKey = pubKey,
+            mentions = mentions,
             signEvent = { sessionManager.signEvent(it) },
         )
     }
@@ -3838,6 +3844,7 @@ class NostrRepository(
         root: NostrGroupClient.NostrMessage,
         parent: NostrGroupClient.NostrMessage,
         content: String,
+        mentions: Map<String, String>,
     ): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
@@ -3847,6 +3854,7 @@ class NostrRepository(
             parent = parent,
             content = content,
             pubKey = pubKey,
+            mentions = mentions,
             signEvent = { sessionManager.signEvent(it) },
         )
     }

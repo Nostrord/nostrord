@@ -24,31 +24,78 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonVariant
+import org.nostr.nostrord.ui.components.chat.MentionSuggestions
+import org.nostr.nostrord.ui.components.chat.groupMatches
+import org.nostr.nostrord.ui.components.chat.handleKeyEvent
+import org.nostr.nostrord.ui.components.chat.memberMatches
+import org.nostr.nostrord.ui.components.chat.rememberMentionFieldState
 import org.nostr.nostrord.ui.components.forms.AppField
 import org.nostr.nostrord.ui.components.upload.MessageUploadButton
+import org.nostr.nostrord.ui.screens.group.model.GroupInfo
+import org.nostr.nostrord.ui.screens.group.model.MemberInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
+import org.nostr.nostrord.ui.theme.rememberEmojiFontFamily
 
 /**
  * Compose-a-new-thread dialog (kind:11 root): native mirror of the web CreateThreadModal. Title is
- * the thread headline (required), then the body. Logic stays in [org.nostr.nostrord.ui.screens.group.ThreadsViewModel];
- * this is pure UI and reports back through [onCreate].
+ * the thread headline (required), then the body, which takes the same `@user` / `%group`
+ * autocomplete as the chat and reply composers. Logic stays in
+ * [org.nostr.nostrord.ui.screens.group.ThreadsViewModel]; this is pure UI and reports back through
+ * [onCreate], which receives the chosen mentions so the caller can resolve them at publish.
  */
 @Composable
 fun CreateThreadDialog(
     onDismiss: () -> Unit,
-    onCreate: (title: String, content: String, shareToChat: Boolean) -> Unit,
+    onCreate: (
+        title: String,
+        content: String,
+        shareToChat: Boolean,
+        mentions: Map<String, String>,
+        groupMentions: Map<String, GroupInfo>,
+    ) -> Unit,
+    members: List<MemberInfo> = emptyList(),
+    availableGroups: List<GroupInfo> = emptyList(),
 ) {
     var title by remember { mutableStateOf("") }
-    var body by remember { mutableStateOf("") }
+    var body by remember { mutableStateOf(TextFieldValue("")) }
+    var mentions by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var groupMentions by remember { mutableStateOf<Map<String, GroupInfo>>(emptyMap()) }
+
+    val emojiFontFamily = rememberEmojiFontFamily()
+    val mentionVisualTransformation = remember(mentions.keys, groupMentions.keys, emojiFontFamily) {
+        MentionVisualTransformation(
+            mentionedNames = mentions.keys,
+            mentionColor = NostrordColors.MentionText,
+            emojiFontFamily = emojiFontFamily,
+            groupMentionedNames = groupMentions.keys,
+        )
+    }
+
+    val mentionState = rememberMentionFieldState()
+    val memberMatches = mentionState.memberMatches(members)
+    val groupMatches = mentionState.groupMatches(availableGroups)
+
+    fun selectMember(member: MemberInfo) {
+        body = mentionState.apply(body, member.displayName) ?: return
+        mentions = mentions + (member.displayName to member.pubkey)
+    }
+
+    fun selectGroup(group: GroupInfo) {
+        body = mentionState.apply(body, group.name) ?: return
+        groupMentions = groupMentions + (group.name to group)
+    }
 
     // Default on: announcing the new thread in chat is the common case; one click opts out.
     var shareToChat by remember { mutableStateOf(true) }
@@ -95,19 +142,46 @@ fun CreateThreadDialog(
                         // Attach media to the thread body (rendered inline like chat).
                         MessageUploadButton(
                             onUploadComplete = { result ->
-                                body = if (body.isBlank()) result.url else "$body ${result.url}"
+                                val current = body.text
+                                val appended = if (current.isBlank()) result.url else "$current ${result.url}"
+                                body = TextFieldValue(appended, TextRange(appended.length))
                             },
                         )
                     }
                     Spacer(Modifier.height(Spacing.xs))
                     AppField(
                         value = body,
-                        onValueChange = { body = it },
+                        onValueChange = {
+                            body = it
+                            mentionState.onValueChange(it)
+                        },
                         placeholder = "Start a discussion...",
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onPreviewKeyEvent { event ->
+                                mentionState.handleKeyEvent(event, maxOf(memberMatches.size, groupMatches.size)) {
+                                    memberMatches.getOrNull(mentionState.selectedIndex)?.let { selectMember(it) }
+                                        ?: groupMatches.getOrNull(mentionState.selectedIndex)?.let { selectGroup(it) }
+                                }
+                            },
                         singleLine = false,
                         minLines = 4,
+                        visualTransformation = mentionVisualTransformation,
                     )
+
+                    // Inline below the field: a floating Popup inside a Dialog lands in its own
+                    // window and would sit behind the scrim on desktop.
+                    if (memberMatches.isNotEmpty() || groupMatches.isNotEmpty()) {
+                        Spacer(Modifier.height(Spacing.xs))
+                        MentionSuggestions(
+                            state = mentionState,
+                            members = members,
+                            groups = availableGroups,
+                            onMemberSelect = { selectMember(it) },
+                            onGroupSelect = { selectGroup(it) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
 
                     Spacer(Modifier.height(Spacing.sm))
                     // Announce the new thread in the group chat (kind:9 with the root's nevent).
@@ -125,10 +199,10 @@ fun CreateThreadDialog(
                         AppButton(
                             text = "Publish thread",
                             onClick = {
-                                onCreate(title, body, shareToChat)
+                                onCreate(title, body.text, shareToChat, mentions, groupMentions)
                                 onDismiss()
                             },
-                            enabled = title.isNotBlank() && body.isNotBlank(),
+                            enabled = title.isNotBlank() && body.text.isNotBlank(),
                         )
                     }
                 }

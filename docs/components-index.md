@@ -13,6 +13,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `AccountChooserDialog` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/accounts/AccountChooserDialog.kt | Centered modal shown when the user signs out of the active account while other |
 | `AddAccountSheet` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/accounts/AddAccountSheet.kt | Modal that adds a new signed-in account. Centered dialog matching the web |
 | `AppButton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/buttons/AppButton.kt | — |
+| `AppField` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/forms/AppForms.kt | [AppField] over a [TextFieldValue], for callers that need the caret position (mention |
 | `AppField` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/forms/AppForms.kt | The single standardized form field (web `.modal-input` / `.modal-textarea` / `.modal-select` |
 | `AppFrame` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/layout/AppFrame.kt | New-design logged-in frame (prototype AppShell): the 72px groups rail (home, |
 | `AppSearchField` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/forms/AppForms.kt | Standardized search / filter input (web `searchInput` over `.input-group`): floating surface with |
@@ -61,6 +62,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `MemberSidebar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/sidebars/MemberSidebar.kt | Enhanced member sidebar with online/offline status, avatars, role badges, and search. |
 | `MemberSkeleton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/loading/SkeletonLoader.kt | Skeleton loader for member list items. |
 | `MeMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/accounts/MeMenu.kt | Sheet/popup that opens from the user avatar. Lists every signed-in account |
+| `MentionSuggestions` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MentionField.kt | The suggestion list for whichever mention is active: members for `@`, groups for `%`, nothing |
 | `MessageComposer` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageComposer.kt | Single rounded "pill" composer shared by the DM page and the individual thread view (web |
 | `MessageContent` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageContent.kt | # MessageContent - Robust Inline Text Rendering |
 | `MessageContextMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageContextMenu.kt | Message context menu - appears on right-click (desktop) or long-press (mobile). |
@@ -89,6 +91,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `StepLabel` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/onboarding/OnboardingPieces.kt | Uppercase step label under the bars: "Step 1 of 2 · Welcome". |
 | `StepProgress` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/onboarding/OnboardingPieces.kt | Onboarding building blocks — Compose counterpart of the web's `.onb-*` / |
 | `SystemEventItem` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/SystemEventItem.kt | Enhanced system event item with avatars and grouping support. |
+| `SystemMessageHost` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/layout/SystemMessageHost.kt | Renders [AppModule.systemMessages] as a transient toast at the bottom of the app. |
 | `TagBadge` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/GroupTypeBadges.kt | Tone-tinted access pill (Public/Private, Open/Closed, Joined). 10sp semibold, |
 | `ThreadMessageContextMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageContextMenu.kt | Compact context menu for thread messages (right-click / long-press): the quick-reactions |
 | `UnreadBadge` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/badges/UnreadBadge.kt | Unread message count badge. |
@@ -140,11 +143,13 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `LiveSpaceBar` | webMain/kotlin/org/nostr/nostrord/web/components/LiveSpaceBar.kt | In-chat banner for a NIP-29 AV space: participant count, a stack of the first few faces and |
 | `ManageGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ManageGroupModal.kt | Unified admin "Manage group" modal (port of the prototype GroupManage): a left tab |
 | `MembersModal` | webMain/kotlin/org/nostr/nostrord/web/modals/MembersModal.kt | Read-only member roster (port of the prototype GroupPanels "Members" panel): avatar + |
+| `MentionPopup` | webMain/kotlin/org/nostr/nostrord/web/components/MentionPopup.kt | The `@user` / `%group` suggestion list. Absolutely positioned against the nearest positioned |
 | `PomegranateDisconnectModal` | webMain/kotlin/org/nostr/nostrord/web/modals/PomegranateDisconnectModal.kt | Confirmation for unlinking a Login-with-Google account from its central server. The |
 | `Portal` | webMain/kotlin/org/nostr/nostrord/web/components/Portal.kt | Renders its children into `<body>` through a React portal, so they escape any ancestor that |
 | `ReportUserModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ReportUserModal.kt | NIP-56 report modal (prototype ReportModal): reason radio cards, optional note, |
 | `ShareGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ShareGroupModal.kt | Share-group modal — real port of the Compose ShareGroupModal: a single cycling identifier field |
 | `Spoiler` | webMain/kotlin/org/nostr/nostrord/web/components/Spoiler.kt | Discord-style spoiler (//text//): blurred until clicked, click toggles. Mirrors the |
+| `SystemMessageHost` | webMain/kotlin/org/nostr/nostrord/web/components/SystemMessageHost.kt | Renders [AppModule.systemMessages] as a transient toast at the bottom of the page. |
 | `UnlockModal` | webMain/kotlin/org/nostr/nostrord/web/modals/UnlockModal.kt | Startup unlock for a NIP-49 password-protected account (web counterpart of the |
 | `UploadButton` | webMain/kotlin/org/nostr/nostrord/web/components/UploadButton.kt | Upload button — a styled `<label>` wrapping a hidden file input. On pick it validates |
 | `UserProfileModal` | webMain/kotlin/org/nostr/nostrord/web/modals/UserProfileModal.kt | Quick user profile modal (prototype UserProfileCard): clickable header row to the |
