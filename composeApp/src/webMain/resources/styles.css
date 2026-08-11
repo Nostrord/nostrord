@@ -3489,8 +3489,19 @@ body {
 }
 
 .dm-composer-wrap {
+    /* Positioned ancestor for the .mention-popup, which floats above the pill. */
+    position: relative;
     flex-shrink: 0;
     padding: var(--space-xs) var(--space-lg) var(--space-xl);
+}
+
+/* The thread reply composer uses the chat composer's mirror (.composer-highlight paints the
+   text, tinting resolved mentions), so its textarea must stay transparent. Two classes beat
+   `.dm-composer textarea`, which otherwise repaints the text over the mirror. */
+.dm-composer .composer-input {
+    color: transparent;
+    caret-color: var(--color-text-primary);
+    font-size: 15px;
 }
 
 .dm-composer {
@@ -7374,6 +7385,12 @@ body {
     cursor: pointer;
     user-select: none;
 }
+/* Positioned ancestor for a .mention-popup over a field that is not a composer bar
+   (the new-thread modal's body). */
+.mention-anchor {
+    position: relative;
+}
+
 /* @user / %group mention autocomplete popover, floating above the composer
    frame (anchored to .composer-area; prototype: bottom-full left-4 w-[300px]). */
 .mention-popup {

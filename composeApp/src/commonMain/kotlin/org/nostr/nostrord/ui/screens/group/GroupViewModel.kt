@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.screens.group
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +40,41 @@ data class MentionableGroup(
     val relayUrl: String,
     val meta: GroupMetadata,
 )
+
+/**
+ * Groups offered in the `%group` mention autocomplete: only the ones you're in plus the ones
+ * discovered through people you follow (their kind:10009 lists, and friends present in a group's
+ * member list) - not every group the relay ever served. Matches the friend-based discovery used on
+ * the Home page. Shared by every screen with a composer (chat, threads).
+ */
+@Suppress("UNCHECKED_CAST")
+fun mentionableGroupsFlow(
+    repo: NostrRepositoryApi,
+    scope: CoroutineScope,
+): StateFlow<List<MentionableGroup>> = combine(
+    listOf(
+        repo.groupsByRelay,
+        repo.joinedGroupsByRelay,
+        repo.following,
+        repo.userGroupLists,
+        repo.groupMembers,
+    ),
+) { arr ->
+    val byRelay = arr[0] as Map<String, List<GroupMetadata>>
+    val joinedByRelay = arr[1] as Map<String, Set<String>>
+    val following = arr[2] as Set<String>
+    val lists = arr[3] as Map<String, List<UserGroupRef>>
+    val members = arr[4] as Map<String, List<String>>
+
+    val wanted = HashSet<String>()
+    wanted.addAll(joinedByRelay.values.flatten())
+    following.forEach { f -> lists[f].orEmpty().forEach { wanted.add(it.groupId) } }
+    members.forEach { (gid, pks) -> if (pks.any { it in following }) wanted.add(gid) }
+
+    byRelay
+        .flatMap { (relay, list) -> list.filter { it.id in wanted }.map { MentionableGroup(relay, it) } }
+        .distinctBy { it.meta.id }
+}.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
 /** A follow offered in the add-member friend picker. */
 data class FriendCandidate(
@@ -289,38 +325,8 @@ class GroupViewModel(
     val zaps = repo.zaps
     val cachedEvents = repo.cachedEvents
 
-    /**
-     * Groups offered in the `%group` mention autocomplete: only the ones you're in plus the
-     * ones discovered through people you follow (their kind:10009 lists, and friends present
-     * in a group's member list) - not every group the relay ever served. Matches the
-     * friend-based discovery used on the Home page.
-     */
-    @Suppress("UNCHECKED_CAST")
-    val mentionableGroups: StateFlow<List<MentionableGroup>> =
-        combine(
-            listOf(
-                repo.groupsByRelay,
-                repo.joinedGroupsByRelay,
-                repo.following,
-                repo.userGroupLists,
-                repo.groupMembers,
-            ),
-        ) { arr ->
-            val byRelay = arr[0] as Map<String, List<GroupMetadata>>
-            val joinedByRelay = arr[1] as Map<String, Set<String>>
-            val following = arr[2] as Set<String>
-            val lists = arr[3] as Map<String, List<UserGroupRef>>
-            val members = arr[4] as Map<String, List<String>>
-
-            val wanted = HashSet<String>()
-            wanted.addAll(joinedByRelay.values.flatten())
-            following.forEach { f -> lists[f].orEmpty().forEach { wanted.add(it.groupId) } }
-            members.forEach { (gid, pks) -> if (pks.any { it in following }) wanted.add(gid) }
-
-            byRelay
-                .flatMap { (relay, list) -> list.filter { it.id in wanted }.map { MentionableGroup(relay, it) } }
-                .distinctBy { it.meta.id }
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    /** Groups offered in the `%group` mention autocomplete; see [mentionableGroupsFlow]. */
+    val mentionableGroups: StateFlow<List<MentionableGroup>> = mentionableGroupsFlow(repo, viewModelScope)
 
     /** The active account's standing in this group; derived once in [GroupMembershipModel]. */
     val membershipState: StateFlow<GroupMembershipState> = membershipModel.membershipState

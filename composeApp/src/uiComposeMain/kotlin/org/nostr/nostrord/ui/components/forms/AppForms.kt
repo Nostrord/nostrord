@@ -53,10 +53,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
@@ -150,7 +152,6 @@ fun AppField(
             lineHeight = TextUnit.Unspecified,
         )
     val visual = if (masked) PasswordVisualTransformation() else VisualTransformation.None
-    val colors = appFieldColors(containerColor)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
@@ -173,40 +174,126 @@ fun AppField(
         ),
         interactionSource = interactionSource,
         decorationBox = { innerTextField ->
-            OutlinedTextFieldDefaults.DecorationBox(
-                value = value,
-                innerTextField = innerTextField,
+            AppFieldDecoration(
+                text = value,
+                placeholder = placeholder,
                 enabled = enabled,
                 singleLine = singleLine,
-                visualTransformation = visual,
+                visual = visual,
                 interactionSource = interactionSource,
-                placeholder =
-                placeholder?.let {
-                    {
-                        Text(
-                            it,
-                            // Same TextStyle as the value (only the color differs) so the field
-                            // is the exact same height empty or filled; a placeholder with a
-                            // different line height made the box grow/shrink as you typed.
-                            style = textStyle.copy(color = NostrordColors.TextMuted),
-                            maxLines = if (singleLine) 1 else Int.MAX_VALUE,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
                 leadingIcon = leadingIcon,
                 trailingIcon = trailingIcon,
+                containerColor = containerColor,
+                textStyle = textStyle,
+                innerTextField = innerTextField,
+            )
+        },
+    )
+}
+
+/**
+ * [AppField] over a [TextFieldValue], for callers that need the caret position (mention
+ * autocomplete). Same chrome as the String overload; masking and IME actions stay there since no
+ * caret-aware field wants them.
+ */
+@Composable
+fun AppField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    enabled: Boolean = true,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    containerColor: Color = NostrordColors.BackgroundFloating,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+) {
+    val textStyle =
+        LocalTextStyle.current.copy(
+            color = NostrordColors.TextContent,
+            fontSize = 14.sp,
+            lineHeight = TextUnit.Unspecified,
+        )
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        enabled = enabled,
+        textStyle = textStyle,
+        cursorBrush = SolidColor(NostrordColors.Primary),
+        visualTransformation = visualTransformation,
+        singleLine = singleLine,
+        minLines = minLines,
+        maxLines = maxLines,
+        interactionSource = interactionSource,
+        decorationBox = { innerTextField ->
+            AppFieldDecoration(
+                text = value.text,
+                placeholder = placeholder,
+                enabled = enabled,
+                singleLine = singleLine,
+                visual = visualTransformation,
+                interactionSource = interactionSource,
+                leadingIcon = null,
+                trailingIcon = null,
+                containerColor = containerColor,
+                textStyle = textStyle,
+                innerTextField = innerTextField,
+            )
+        },
+    )
+}
+
+/** The bordered box, placeholder and icons both [AppField] overloads wrap their field in. */
+@Composable
+private fun AppFieldDecoration(
+    text: String,
+    placeholder: String?,
+    enabled: Boolean,
+    singleLine: Boolean,
+    visual: VisualTransformation,
+    interactionSource: MutableInteractionSource,
+    leadingIcon: (@Composable () -> Unit)?,
+    trailingIcon: (@Composable () -> Unit)?,
+    containerColor: Color,
+    textStyle: TextStyle,
+    innerTextField: @Composable () -> Unit,
+) {
+    val colors = appFieldColors(containerColor)
+    OutlinedTextFieldDefaults.DecorationBox(
+        value = text,
+        innerTextField = innerTextField,
+        enabled = enabled,
+        singleLine = singleLine,
+        visualTransformation = visual,
+        interactionSource = interactionSource,
+        placeholder =
+        placeholder?.let {
+            {
+                Text(
+                    it,
+                    // Same TextStyle as the value (only the color differs) so the field is the
+                    // exact same height empty or filled; a placeholder with a different line
+                    // height made the box grow/shrink as you typed.
+                    style = textStyle.copy(color = NostrordColors.TextMuted),
+                    maxLines = if (singleLine) 1 else Int.MAX_VALUE,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        colors = colors,
+        contentPadding = AppFieldContentPadding,
+        container = {
+            OutlinedTextFieldDefaults.Container(
+                enabled = enabled,
+                isError = false,
+                interactionSource = interactionSource,
                 colors = colors,
-                contentPadding = AppFieldContentPadding,
-                container = {
-                    OutlinedTextFieldDefaults.Container(
-                        enabled = enabled,
-                        isError = false,
-                        interactionSource = interactionSource,
-                        colors = colors,
-                        shape = AppFieldShape,
-                    )
-                },
+                shape = AppFieldShape,
             )
         },
     )

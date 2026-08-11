@@ -301,8 +301,13 @@ class FakeNostrRepository : NostrRepositoryApi {
         calls += "fetchThread:$groupId:$rootId"
     }
 
-    override suspend fun createThread(groupId: String, title: String, content: String): Result<String> {
-        calls += "createThread:$groupId:$title"
+    override suspend fun createThread(
+        groupId: String,
+        title: String,
+        content: String,
+        mentions: Map<String, String>,
+    ): Result<String> {
+        calls += "createThread:$groupId:$title:${mentions.keys.sorted().joinToString(",")}"
         // A real 32-byte hex id so callers can bech32-encode it (nevent).
         return Result.Success("ab".repeat(32))
     }
@@ -312,8 +317,9 @@ class FakeNostrRepository : NostrRepositoryApi {
         root: NostrGroupClient.NostrMessage,
         parent: NostrGroupClient.NostrMessage,
         content: String,
+        mentions: Map<String, String>,
     ): Result<Unit> {
-        calls += "sendThreadReply:$groupId:${root.id}:${parent.id}"
+        calls += "sendThreadReply:$groupId:${root.id}:${parent.id}:${mentions.keys.sorted().joinToString(",")}"
         return Result.Success(Unit)
     }
 

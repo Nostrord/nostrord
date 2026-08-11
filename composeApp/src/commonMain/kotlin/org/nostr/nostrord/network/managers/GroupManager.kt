@@ -3022,13 +3022,8 @@ class GroupManager(
             tags.add(listOf("q", replyToMessageId))
         }
 
-        // Replace @displayName with nostr:npub... in content
-        var processedContent = content
-        mentions.forEach { (displayName, pubkeyHex) ->
-            val npub = org.nostr.nostrord.nostr.Nip19.encodeNpub(pubkeyHex)
-            processedContent = processedContent.replace("@$displayName", "nostr:$npub")
-            tags.add(listOf("p", pubkeyHex))
-        }
+        val (processedContent, mentionTags) = MentionTags.apply(content, mentions, tags)
+        tags.addAll(mentionTags)
 
         // p-tag the author of the message being replied to (NIP-10/22). Without
         // it the recipient is only classified as "replied to" when they happen
@@ -3510,10 +3505,12 @@ class GroupManager(
         title: String,
         content: String,
         pubKey: String,
+        mentions: Map<String, String> = emptyMap(),
         signEvent: suspend (Event) -> Event,
     ): Result<String> = try {
         val tags = ThreadTags.root(groupId, getRelayForGroup(groupId), title)
-        publishThreadEvent(groupId, kind = 11, content = content, tags = tags, pubKey = pubKey, signEvent = signEvent)
+        val (body, mentionTags) = MentionTags.apply(content, mentions, tags)
+        publishThreadEvent(groupId, kind = 11, content = body, tags = tags + mentionTags, pubKey = pubKey, signEvent = signEvent)
     } catch (e: Throwable) {
         Result.Error(AppError.Group.SendFailed(groupId, e))
     }
@@ -3530,10 +3527,13 @@ class GroupManager(
         parent: NostrGroupClient.NostrMessage,
         content: String,
         pubKey: String,
+        mentions: Map<String, String> = emptyMap(),
         signEvent: suspend (Event) -> Event,
     ): Result<Unit> = try {
         val tags = ThreadTags.reply(groupId, getRelayForGroup(groupId), root, parent)
-        when (val result = publishThreadEvent(groupId, kind = 1111, content = content, tags = tags, pubKey = pubKey, signEvent = signEvent)) {
+        // The reply already p-tags the parent author, so mentioning them adds no second tag.
+        val (body, mentionTags) = MentionTags.apply(content, mentions, tags)
+        when (val result = publishThreadEvent(groupId, kind = 1111, content = body, tags = tags + mentionTags, pubKey = pubKey, signEvent = signEvent)) {
             is Result.Success -> Result.Success(Unit)
             is Result.Error -> Result.Error(result.error)
         }

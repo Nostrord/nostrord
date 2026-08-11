@@ -233,6 +233,29 @@ class ThreadsViewModel(
     /** Optimistic-send status per event id (Sending / Failed) - shared with chat via the repo. */
     val messageStatus = repo.messageStatus
 
+    /**
+     * `@user` candidates for the thread composers: the group's kind:39002 member list, falling back
+     * to the authors seen in the group while that list is still empty (same rule as chat, where a
+     * relay that withholds 39002 must not leave the autocomplete blank).
+     */
+    val mentionableMembers: StateFlow<List<String>> =
+        combine(repo.groupMembers, repo.messages, repo.threadRoots, repo.threadReplies) { members, messages, roots, replies ->
+            members[groupId].orEmpty().ifEmpty {
+                (scoped(messages[groupId].orEmpty()) + scoped(roots[groupId].orEmpty()) + scoped(replies[groupId].orEmpty()))
+                    .map { it.pubkey }
+                    .distinct()
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Admins of this group, so the suggestion list can rank them first (chat parity). */
+    val groupAdmins: StateFlow<List<String>> =
+        repo.groupAdmins
+            .map { it[groupId].orEmpty() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** `%group` candidates; see [mentionableGroupsFlow]. */
+    val mentionableGroups: StateFlow<List<MentionableGroup>> = mentionableGroupsFlow(repo, viewModelScope)
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
@@ -299,11 +322,12 @@ class ThreadsViewModel(
         title: String,
         content: String,
         shareToChat: Boolean = false,
+        mentions: Map<String, String> = emptyMap(),
         onCreated: (rootId: String) -> Unit = {},
     ) {
         if (content.isBlank()) return
         viewModelScope.launch {
-            when (val result = repo.createThread(groupId, title.trim(), content.trim())) {
+            when (val result = repo.createThread(groupId, title.trim(), content.trim(), mentions)) {
                 is Result.Success -> {
                     onCreated(result.data)
                     if (shareToChat) announceThread(result.data, title.trim(), repo.getPublicKey())
@@ -341,13 +365,16 @@ class ThreadsViewModel(
     fun sendReply(
         content: String,
         parent: NostrGroupClient.NostrMessage? = null,
+        mentions: Map<String, String> = emptyMap(),
         onSuccess: () -> Unit = {},
         onFailure: () -> Unit = {},
     ) {
         if (content.isBlank()) return
         val root = openThread.value?.root ?: return
         viewModelScope.launch {
-            val result = withMinDuration { repo.sendThreadReply(groupId, root = root, parent = parent ?: root, content = content.trim()) }
+            val result = withMinDuration {
+                repo.sendThreadReply(groupId, root = root, parent = parent ?: root, content = content.trim(), mentions = mentions)
+            }
             when (result) {
                 is Result.Error -> onFailure()
                 is Result.Success -> onSuccess()

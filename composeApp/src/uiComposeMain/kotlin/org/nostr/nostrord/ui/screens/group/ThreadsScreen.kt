@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +57,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
@@ -97,6 +99,8 @@ import org.nostr.nostrord.ui.screens.group.components.CreateThreadDialog
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
 import org.nostr.nostrord.ui.screens.group.components.JoinGroupConfirmDialog
 import org.nostr.nostrord.ui.screens.group.components.UserProfileModal
+import org.nostr.nostrord.ui.screens.group.model.GroupInfo
+import org.nostr.nostrord.ui.screens.group.model.MemberInfo
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
@@ -217,6 +221,45 @@ fun ThreadsScreen(
     var deleteTarget by remember { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
     var reply by remember { mutableStateOf(TextFieldValue("")) }
     var sending by remember { mutableStateOf(false) }
+
+    // Composer mentions: displayName -> pubkey for @user (resolved to nostr:npub + a p tag by the
+    // repo), name -> group for %group (resolved to nostr:naddr here, at send).
+    var replyMentions by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var replyGroupMentions by remember { mutableStateOf<Map<String, GroupInfo>>(emptyMap()) }
+    val memberPubkeys by vm.mentionableMembers.collectAsState()
+    val adminPubkeys by vm.groupAdmins.collectAsState()
+    val mentionableGroups by vm.mentionableGroups.collectAsState()
+    val relayMetadata by AppModule.nostrRepository.relayMetadata.collectAsState()
+    val mentionMembers by remember(memberPubkeys, adminPubkeys, userMetadata) {
+        derivedStateOf {
+            memberPubkeys
+                .map { pubkey ->
+                    val metadata = userMetadata[pubkey]
+                    MemberInfo(
+                        pubkey = pubkey,
+                        displayName = metadata?.displayName ?: metadata?.name ?: shortNpub(pubkey),
+                        picture = metadata?.picture,
+                        isAdmin = pubkey in adminPubkeys,
+                    )
+                }.sortedWith(compareByDescending<MemberInfo> { it.isAdmin }.thenBy { it.displayName.lowercase() })
+        }
+    }
+    val mentionGroups by remember(mentionableGroups) {
+        derivedStateOf {
+            mentionableGroups.map { GroupInfo(it.meta.id, it.meta.name ?: it.meta.id, it.meta.picture, it.relayUrl) }
+        }
+    }
+
+    /** Swap each `%name` for the mentioned group's naddr, carrying its own hosting relay. */
+    fun resolveGroupMentions(text: String, chosen: Map<String, GroupInfo>): String {
+        var content = text
+        chosen.forEach { (name, group) ->
+            val relayPubkey = relayMetadata[group.relay]?.groupNaddrAuthor
+            val naddr = Nip19.encodeNaddr(group.id, group.relay, pubkeyHex = relayPubkey)
+            content = content.replace("%$name", "nostr:$naddr")
+        }
+        return content
+    }
     // Shared with MessageContent via LocalImageViewerUrl: tap an inline image -> fullscreen viewer.
     val imageViewerUrl = remember { mutableStateOf<String?>(null) }
 
@@ -402,10 +445,13 @@ fun ThreadsScreen(
                             if (reply.text.isNotBlank() && !sending) {
                                 sending = true
                                 vm.sendReply(
-                                    reply.text.trim(),
+                                    resolveGroupMentions(reply.text.trim(), replyGroupMentions),
                                     parent = replyingTo,
+                                    mentions = replyMentions,
                                     onSuccess = {
                                         reply = TextFieldValue("")
+                                        replyMentions = emptyMap()
+                                        replyGroupMentions = emptyMap()
                                         replyingTo = null
                                         sending = false
                                     },
@@ -416,6 +462,12 @@ fun ThreadsScreen(
                         placeholder = "Write a reply...",
                         isSending = sending,
                         focusRequester = composerFocus,
+                        members = mentionMembers,
+                        availableGroups = mentionGroups,
+                        mentions = replyMentions,
+                        onMentionsChange = { replyMentions = it },
+                        groupMentions = replyGroupMentions,
+                        onGroupMentionsChange = { replyGroupMentions = it },
                         modifier = Modifier.padding(Spacing.md),
                     )
                 }
@@ -514,13 +566,15 @@ fun ThreadsScreen(
     if (showCompose) {
         CreateThreadDialog(
             onDismiss = { showCompose = false },
-            onCreate = { title, content, shareToChat ->
+            onCreate = { title, content, shareToChat, mentions, groupMentions ->
                 // Open the new thread right away (Discord parity; the optimistic root is
                 // already in the store, so the detail renders instantly).
-                vm.createThread(title, content, shareToChat) { rootId ->
+                vm.createThread(title, resolveGroupMentions(content, groupMentions), shareToChat, mentions) { rootId ->
                     onNavigate(route.copy(threadRootId = rootId))
                 }
             },
+            members = mentionMembers,
+            availableGroups = mentionGroups,
         )
     }
 
@@ -591,6 +645,14 @@ fun ThreadsScreen(
             pubkey = pk,
             metadata = userMetadata[pk],
             userMetadata = userMetadata,
+            // Mention drops the name into the reply composer, chat parity.
+            onMention = { name ->
+                val separator = if (reply.text.isEmpty() || reply.text.endsWith(" ")) "" else " "
+                val appended = reply.text + separator + "@$name "
+                reply = TextFieldValue(appended, TextRange(appended.length))
+                replyMentions = replyMentions + (name to pk)
+                selectedUserPubkey = null
+            },
             onDismiss = { selectedUserPubkey = null },
         )
     }

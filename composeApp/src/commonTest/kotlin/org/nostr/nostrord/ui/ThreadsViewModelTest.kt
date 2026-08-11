@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -208,6 +209,55 @@ class ThreadsViewModelTest {
         vm.createThread("Quiet", "body", shareToChat = false)
         testDispatcher.scheduler.advanceUntilIdle()
         assertNull(announced)
+    }
+
+    // -------------------------------------------------------------------------
+    // Mentions
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `sendReply carries the composer mentions to the repo`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._threadRoots.value = mapOf("g1" to listOf(root("a", 100, "hello")))
+        val vm = ThreadsViewModel(fake, "g1")
+        // openThread is WhileSubscribed: without a collector its value never leaves null and
+        // sendReply would no-op.
+        val job = launch { vm.openThread.collect {} }
+        vm.openThread("a")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.sendReply("hey @Alice", mentions = mapOf("Alice" to "pk_alice"))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(fake.calls.any { it == "sendThreadReply:g1:a:a:Alice" }, fake.calls.toString())
+        job.cancel()
+    }
+
+    @Test
+    fun `createThread carries the composer mentions to the repo`() = runTest {
+        val fake = FakeNostrRepository()
+        val vm = ThreadsViewModel(fake, "g1")
+        vm.createThread("Title", "hey @Alice", mentions = mapOf("Alice" to "pk_alice"))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(fake.calls.any { it == "createThread:g1:Title:Alice" }, fake.calls.toString())
+    }
+
+    @Test
+    fun `mention candidates fall back to seen authors until the member list arrives`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._threadRoots.value = mapOf("g1" to listOf(root("a", 100, "hello")))
+        val vm = ThreadsViewModel(fake, "g1")
+        // Collect so the WhileSubscribed flow is live.
+        val job = launch { vm.mentionableMembers.collect {} }
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf("author_a"), vm.mentionableMembers.value)
+
+        // The relay's kind:39002 list supersedes the fallback.
+        fake._groupMembers.value = mapOf("g1" to listOf("pk1", "pk2"))
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf("pk1", "pk2"), vm.mentionableMembers.value)
+        job.cancel()
     }
 
     @Test
