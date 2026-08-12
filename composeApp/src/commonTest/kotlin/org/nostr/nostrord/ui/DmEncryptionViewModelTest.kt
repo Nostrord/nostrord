@@ -178,6 +178,47 @@ class DmEncryptionViewModelTest {
     }
 
     @Test
+    fun `a reset is confirmed before anything is published`() = runTest(testDispatcher) {
+        val repo = FakeNostrRepository()
+        repo.dmEncryptionStateFlow.value = DmEncryptionManager.State.AnnouncedElsewhere("c".repeat(64))
+        val vm = DmEncryptionViewModel(repo)
+
+        vm.askToReset()
+        advanceUntilIdle()
+        assertTrue(vm.resetConfirmOpen.value)
+        assertFalse("resetDmEncryptionKey" in repo.calls)
+
+        vm.dismissResetConfirm()
+        advanceUntilIdle()
+        assertFalse(vm.resetConfirmOpen.value)
+        assertFalse("resetDmEncryptionKey" in repo.calls)
+
+        vm.askToReset()
+        vm.confirmReset()
+        advanceUntilIdle()
+
+        assertTrue("resetDmEncryptionKey" in repo.calls)
+        assertFalse(vm.resetConfirmOpen.value)
+        assertNull(vm.error.value)
+        assertFalse(vm.busy.value)
+    }
+
+    @Test
+    fun `a failed reset surfaces the error and keeps the account resettable`() = runTest(testDispatcher) {
+        val repo = FakeNostrRepository()
+        repo.dmEncryptionStateFlow.value = DmEncryptionManager.State.AnnouncedElsewhere("c".repeat(64))
+        repo.resetDmEncryptionKeyResult = Result.Error(AppError.Unknown("relays refused it"))
+        val vm = DmEncryptionViewModel(repo)
+
+        vm.askToReset()
+        vm.confirmReset()
+        advanceUntilIdle()
+
+        assertEquals("relays refused it", vm.error.value)
+        assertFalse(vm.busy.value)
+    }
+
+    @Test
     fun `revealing the key exposes it only on request`() {
         val repo = FakeNostrRepository()
         repo.dmEncryptionStateFlow.value = DmEncryptionManager.State.Active("b".repeat(64))

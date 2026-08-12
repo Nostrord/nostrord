@@ -41,6 +41,12 @@ class DmEncryptionViewModel(
     /** False hides the whole block: nothing here would speed up a locally signing account. */
     val visible: Boolean get() = state.value !is DmEncryptionManager.State.Unavailable
 
+    init {
+        // What the relays announce is the truth about this account, and this device's stored state
+        // can be a session old. Asking on open is what surfaces a key another device announced.
+        viewModelScope.launch { repo.refreshDmEncryptionState() }
+    }
+
     fun clearError() {
         _error.value = null
     }
@@ -89,6 +95,40 @@ class DmEncryptionViewModel(
             when (val result = repo.rotateDmEncryptionKey()) {
                 is Result.Error -> _error.value = result.error.message
                 else -> _revealedKey.value = null
+            }
+            _busy.value = false
+        }
+    }
+
+    private val _resetConfirmOpen = MutableStateFlow(false)
+    val resetConfirmOpen: StateFlow<Boolean> = _resetConfirmOpen.asStateFlow()
+
+    /** Confirmed first: a reset abandons the announced key, and nothing sent to it opens again. */
+    fun askToReset() {
+        _resetConfirmOpen.value = true
+    }
+
+    fun dismissResetConfirm() {
+        _resetConfirmOpen.value = false
+    }
+
+    /**
+     * Take over the announcement when the device that made it is gone. Without this the account is
+     * stuck: senders keep addressing a key nobody here holds, so inbound messages never open.
+     */
+    fun confirmReset() {
+        _resetConfirmOpen.value = false
+        if (_busy.value) return
+        _busy.value = true
+        _error.value = null
+        viewModelScope.launch {
+            when (val result = repo.resetDmEncryptionKey()) {
+                is Result.Error -> _error.value = result.error.message
+                else -> {
+                    // The request aimed at the lost device can no longer be answered.
+                    repo.dismissDmPairing()
+                    _importInput.value = ""
+                }
             }
             _busy.value = false
         }
