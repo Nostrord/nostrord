@@ -2204,8 +2204,10 @@ class NostrGroupClient(
     }
 
     // #h filter included because some NIP-29 relays require it even for ID lookups.
+    // Distinct subId prefix: this runs alongside requestEventById for the same event, and a
+    // shared prefix collides within the same millisecond, replacing that subscription.
     suspend fun requestGroupMessageById(groupId: String, messageId: String) {
-        val subId = "e_${epochMillis()}"
+        val subId = "eh_${epochMillis()}"
         val req = buildJsonArray {
             add("REQ")
             add(subId)
