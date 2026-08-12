@@ -271,6 +271,10 @@ class NostrRepository(
     // can't leak the publish job; delivery is best-effort and swallows failures anyway.
     private val PUBLISH_RELAY_TIMEOUT_MS = 8_000L
 
+    // Budget for a peer's kind:10050 before the first message of a conversation goes out. Paid once
+    // per peer, and only when we hold no list for them; the send proceeds to the defaults after it.
+    private val PEER_DM_RELAY_WAIT_MS = 3_000L
+
     // How far back the pairing subscription looks. Long enough to cover a request published while
     // this app was closed (its client is still sitting on the pairing screen), short enough that a
     // request the user walked away from days ago never re-prompts. Kept under
@@ -2018,6 +2022,20 @@ class NostrRepository(
         scope.launch { fetchDmRelays(pubkey) }
     }
 
+    /**
+     * Resolve [pubkey]'s DM relay list if we do not hold one yet, waiting a bounded moment for the
+     * answer. Nothing else fetches a peer's kind:10050 before a send: the list only arrived as a
+     * side effect of receiving from them, so the first message of a conversation was addressed to
+     * the defaults and never reached anyone who reads elsewhere.
+     */
+    private suspend fun awaitPeerDmRelays(pubkey: String) {
+        if (dmManager.dmRelaysFor(pubkey).isNotEmpty()) return
+        fetchDmRelays(pubkey)
+        withTimeoutOrNull(PEER_DM_RELAY_WAIT_MS) {
+            dmManager.dmRelaysByPubkey.first { it[pubkey]?.isNotEmpty() == true }
+        }
+    }
+
     // Fallback DM relays for users (and us) without a published kind:10050.
     private val defaultDmRelays =
         listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://auth.nostr1.com")
@@ -2049,6 +2067,10 @@ class NostrRepository(
             ActiveAccountManager.session.value?.signer
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
         val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        // Where the recipient actually reads. Without their kind:10050 the wrap goes to the app
+        // defaults only, which for a first contact means it is published where they never look and
+        // is lost silently. Their kind:10044 rides the same REQ, so addressing improves too.
+        awaitPeerDmRelays(recipientPubkey)
         return try {
             val rumor = Nip17.buildRumor(myPub, recipientPubkey, content)
             // NIP-4e: a recipient who announced an encryption key gets both NIP-44 layers addressed

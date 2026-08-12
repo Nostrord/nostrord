@@ -62,6 +62,13 @@ class DmViewModel(
     /** Fetch the peer's kind:10050 so [peerDmRelays] fills in (for the header "DM relays" view). */
     fun loadPeerDmRelays(peerPubkey: String) = repo.requestPeerDmRelays(peerPubkey)
 
+    /**
+     * Opening a conversation resolves where that peer reads, so the first message is addressed
+     * before it is written rather than after the reply teaches us. The send waits on this too;
+     * asking here means it is usually already answered by the time anyone types.
+     */
+    fun openConversation(peerPubkey: String) = repo.requestPeerDmRelays(peerPubkey)
+
     fun getPublicKey(): String? = repo.getPublicKey()
 
     fun send(
