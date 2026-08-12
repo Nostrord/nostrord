@@ -2040,6 +2040,11 @@ class NostrRepository(
     private val defaultDmRelays =
         listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://auth.nostr1.com")
 
+    // The kind:10002 an account gets when it has none. Read+write general-purpose relays, so the
+    // advertised list is one other clients can actually fetch from and publish to.
+    private val defaultOutboxRelays =
+        listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net")
+
     private var dmInboxStarted = false
     private var dmPersistenceWired = false
     private val dmPersistenceJobs = mutableListOf<kotlinx.coroutines.Job>()
@@ -3256,9 +3261,35 @@ class NostrRepository(
                 // Track bootstrap relays for reconnection so metadata fetches
                 // keep working if a bootstrap relay drops mid-session.
                 connectedPoolRelays.addAll(outboxManager.bootstrapRelays)
+                scope.launch { publishDefaultRelayListIfAbsent(pubKey) }
             },
         )
     }
+
+    /**
+     * Give an account with no kind:10002 a default one. Discovery has settled by the time this
+     * runs, so an empty list means the account really published none — and an account the outbox
+     * model cannot place is one whose events other clients look for in the wrong places, including
+     * the kind:10044 and kind:10050 that make DMs reachable.
+     *
+     * General-purpose relays only: the bootstrap set includes a NIP-65 index that does not accept
+     * ordinary events, and an AUTH-gated relay, neither of which belongs in someone's advertised
+     * write list.
+     */
+    private suspend fun publishDefaultRelayListIfAbsent(pubKey: String) {
+        if (pubKey in defaultRelayListPublishedFor) return
+        if (outboxManager.userRelayList.value.isNotEmpty()) return
+        // The account may have been switched away from while discovery ran; publishing then would
+        // sign for whoever is active now.
+        if (sessionManager.getPublicKey() != pubKey) return
+        defaultRelayListPublishedFor += pubKey
+        val defaults = defaultOutboxRelays.map { Nip65Relay(url = it, read = true, write = true) }
+        publishRelayList(defaults)
+    }
+
+    // Accounts already given a default kind:10002 this session, so a re-run of discovery does not
+    // republish (and does not overwrite a list the user edited in the meantime).
+    private val defaultRelayListPublishedFor = mutableSetOf<String>()
 
     override suspend fun connect() {
         connect(connectionManager.currentRelayUrl.value)
