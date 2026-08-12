@@ -35,6 +35,7 @@ import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.copyToClipboard
 import org.nostr.nostrord.web.components.icon
+import org.nostr.nostrord.web.components.messageSendStatus
 import org.nostr.nostrord.web.components.reactionBadges
 import org.nostr.nostrord.web.components.readPickedFile
 import org.nostr.nostrord.web.components.sendStateIcon
@@ -536,7 +537,10 @@ val DmPage =
                                         }
                                     }
                                     // Clock on its own line below the message, right-aligned (matches
-                                    // native); hover shows the full date.
+                                    // native); hover shows the full date. The column wrapper lets the
+                                    // failure row hang under the bubble instead of inside it.
+                                    div {
+                                    className = ClassName("dm-msg-col")
                                     div {
                                         className = ClassName("dm-bubble")
                                         title = formatDateTime(m.createdAt)
@@ -614,6 +618,16 @@ val DmPage =
                                                 dmVm.react(pubkey, m.id, emoji)
                                             }
                                         }
+                                    }
+                                    // Every relay refused it: "Not delivered" with Retry / Dismiss,
+                                    // the same row the group chat shows, under the bubble.
+                                    if (m.mine) {
+                                        messageSendStatus(
+                                            status = dmStatus[m.id],
+                                            onRetry = { dmVm.retry(m.id) },
+                                            onDismiss = { dmVm.dismiss(m.id) },
+                                        )
+                                    }
                                     }
                                 }
                             }

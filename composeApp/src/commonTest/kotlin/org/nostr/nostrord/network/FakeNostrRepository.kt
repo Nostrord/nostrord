@@ -631,6 +631,14 @@ class FakeNostrRepository : NostrRepositoryApi {
         return sendDmAction(recipientPubkey, content)
     }
 
+    var retryDmAction: (String) -> Unit = { }
+
+    override fun retryDm(rumorId: String) = retryDmAction(rumorId)
+
+    var dismissDmAction: (String) -> Unit = { }
+
+    override fun dismissDm(rumorId: String) = dismissDmAction(rumorId)
+
     override suspend fun markDmRead(peerPubkey: String) {}
 
     override suspend fun publishDmRelayList(relays: List<String>): Result<Unit> {

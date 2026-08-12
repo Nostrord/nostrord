@@ -330,6 +330,12 @@ interface NostrRepositoryApi {
     /** [replyToId] marks this message as a reply to another one in the same conversation. */
     suspend fun sendDm(recipientPubkey: String, content: String, replyToId: String? = null): Result<Unit>
 
+    /** Send a DM again after every relay refused it (its bubble shows Not delivered). */
+    fun retryDm(rumorId: String)
+
+    /** Drop a refused DM from its conversation and from the send queue. */
+    fun dismissDm(rumorId: String)
+
     /** Mark a DM conversation read up to its newest message (clears its unread badge). */
     suspend fun markDmRead(peerPubkey: String)
 

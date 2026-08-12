@@ -74,8 +74,11 @@ fun DmMessage.previewText(): String = when {
 
 /**
  * A signed gift wrap awaiting relay acceptance, persisted per account so a send survives an app
- * restart (delivery is retried on next launch until a relay OKs it). One send enqueues two: the
+ * restart (delivery is retried until a relay OKs it, with no expiry). One send enqueues two: the
  * recipient wrap and the self-copy, each with its own target relay set.
+ *
+ * [attempts] and [lastAttemptAt] are persisted so the backoff carries across restarts instead of
+ * restarting from zero on every launch.
  */
 @Serializable
 data class PendingDmWrap(
@@ -84,6 +87,13 @@ data class PendingDmWrap(
     val wrapJson: String,
     val relays: List<String>,
     val createdAt: Long,
+    val attempts: Int = 0,
+    val lastAttemptAt: Long = 0,
+    /** True for the sender's own copy. Its fate says nothing about whether the peer got the message. */
+    val toSelf: Boolean = false,
+    /** Set once every relay refused this wrap for good: the entry is kept but no longer retried,
+     *  until the user asks for it. Non-null is the parked state. */
+    val parkedReason: String? = null,
 )
 
 /**
@@ -222,6 +232,8 @@ class DmManager(
      * Report a send that no relay ever accepted, so the bubble says so instead of sitting there
      * looking ordinary. Only overrides Sending: the recipient wrap and the self-copy are published
      * separately, and the self-copy failing does not un-deliver a message the peer's relay took.
+     * Reuses the group [GroupManager.MessageStatus.Failed] so the DM bubble renders the same
+     * "Not delivered / Retry / Dismiss" row, with the conversation peer standing in for the group id.
      */
     fun markFailed(rumorId: String, reason: String) {
         val peer = peerByRumor.value[rumorId] ?: ""
@@ -231,6 +243,17 @@ class DmManager(
             } else {
                 current + (rumorId to GroupManager.MessageStatus.Failed(reason, peer, eventJson = null))
             }
+        }
+    }
+
+    /** Drop a refused own message from its conversation (user dismissed it). */
+    fun dismissFailed(rumorId: String) {
+        val peer = peerByRumor.value[rumorId] ?: return
+        _messageStatus.update { it - rumorId }
+        _messagesByPeer.update { current ->
+            val msgs = current[peer] ?: return@update current
+            val filtered = msgs.filterNot { it.id == rumorId }
+            if (filtered.size == msgs.size) current else current + (peer to filtered)
         }
     }
 
@@ -491,6 +514,15 @@ class DmManager(
 
     /** Set by NostrRepository to persist the peer encryption-key cache when it changes. */
     var onEncKeysChanged: (() -> Unit)? = null
+
+    /**
+     * Record the relays that accepted an own message's wrap. Without this a sent message shows no
+     * relay until its self-copy echoes back, and none at all if the echo never arrives, so "View
+     * source" on a message we just sent looked like it had been nowhere.
+     */
+    fun recordSentTo(rumorId: String, relays: List<String>) {
+        mergeRelays(rumorId, relays.filter { it.isNotBlank() })
+    }
 
     /** Record that [wrapId] was delivered by [relayUrl] (normalized). Safe pre-decrypt. */
     fun recordWrapRelay(wrapId: String, relayUrl: String) {

@@ -75,6 +75,7 @@ import org.nostr.nostrord.ui.components.chat.LocalAnimatedImageHidden
 import org.nostr.nostrord.ui.components.chat.LocalImageViewerUrl
 import org.nostr.nostrord.ui.components.chat.MessageComposer
 import org.nostr.nostrord.ui.components.chat.MessageContent
+import org.nostr.nostrord.ui.components.chat.MessageStatusIndicator
 import org.nostr.nostrord.ui.components.chat.ReactionBadges
 import org.nostr.nostrord.ui.components.chat.ReplyQuote
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
@@ -516,6 +517,9 @@ fun DmPageScreen(
                                         modifier = Modifier.weight(0.75f),
                                         contentAlignment = if (m.mine) Alignment.BottomEnd else Alignment.BottomStart,
                                     ) {
+                                        // The failure row hangs under the bubble, so the bubble and it
+                                        // stack in a column inside the 75% slot.
+                                        Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
                                         Surface(
                                             shape = NostrordShapes.shapeMedium,
                                             color = if (m.mine) NostrordColors.Primary else NostrordColors.BackgroundFloating,
@@ -593,6 +597,18 @@ fun DmPageScreen(
                                                     )
                                                 }
                                             }
+                                        }
+                                        // Every relay refused it: "Not delivered" with Retry / Dismiss,
+                                        // the same row the group chat shows, under the bubble.
+                                        if (m.mine) {
+                                            dmStatus[m.id]?.let { st ->
+                                                MessageStatusIndicator(
+                                                    status = st,
+                                                    onRetry = { dmVm.retry(m.id) },
+                                                    onDismiss = { dmVm.dismiss(m.id) },
+                                                )
+                                            }
+                                        }
                                         }
                                     }
                                     if (!m.mine) Spacer(modifier = Modifier.weight(0.25f))
