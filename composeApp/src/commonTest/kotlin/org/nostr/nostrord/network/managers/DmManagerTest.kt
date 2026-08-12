@@ -257,4 +257,33 @@ class DmManagerTest {
         dm.recordWrapRelay(wrapId, "wss://new.example") // duplicate: no extra fire
         assertEquals(1, fired)
     }
+
+    @Test
+    fun `a send that no relay took is reported, and never un-delivers a sent one`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val me = "a".repeat(64)
+        val peer = "b".repeat(64)
+        val rumor = org.nostr.nostrord.nostr.Event(
+            id = "d".repeat(64),
+            pubkey = me,
+            createdAt = 1L,
+            kind = 14,
+            tags = listOf(listOf("p", peer)),
+            content = "hi",
+        )
+        dm.addOptimistic(rumor, peer, me)
+
+        dm.markFailed(rumor.id!!, "no DM relay accepted it")
+        val failed = dm.messageStatus.value[rumor.id] as GroupManager.MessageStatus.Failed
+        assertEquals("no DM relay accepted it", failed.reason)
+        assertEquals(peer, failed.groupId)
+
+        // The recipient wrap and the self-copy are published separately: the self-copy failing
+        // must not walk back a message the peer's relay already took.
+        val other = rumor.copy(id = "e".repeat(64))
+        dm.addOptimistic(other, peer, me)
+        dm.markDelivered(other.id!!)
+        dm.markFailed(other.id!!, "no DM relay accepted it")
+        assertEquals(GroupManager.MessageStatus.Delivered, dm.messageStatus.value[other.id])
+    }
 }
