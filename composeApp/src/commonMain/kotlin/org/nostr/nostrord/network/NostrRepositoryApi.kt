@@ -206,6 +206,12 @@ interface NostrRepositoryApi {
     /** Whether this account holds and advertises a NIP-4e encryption key (see DmEncryptionManager). */
     val dmEncryptionState: StateFlow<DmEncryptionManager.State>
 
+    /**
+     * Re-read this account's own kind:10044 and reconcile [dmEncryptionState] against it, so the
+     * screen shows what the relays actually announce instead of what this device last did.
+     */
+    suspend fun refreshDmEncryptionState()
+
     /** Announce a NIP-4e encryption key so inbound DMs decrypt without the signer. */
     suspend fun enableDmEncryption(): Result<Unit>
 
@@ -214,6 +220,13 @@ interface NostrRepositoryApi {
 
     /** Advertise a fresh encryption key. The previous one stays held so its history keeps opening. */
     suspend fun rotateDmEncryptionKey(): Result<Unit>
+
+    /**
+     * Take over from a key announced by a device we no longer have: announce a fresh one we hold.
+     * Everything addressed to the lost key stops being readable, which is why this is separate
+     * from [rotateDmEncryptionKey] and only reachable from `AnnouncedElsewhere`.
+     */
+    suspend fun resetDmEncryptionKey(): Result<Unit>
 
     /** Hold the encryption key exported from another device. False when it is not the announced one. */
     fun importDmEncryptionKey(privateKeyHex: String): Boolean

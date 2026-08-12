@@ -1192,6 +1192,38 @@ private fun nip4eKeysKey(pubkey: String): String = "nip4e_keys_${pubkeyDigest(pu
 
 private fun nip4eAnnouncedKey(pubkey: String): String = "nip4e_announced_${pubkeyDigest(pubkey)}"
 
+private fun nip4eAnnouncementKey(pubkey: String): String = "nip4e_announcement_${pubkeyDigest(pubkey)}"
+
+/**
+ * The newest kind:10044 known for an account: which encryption key it names (null when the key was
+ * withdrawn) and its created_at, so a lagging relay's older copy never wins. [confirmed] is true
+ * once a relay served it back, which is what tells "published" from "signed here a moment ago".
+ */
+@Serializable
+data class Nip4eAnnouncement(
+    val encPubkey: String?,
+    val createdAt: Long,
+    val confirmed: Boolean = false,
+)
+
+fun SecureStorage.loadNip4eAnnouncementFor(pubkey: String): Nip4eAnnouncement? {
+    if (pubkey.isBlank()) return null
+    val raw = getStringPref(nip4eAnnouncementKey(pubkey), "") ?: ""
+    if (raw.isBlank()) return null
+    return runCatching { Json.decodeFromString<Nip4eAnnouncement>(raw) }.getOrNull()
+}
+
+fun SecureStorage.saveNip4eAnnouncementFor(
+    pubkey: String,
+    announcement: Nip4eAnnouncement?,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveStringPref(nip4eAnnouncementKey(pubkey), announcement?.let { Json.encodeToString(it) } ?: "")
+    } catch (_: Exception) {
+    }
+}
+
 /**
  * One held encryption key. [retiredAt] is 0 for the current key and the epoch second it was
  * replaced for the others, which is what bounds how long a retired key stays on disk.

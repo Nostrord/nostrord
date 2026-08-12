@@ -1413,6 +1413,7 @@ private fun DmEncryptionPanelContent() {
     val revealedKey by vm.revealedKey.collectAsState()
     val importInput by vm.importInput.collectAsState()
     val pairingState by vm.pairingState.collectAsState()
+    val resetConfirmOpen by vm.resetConfirmOpen.collectAsState()
 
     // Nothing to offload when signing is already local.
     if (state is DmEncryptionManager.State.Unavailable) return
@@ -1441,11 +1442,12 @@ private fun DmEncryptionPanelContent() {
             when (val s = state) {
                 is DmEncryptionManager.State.AnnouncedElsewhere -> {
                     InfoCard(
-                        title = "Key held on another device",
+                        title = "The announced key is not on this device",
                         titleColor = NostrordColors.Warning,
                         icon = Icons.Default.Key,
-                        content = "This account already announced an encryption key from another device. " +
-                            "Ask that device to send it, or paste it here from its Show key screen.",
+                        content = "This account announces an encryption key that is not stored here. If " +
+                            "another device or app holds it, bring it over. Otherwise replace it, and " +
+                            "messages sent to the old key will not be readable.",
                         isCompact = false,
                     )
                     when (val pairing = pairingState) {
@@ -1478,12 +1480,48 @@ private fun DmEncryptionPanelContent() {
                             Text("Import key", color = NostrordColors.Primary, style = NostrordTypography.Button)
                         }
                     }
+                    // Last resort when that device is gone for good: without it the account stays
+                    // unable to read, since senders address a key nobody here holds.
+                    if (resetConfirmOpen) {
+                        InfoCard(
+                            title = "Reset the encryption key?",
+                            titleColor = NostrordColors.Error,
+                            icon = Icons.Default.Warning,
+                            content = "Messages already sent to the old key will never open on any device " +
+                                "again. Chat history already saved here is not lost.",
+                            isCompact = false,
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { vm.dismissResetConfirm() }) {
+                                Text("Cancel", color = NostrordColors.TextSecondary, style = NostrordTypography.Button)
+                            }
+                            TextButton(onClick = { vm.confirmReset() }, enabled = !busy) {
+                                Text(
+                                    if (busy) "Publishing…" else "Reset key",
+                                    color = NostrordColors.Error,
+                                    style = NostrordTypography.Button,
+                                )
+                            }
+                        }
+                    } else {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { vm.askToReset() }, enabled = !busy) {
+                                Text("No access to that device?", color = NostrordColors.Error, style = NostrordTypography.Button)
+                            }
+                        }
+                    }
                 }
                 is DmEncryptionManager.State.Active -> {
                     Text(
-                        text = "Active. Senders are addressing ${s.encPubkey.take(12)}…",
+                        text =
+                        if (s.confirmed) {
+                            "Active. Senders are addressing ${s.encPubkey.take(12)}…"
+                        } else {
+                            "Announcing ${s.encPubkey.take(12)}…. The key is saved on this device; " +
+                                "waiting for a relay to confirm."
+                        },
                         style = NostrordTypography.Caption,
-                        color = NostrordColors.Success,
+                        color = if (s.confirmed) NostrordColors.Success else NostrordColors.TextSecondary,
                     )
                     // Another device of this account is asking for the key. The code comes from the
                     // request itself, so matching it against the other screen proves which one asked.

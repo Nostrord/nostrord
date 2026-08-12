@@ -1291,6 +1291,7 @@ private val DmEncryptionPanel =
         val archiveConfirmOpen = useStateFlow(vm.archiveConfirmOpen)
         val archivableCount = useStateFlow(vm.archivableCount)
         val pairingState = useStateFlow(vm.pairingState)
+        val resetConfirmOpen = useStateFlow(vm.resetConfirmOpen)
 
         // Nothing to offload when signing is already local.
         if (state !is DmEncryptionManager.State.Unavailable) {
@@ -1311,9 +1312,10 @@ private val DmEncryptionPanel =
                 when (state) {
                     is DmEncryptionManager.State.AnnouncedElsewhere -> {
                         noticeCard(
-                            title = "Key held on another device",
-                            body = "This account already announced an encryption key from another device. " +
-                                "Ask that device to send it, or paste it here from its Show key screen.",
+                            title = "The announced key is not on this device",
+                            body = "This account announces an encryption key that is not stored here. If another " +
+                                "device or app holds it, bring it over. Otherwise replace it, and messages sent " +
+                                "to the old key will not be readable.",
                             alert = true,
                             ic = Ic.Key,
                         )
@@ -1354,12 +1356,53 @@ private val DmEncryptionPanel =
                                 +"Import key"
                             }
                         }
+                        // Last resort when that device is gone for good: without it the account
+                        // stays unable to read, since senders address a key nobody here holds.
+                        if (resetConfirmOpen) {
+                            noticeCard(
+                                title = "Reset the encryption key?",
+                                body = "Messages already sent to the old key will never open on any device again. " +
+                                    "Chat history already saved here is not lost.",
+                                alert = true,
+                                ic = Ic.Warning,
+                            )
+                            div {
+                                className = ClassName("settings-form-actions")
+                                button {
+                                    className = ClassName("btn-text btn-sm")
+                                    onClick = { vm.dismissResetConfirm() }
+                                    +"Cancel"
+                                }
+                                button {
+                                    className = ClassName("btn-text btn-sm danger")
+                                    disabled = busy
+                                    onClick = { vm.confirmReset() }
+                                    +(if (busy) "Publishing…" else "Reset key")
+                                }
+                            }
+                        } else {
+                            div {
+                                className = ClassName("settings-form-actions")
+                                button {
+                                    className = ClassName("btn-text btn-sm danger")
+                                    disabled = busy
+                                    onClick = { vm.askToReset() }
+                                    +"No access to that device?"
+                                }
+                            }
                         }
                     }
                     is DmEncryptionManager.State.Active -> {
                         div {
-                            className = ClassName("settings-status-line success")
-                            +"Active. Senders are addressing ${state.encPubkey.take(12)}…"
+                            className = ClassName(if (state.confirmed) "settings-status-line success" else "settings-status-line")
+                            +(
+                                if (state.confirmed) {
+                                    "Active. Senders are addressing ${state.encPubkey.take(12)}…"
+                                } else {
+                                    "Announcing ${state.encPubkey.take(12)}…. The key is saved on this device; " +
+                                        "waiting for a relay to confirm."
+                                }
+                                )
                         }
                         // Another device of this account is asking for the key. The code comes from
                         // the request itself, so matching it proves which device asked.
