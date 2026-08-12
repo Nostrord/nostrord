@@ -116,6 +116,8 @@ val DmPage =
         // Metadata map for resolving @-mention names inside rich message bodies.
         val userMetadata = useStateFlow(dmVm.userMetadata)
         val dmStatus = useStateFlow(dmVm.messageStatus)
+        // Resolve where this peer reads before the first message is written, not after their reply.
+        useEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
         useEffect(pubkey, messages.size) {
             if (messages.isNotEmpty()) dmVm.markRead(pubkey)

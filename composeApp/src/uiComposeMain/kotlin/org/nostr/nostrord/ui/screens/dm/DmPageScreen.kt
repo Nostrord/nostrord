@@ -153,6 +153,8 @@ fun DmPageScreen(
         val messagesByPeer by dmVm.messagesByPeer.collectAsState()
         val messages = messagesByPeer[pubkey].orEmpty()
         val dmStatus by dmVm.messageStatus.collectAsState()
+        // Resolve where this peer reads before the first message is written, not after their reply.
+        LaunchedEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
         LaunchedEffect(pubkey, messages.size) {
             if (messages.isNotEmpty()) dmVm.markRead(pubkey)
