@@ -236,6 +236,22 @@ class DmManagerTest {
     }
 
     @Test
+    fun `a sent message names the relays that accepted it, without waiting for the echo`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val alice = signer()
+        val peer = "bb".repeat(32)
+        val rumor = Nip17.buildRumor(alice.pubkey, peer, "hi")
+        dm.addOptimistic(rumor, peer, alice.pubkey)
+
+        dm.recordSentTo(rumor.id!!, listOf("wss://dm.example", "wss://inbox.example", ""))
+
+        assertEquals(
+            listOf("wss://dm.example", "wss://inbox.example"),
+            dm.messagesByPeer.value[peer]?.first()?.relays,
+        )
+    }
+
+    @Test
     fun `markDelivered is a no-op for an untracked id`() = runTest {
         val dm = DmManager(backgroundScope)
         dm.markDelivered("never-sent")

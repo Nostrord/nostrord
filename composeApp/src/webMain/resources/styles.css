@@ -3442,6 +3442,23 @@ body {
     justify-content: flex-end;
 }
 
+/* Bubble plus its "Not delivered" row stack vertically. The column carries the 75% cap so the
+   bubble still measures against the thread width, not against itself. */
+.dm-msg-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: 75%;
+}
+
+.dm-msg.mine .dm-msg-col {
+    align-items: flex-end;
+}
+
+.dm-msg-col .dm-bubble {
+    max-width: 100%;
+}
+
 /* Clock on its own line below the message, right-aligned (matches native). */
 .dm-bubble-time {
     display: block;

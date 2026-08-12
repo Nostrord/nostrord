@@ -1,5 +1,6 @@
 package org.nostr.nostrord.network
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +52,8 @@ import org.nostr.nostrord.network.managers.DmHistoryFile
 import org.nostr.nostrord.network.managers.DmManager
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.network.managers.DmPairingManager
+import org.nostr.nostrord.network.managers.DmPublishOutcome
+import org.nostr.nostrord.network.managers.DmSendQueue
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.LegacySealVerifier
 import org.nostr.nostrord.network.managers.LiveCursorStore
@@ -316,12 +319,6 @@ class NostrRepository(
     // DmPairingManager.PROCESSED_RETENTION_SECONDS so a decision always outlives what the relay
     // will still serve.
     private val PAIRING_LOOKBACK_SECONDS = 6L * 60 * 60
-
-    // DM wrap publish retry: rides out a transiently offline DM relay so a message isn't stranded
-    // local-only. Linear backoff, capped; ~a couple minutes of attempts before giving up this session.
-    private val DM_SEND_MAX_ATTEMPTS = 6
-    private val DM_SEND_RETRY_BASE_MS = 4_000L
-    private val DM_SEND_RETRY_MAX_MS = 30_000L
 
     // Give up on a wrap after this many failed decrypt attempts (this session). High enough that
     // congestion cycles (the relay dropping the signer's responses -> 90s timeouts) don't park the
@@ -1292,10 +1289,12 @@ class NostrRepository(
             // when the queue is empty; per-event routing skips groups whose relay is
             // still down, so early boot passes don't burn retries.
             pendingEventManager?.onConnectionRestored()
+            dmSendQueue.onConnectionRestored()
         }
         connectionManager.onReconnected = { client ->
             resubscribeAllGroups(client)
             pendingEventManager?.onConnectionRestored()
+            dmSendQueue.onConnectionRestored()
             reconnectDroppedNip29PoolRelays()
             resubscribeDmInbox()
             scope.launch { refreshVisibleUserMetadata() }
@@ -2354,14 +2353,14 @@ class NostrRepository(
             val rumorId = rumor.id ?: return Result.Error(AppError.Unknown("Failed to build the message"))
             // Enqueue both wraps (recipient + self-copy) in the persisted send queue, then publish.
             // The message shows as Sending and flips to Delivered on the first relay OK (or when the
-            // self-copy echoes back). The queue survives an app restart, so a wrap that never reached
-            // a relay is retried on next launch instead of being stranded local-only.
+            // self-copy echoes back). The queue survives an app restart and never gives up, so a
+            // wrap that never reached a relay keeps retrying instead of being stranded local-only.
             val now = rumor.createdAt
-            enqueueDmWraps(
+            dmSendQueue.enqueue(
                 myPub,
                 listOf(
                     PendingDmWrap(rumorId, recipientWrap.id ?: "", recipientWrap.toJsonObject().toString(), dmRelaysWithDefaults(recipientPubkey), now),
-                    PendingDmWrap(rumorId, selfWrap.id ?: "", selfWrap.toJsonObject().toString(), dmRelaysWithDefaults(myPub), now),
+                    PendingDmWrap(rumorId, selfWrap.id ?: "", selfWrap.toJsonObject().toString(), dmRelaysWithDefaults(myPub), now, toSelf = true),
                 ),
             )
             if (NIP4E_DUAL_SEND && myEncKey != null && recipientEncKey != null) {
@@ -2520,7 +2519,7 @@ class NostrRepository(
         // Same relay set as the DM relay list: senders look for both on our outbox, and our
         // own DM relays are where another device of ours will read it.
         val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays + dmRelaysWithDefaults(myPub)).distinct()
-        if (publishWrapJsonAwaitOk(targets, signed.toJsonObject().toString(), signed.id.orEmpty())) {
+        if (publishWrapJsonAwaitOk(targets, signed.toJsonObject().toString(), signed.id.orEmpty()) is DmPublishOutcome.Accepted) {
             dmEncryptionManager.ingestAnnouncement(encPubkey, createdAt, fromRelay = true)
             Result.Success(Unit)
         } else {
@@ -2594,7 +2593,9 @@ class NostrRepository(
                     )
                 },
                 // A new device's dm_inbox REQ looks exactly here.
-                publish = { wrap -> publishWrapJsonAwaitOk(dmRelaysWithDefaults(myPub), wrap.toJsonObject().toString(), wrap.id ?: "") },
+                publish = { wrap ->
+                    publishWrapJsonAwaitOk(dmRelaysWithDefaults(myPub), wrap.toJsonObject().toString(), wrap.id ?: "") is DmPublishOutcome.Accepted
+                },
                 persistProgress = { ids -> SecureStorage.saveDmArchivedRumorIdsFor(myPub, ids) },
             )
         }
@@ -2857,26 +2858,23 @@ class NostrRepository(
         }
     }
 
-    /** What a wrap publish achieved, and why not when it achieved nothing. */
-    private data class WrapPublish(val accepted: Boolean, val reason: String?)
-
     // Publish a pre-serialized gift wrap event and wait for a relay OK, so a DM has a real delivered
-    // signal (not fire-and-forget). Returns true once any relay accepts the event.
-    private suspend fun publishWrapJsonAwaitOk(relays: List<String>, wrapJson: String, wrapId: String): Boolean = publishWrapJsonAwaitOkDetailed(relays, wrapJson, wrapId).accepted
-
-    /**
-     * As [publishWrapJsonAwaitOk], but keeps a relay's stated reason for refusing. A DM that no
-     * relay took has to be able to say why: "rate-limited" and "auth-required" are the difference
-     * between waiting and fixing something.
-     */
-    private suspend fun publishWrapJsonAwaitOkDetailed(relays: List<String>, wrapJson: String, wrapId: String): WrapPublish {
-        if (wrapId.isBlank()) return WrapPublish(false, "the message could not be addressed")
+    // signal (not fire-and-forget). Accepted the moment any relay OKs it, carrying the relays that
+    // took it so the message can name where it landed. Rejected only when every target answered
+    // OK-false for a reason retrying cannot fix: one unreachable relay keeps the whole send
+    // retryable, since it might be the one that would have taken it.
+    private suspend fun publishWrapJsonAwaitOk(relays: List<String>, wrapJson: String, wrapId: String): DmPublishOutcome {
+        if (wrapId.isBlank()) return DmPublishOutcome.Retry
         val frame = """["EVENT",$wrapJson]"""
+        val targets = relays.distinct()
+        if (targets.isEmpty()) return DmPublishOutcome.Retry
         // Concurrent for the same reason as publishEventToRelays: a relay that never answers OK
-        // costs the full timeout, and serially those stack into a send that looks hung.
+        // costs the full timeout, and serially those stack into a send that looks hung. Every
+        // target is tried rather than stopping at the first acceptance, because the peer reads
+        // from whichever of their DM relays they happen to be on.
         val results =
             coroutineScope {
-                relays.distinct().map { url ->
+                targets.map { url ->
                     async {
                         try {
                             val result =
@@ -2887,7 +2885,7 @@ class NostrRepository(
                                     client?.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
                                 }
                             url to result
-                        } catch (e: kotlinx.coroutines.CancellationException) {
+                        } catch (e: CancellationException) {
                             throw e
                         } catch (_: Throwable) {
                             url to null
@@ -2895,75 +2893,66 @@ class NostrRepository(
                     }
                 }.awaitAll()
             }
-        if (results.any { it.second is PublishResult.Success }) return WrapPublish(true, null)
-        // A stated rejection is worth more than a timeout, which only says nobody answered.
-        val rejection = results.firstNotNullOfOrNull { (url, r) -> (r as? PublishResult.Rejected)?.let { url to it.reason } }
-        val reason =
-            rejection?.let { (url, why) -> "${url.removePrefix("wss://").trimEnd('/')} refused it: $why" }
-                ?: "no DM relay accepted it"
-        return WrapPublish(false, reason)
-    }
-
-    // Persisted DM send queue: undelivered wraps by account, mirrored to SecureStorage.
-    private val pendingDmWraps = mutableListOf<PendingDmWrap>()
-    private val pendingDmMutex = kotlinx.coroutines.sync.Mutex()
-
-    private suspend fun persistDmQueue(myPub: String) {
-        val snapshot = pendingDmMutex.withLock { pendingDmWraps.toList() }
-        SecureStorage.saveDmSendQueue(myPub, snapshot)
-    }
-
-    private fun enqueueDmWraps(myPub: String, entries: List<PendingDmWrap>) {
-        scope.launch {
-            pendingDmMutex.withLock { pendingDmWraps.addAll(entries) }
-            persistDmQueue(myPub)
-            entries.forEach { entry -> scope.launch { deliverPendingDmWrap(myPub, entry) } }
-        }
-    }
-
-    private suspend fun removeDmWrap(myPub: String, wrapId: String) {
-        pendingDmMutex.withLock { pendingDmWraps.removeAll { it.wrapId == wrapId } }
-        persistDmQueue(myPub)
-    }
-
-    // Retry a queued wrap with linear backoff until a relay accepts it (or the message is already
-    // Delivered, e.g. the self-copy echoed back), then drop it from the queue. Un-delivered wraps
-    // stay persisted and resume on the next startDmInbox.
-    private suspend fun deliverPendingDmWrap(myPub: String, entry: PendingDmWrap) {
-        var attempt = 0
-        var lastReason: String? = null
-        while (attempt < DM_SEND_MAX_ATTEMPTS) {
-            if (dmManager.messageStatus.value[entry.rumorId] is GroupManager.MessageStatus.Delivered) {
-                removeDmWrap(myPub, entry.wrapId)
-                return
+        val acceptedBy = results.filter { it.second is PublishResult.Success }.map { it.first }
+        if (acceptedBy.isNotEmpty()) return DmPublishOutcome.Accepted(acceptedBy)
+        // A stated rejection is worth more than a timeout, which only says nobody answered, so a
+        // send is final only when every target refused it outright.
+        val refusals =
+            results.mapNotNull { (url, result) ->
+                (result as? PublishResult.Rejected)?.takeIf { isPermanentRejection(it.reason) }?.let { url to it.reason }
             }
-            val outcome = publishWrapJsonAwaitOkDetailed(entry.relays, entry.wrapJson, entry.wrapId)
-            if (outcome.accepted) {
-                dmManager.markDelivered(entry.rumorId)
-                removeDmWrap(myPub, entry.wrapId)
-                return
-            }
-            lastReason = outcome.reason
-            attempt++
-            delay(minOf(DM_SEND_RETRY_MAX_MS, DM_SEND_RETRY_BASE_MS * attempt))
-        }
-        // Out of attempts. The wrap stays queued for the next session, but the bubble stops
-        // pretending: a message that reached no relay was never sent, and only the sender can tell.
-        dmManager.markFailed(entry.rumorId, lastReason ?: "no DM relay accepted it")
+        if (refusals.size != results.size) return DmPublishOutcome.Retry
+        val (url, why) = refusals.first()
+        return DmPublishOutcome.Rejected("${relayHost(url)} refused it: $why")
+    }
+
+    /**
+     * NIP-01 machine-readable prefixes split "not yet" from "never". `auth-required` and
+     * `rate-limited` clear on their own, and a bare `error` is the relay's own transient fault;
+     * everything else (`blocked`, `invalid`, `pow`, `restricted`, or an unprefixed refusal) means
+     * asking again changes nothing.
+     */
+    private fun isPermanentRejection(reason: String): Boolean {
+        val normalized = reason.trim().lowercase()
+        val transient = listOf("auth-required", "rate-limited", "error")
+        return transient.none { normalized.startsWith(it) }
+    }
+
+    private fun relayHost(url: String): String = url.removePrefix("wss://").removePrefix("ws://").trimEnd('/')
+
+    // Persisted DM send queue: undelivered wraps by account, mirrored to SecureStorage. Retries
+    // never expire, so a wrap written offline lands on the next reconnect or app launch.
+    private val dmSendQueue by lazy {
+        DmSendQueue(
+            scope = scope,
+            publish = { relays, wrapJson, wrapId -> publishWrapJsonAwaitOk(relays, wrapJson, wrapId) },
+            isDelivered = { rumorId -> dmManager.messageStatus.value[rumorId] is GroupManager.MessageStatus.Delivered },
+            onDelivered = { rumorId, relays ->
+                dmManager.markDelivered(rumorId)
+                dmManager.recordSentTo(rumorId, relays)
+            },
+            onRejected = { rumorId, reason -> dmManager.markFailed(rumorId, reason) },
+            onQueued = { rumorId -> dmManager.setSending(rumorId) },
+            persist = { pubkey, entries -> SecureStorage.saveDmSendQueue(pubkey, entries) },
+        )
+    }
+
+    override fun retryDm(rumorId: String) {
+        dmSendQueue.retry(rumorId)
+    }
+
+    override fun dismissDm(rumorId: String) {
+        dmSendQueue.dismiss(rumorId)
+        dmManager.dismissFailed(rumorId)
+        // Also drop the cached copy, or the dismissed message comes back on the next cold open.
+        val myPub = sessionManager.getPublicKey() ?: return
+        dmPersistedIds = dmPersistedIds - rumorId
+        scope.launch { runCatching { cacheStore.deleteByIds(myPub, listOf(rumorId)) } }
     }
 
     // Resume undelivered wraps from disk on login so a send interrupted by an app close still lands.
     private suspend fun resumeDmSendQueue(myPub: String) {
-        val queued = SecureStorage.loadDmSendQueue(myPub)
-        if (queued.isEmpty()) return
-        pendingDmMutex.withLock {
-            pendingDmWraps.clear()
-            pendingDmWraps.addAll(queued)
-        }
-        queued.forEach { entry ->
-            dmManager.setSending(entry.rumorId)
-            scope.launch { deliverPendingDmWrap(myPub, entry) }
-        }
+        dmSendQueue.resume(myPub, SecureStorage.loadDmSendQueue(myPub))
     }
 
     /** Connect to our DM relays and subscribe to the kind:1059 inbox so DMs arrive in real time. */
@@ -3124,7 +3113,7 @@ class NostrRepository(
         dmInboxEosedRelays = emptySet()
         // Drop the in-memory send queue; the persisted per-account copy stays on disk and is
         // reloaded by resumeDmSendQueue when this (or another) account's inbox next starts.
-        scope.launch { pendingDmMutex.withLock { pendingDmWraps.clear() } }
+        dmSendQueue.clear()
     }
 
     // Ids already written to the CacheStore, so the persistence collector upserts only new DMs
@@ -3752,6 +3741,7 @@ class NostrRepository(
                 resubscribeAllGroups(client)
                 pendingEventManager?.onConnectionRestored()
             }
+            dmSendQueue.onConnectionRestored()
             reconnectDroppedNip29PoolRelays()
         }
         return connected

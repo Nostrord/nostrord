@@ -166,6 +166,12 @@ class DmViewModel(
         }
     }
 
+    /** Send a refused message again (the Retry action on a Not delivered bubble). */
+    fun retry(rumorId: String) = repo.retryDm(rumorId)
+
+    /** Drop a refused message from the conversation (the Dismiss action). */
+    fun dismiss(rumorId: String) = repo.dismissDm(rumorId)
+
     /** Clear the unread badge for a conversation when it is open on screen. */
     fun markRead(peerPubkey: String) {
         viewModelScope.launch { repo.markDmRead(peerPubkey) }
