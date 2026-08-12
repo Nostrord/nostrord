@@ -8357,6 +8357,11 @@ body {
     color: var(--color-text-secondary);
 }
 
+/* A tip that states a consequence the user should weigh, not just context. */
+.settings-tip.warning {
+    color: var(--color-warning-orange);
+}
+
 .settings-error {
     margin-top: 6px;
     font-size: 13px;
