@@ -411,7 +411,14 @@ class MetadataManager(
         messageHandler: (String, NostrGroupClient) -> Unit,
     ) {
         suspend fun NostrGroupClient.reqEvent() {
-            if (groupId != null) requestGroupMessageById(groupId, eventId) else requestEventById(eventId)
+            // Always ask by id alone. An external event (a kind:1 nevent quoted inside a group)
+            // carries no `h` tag, so an #h-scoped filter matches nothing on any relay, including
+            // the hint relay dialed below specifically to serve it.
+            requestEventById(eventId)
+            // The #h lookup is additive, and a separate subscription rather than a second filter
+            // on the same REQ: a strict NIP-29 relay CLOSEs a REQ whose filter omits `#h`, which
+            // would take the group lookup down with it.
+            if (groupId != null) requestGroupMessageById(groupId, eventId)
         }
         // Skip if already cached or already in-flight
         if (_cachedEvents.value.containsKey(eventId)) return
