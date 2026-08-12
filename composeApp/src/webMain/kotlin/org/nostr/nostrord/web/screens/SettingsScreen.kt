@@ -1534,16 +1534,27 @@ private fun react.ChildrenBuilder.dmArchiveSection(
                         "minutes and reveals to your DM relays roughly how many messages you have."
                     )
             }
-            button {
-                className = ClassName("settings-outline-btn")
-                onClick = { vm.dismissArchiveConfirm() }
-                +"Cancel"
+            // The one consequence the volume/relay copy above does not cover.
+            div {
+                className = ClassName("settings-tip warning")
+                +(
+                    "It also widens what a leak of this key costs: afterwards that one key opens your whole " +
+                        "history from the relays, not only the messages sent while it was current."
+                    )
             }
-            button {
-                className = ClassName("settings-outline-btn")
-                disabled = (count ?: 0) <= 0
-                onClick = { vm.confirmArchive() }
-                +"Publish archive"
+            div {
+                className = ClassName("settings-form-actions")
+                button {
+                    className = ClassName("btn-text btn-sm")
+                    onClick = { vm.dismissArchiveConfirm() }
+                    +"Cancel"
+                }
+                button {
+                    className = ClassName("btn-primary btn-sm")
+                    disabled = (count ?: 0) <= 0
+                    onClick = { vm.confirmArchive() }
+                    +"Publish archive"
+                }
             }
         }
         else -> {

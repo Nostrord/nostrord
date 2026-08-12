@@ -1372,6 +1372,13 @@ private fun DmArchiveContent(vm: DmEncryptionViewModel) {
                     style = NostrordTypography.Caption,
                     color = NostrordColors.TextSecondary,
                 )
+                // The one consequence the volume/relay copy above does not cover.
+                Text(
+                    text = "It also widens what a leak of this key costs: afterwards that one key opens your " +
+                        "whole history from the relays, not only the messages sent while it was current.",
+                    style = NostrordTypography.Caption,
+                    color = NostrordColors.Warning,
+                )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = { vm.dismissArchiveConfirm() }) {
                         Text("Cancel", color = NostrordColors.TextSecondary, style = NostrordTypography.Button)
