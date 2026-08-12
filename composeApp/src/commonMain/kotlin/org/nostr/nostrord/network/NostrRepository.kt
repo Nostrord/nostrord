@@ -271,6 +271,10 @@ class NostrRepository(
     // can't leak the publish job; delivery is best-effort and swallows failures anyway.
     private val PUBLISH_RELAY_TIMEOUT_MS = 8_000L
 
+    // Budget for the relays to answer with this account's own kind:10044 before enabling acts on
+    // local state. Short: it is paid on every Settings open and on a first enable.
+    private val OWN_ANNOUNCEMENT_WAIT_MS = 2_500L
+
     // Budget for a peer's kind:10050 before the first message of a conversation goes out. Paid once
     // per peer, and only when we hold no list for them; the send proceeds to the defaults after it.
     private val PEER_DM_RELAY_WAIT_MS = 3_000L
@@ -2180,16 +2184,33 @@ class NostrRepository(
             ActiveAccountManager.session.value?.signer
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
         val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
-        val state = dmEncryptionManager.state.value
-        if (state is DmEncryptionManager.State.AnnouncedElsewhere) {
+        // Ask the relays what this account announces BEFORE minting anything. Local state on a
+        // device that just logged in says Disabled until the fetch lands, and enabling on that
+        // stale read overwrites the other device's kind:10044 — leaving the two devices holding
+        // different keys, each believing it is the current one.
+        refreshDmEncryptionState()
+        if (dmEncryptionManager.state.value is DmEncryptionManager.State.AnnouncedElsewhere) {
             return Result.Error(
-                AppError.Unknown("This account already announced an encryption key from another device. Import that key here first."),
+                AppError.Unknown("This account announces a key that is not stored on this device. Import it, or replace it below."),
             )
         }
-        val encPubkey = dmEncryptionManager.currentEncPubkeyOrNull() ?: dmEncryptionManager.generateKey()
-        return publishEncryptionAnnouncement(signer, myPub, encPubkey).also {
-            if (it is Result.Success) dmEncryptionManager.setAnnounced(true)
-        }
+        // A key from an earlier session is re-announced as-is; otherwise this mints one.
+        val held = dmEncryptionManager.currentEncPubkeyOrNull()
+            ?: return announceFreshEncryptionKey(signer, myPub)
+        return publishEncryptionAnnouncement(signer, myPub, held)
+    }
+
+    /**
+     * Re-read this account's own kind:10044 from the relays and let the manager reconcile against
+     * it. Bounded: the fetch has no EOSE plumbing here, so a first-ever enable (nothing to find)
+     * costs this wait once rather than risking a decision made on a stale local read.
+     */
+    override suspend fun refreshDmEncryptionState() {
+        val myPub = sessionManager.getPublicKey() ?: return
+        fetchDmRelays(myPub)
+        // A fixed pause, not a wait for a particular state: waiting for AnnouncedElsewhere made a
+        // momentary wrong answer the thing that ended the wait.
+        delay(OWN_ANNOUNCEMENT_WAIT_MS)
     }
 
     /**
@@ -2205,10 +2226,44 @@ class NostrRepository(
         if (dmEncryptionManager.state.value !is DmEncryptionManager.State.Active) {
             return Result.Error(AppError.Unknown("Turn on the fast decryption key first."))
         }
-        val fresh = dmEncryptionManager.generateKey()
-        return publishEncryptionAnnouncement(signer, myPub, fresh).also {
-            if (it is Result.Success) dmEncryptionManager.setAnnounced(true)
+        return announceFreshEncryptionKey(signer, myPub)
+    }
+
+    /**
+     * Escape hatch for a key announced by a device we no longer have. Without it the account is
+     * stuck: senders address a key nobody here holds, so inbound DMs cannot be opened at all, and
+     * enable/rotate both refuse while another device owns the announcement.
+     */
+    override suspend fun resetDmEncryptionKey(): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        if (dmEncryptionManager.state.value !is DmEncryptionManager.State.AnnouncedElsewhere) {
+            return Result.Error(AppError.Unknown("This device already holds the announced key."))
         }
+        return announceFreshEncryptionKey(signer, myPub)
+    }
+
+    /**
+     * Publish a brand-new key, and hold it whatever the publish reports.
+     *
+     * An unconfirmed publish is not a failed one: a relay that stores the event and never answers
+     * OK leaves the account advertising a key this device would otherwise have thrown away, and
+     * the announcement coming back then reads as another device's — the account locks itself out
+     * of its own key. Holding it costs nothing if the publish really was lost.
+     *
+     * Which held key is current is then the relays' call, not ours: [refreshDmEncryptionState]
+     * re-reads the account's own kind:10044 and promotes whichever key it names.
+     */
+    private suspend fun announceFreshEncryptionKey(signer: NostrSigner, myPub: String): Result<Unit> {
+        val fresh = KeyPair.generate()
+        // Persist the key BEFORE any network call. It is the only thing here that cannot be
+        // recovered: an unannounced key on the device is inert, while an announcement whose key was
+        // lost (a cancelled publish, a closed screen, a killed process) costs the account every
+        // message sent to it, permanently.
+        dmEncryptionManager.adoptKey(fresh)
+        return publishEncryptionAnnouncement(signer, myPub, fresh.publicKeyHex)
     }
 
     /**
@@ -2220,22 +2275,29 @@ class NostrRepository(
             ActiveAccountManager.session.value?.signer
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
         val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
-        return publishEncryptionAnnouncement(signer, myPub, null).also {
-            if (it is Result.Success) dmEncryptionManager.setAnnounced(false)
-        }
+        return publishEncryptionAnnouncement(signer, myPub, null)
     }
 
+    /**
+     * Sign and publish the account's kind:10044. The signed event is recorded as our announcement
+     * immediately, before the network call: the relay echoes it back within a second on the
+     * standing REQ, and an announcement we have not recorded yet reads as a key someone else owns.
+     *
+     * The publish result decides only what the screen says about confirmation. Whether the key is
+     * announced is what the newest kind:10044 says, and by then we have already seen it.
+     */
     private suspend fun publishEncryptionAnnouncement(signer: NostrSigner, myPub: String, encPubkey: String?): Result<Unit> = try {
-        val signed = signer.signEvent(Nip4e.buildAnnouncement(myPub, encPubkey, epochSeconds()))
+        val createdAt = epochSeconds()
+        val signed = signer.signEvent(Nip4e.buildAnnouncement(myPub, encPubkey, createdAt))
+        dmEncryptionManager.ingestAnnouncement(encPubkey, createdAt, fromRelay = false)
         // Same relay set as the DM relay list: senders look for both on our outbox, and our
         // own DM relays are where another device of ours will read it.
         val targets = (outboxManager.getWriteRelays() + outboxManager.bootstrapRelays + dmRelaysWithDefaults(myPub)).distinct()
-        // Wait for a real OK: the toggle flips on Success, so a fire-and-forget publish would let
-        // the UI claim a key is announced that no relay ever took.
         if (publishWrapJsonAwaitOk(targets, signed.toJsonObject().toString(), signed.id.orEmpty())) {
+            dmEncryptionManager.ingestAnnouncement(encPubkey, createdAt, fromRelay = true)
             Result.Success(Unit)
         } else {
-            Result.Error(AppError.Unknown("No relay accepted the encryption key announcement."))
+            Result.Error(AppError.Unknown("No relay confirmed the announcement yet. The key is saved on this device."))
         }
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
@@ -5765,7 +5827,9 @@ class NostrRepository(
                     dmManager.ingestEncryptionKey(it)
                     // Our own announcement is the relay's truth about this account: another device
                     // may have rotated to a key we do not hold, or withdrawn ours.
-                    if (it.pubkey == sessionManager.getPublicKey()) dmEncryptionManager.ingestOwnAnnouncement(it)
+                    if (it.pubkey == sessionManager.getPublicKey()) {
+                        dmEncryptionManager.ingestAnnouncement(Nip4e.encryptionKeyFrom(it), it.createdAt, fromRelay = true)
+                    }
                 }
                 return
             }

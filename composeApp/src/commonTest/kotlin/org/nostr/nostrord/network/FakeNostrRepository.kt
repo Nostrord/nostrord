@@ -157,6 +157,10 @@ class FakeNostrRepository : NostrRepositoryApi {
     var importDmEncryptionKeyResult: Boolean = true
     var exportedDmEncryptionKey: String? = null
 
+    override suspend fun refreshDmEncryptionState() {
+        calls += "refreshDmEncryptionState"
+    }
+
     override suspend fun enableDmEncryption(): Result<Unit> = enableDmEncryptionResult
 
     override suspend fun disableDmEncryption(): Result<Unit> = Result.Success(Unit)
@@ -166,6 +170,13 @@ class FakeNostrRepository : NostrRepositoryApi {
     override suspend fun rotateDmEncryptionKey(): Result<Unit> {
         calls += "rotateDmEncryptionKey"
         return rotateDmEncryptionKeyResult
+    }
+
+    var resetDmEncryptionKeyResult: Result<Unit> = Result.Success(Unit)
+
+    override suspend fun resetDmEncryptionKey(): Result<Unit> {
+        calls += "resetDmEncryptionKey"
+        return resetDmEncryptionKeyResult
     }
 
     override fun importDmEncryptionKey(privateKeyHex: String): Boolean = importDmEncryptionKeyResult
