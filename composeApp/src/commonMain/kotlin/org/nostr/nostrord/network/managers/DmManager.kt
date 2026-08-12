@@ -144,6 +144,22 @@ class DmManager(
         _messageStatus.update { if (rumorId in it) it + (rumorId to GroupManager.MessageStatus.Delivered) else it }
     }
 
+    /**
+     * Report a send that no relay ever accepted, so the bubble says so instead of sitting there
+     * looking ordinary. Only overrides Sending: the recipient wrap and the self-copy are published
+     * separately, and the self-copy failing does not un-deliver a message the peer's relay took.
+     */
+    fun markFailed(rumorId: String, reason: String) {
+        val peer = peerByRumor.value[rumorId] ?: ""
+        _messageStatus.update { current ->
+            if (current[rumorId] !is GroupManager.MessageStatus.Sending) {
+                current
+            } else {
+                current + (rumorId to GroupManager.MessageStatus.Failed(reason, peer, eventJson = null))
+            }
+        }
+    }
+
     // Dedup: a gift wrap can arrive from several relays; the same rumor can arrive via the
     // recipient wrap and the self wrap. Held as an immutable set swapped atomically: wraps
     // are ingested by several coroutines at once, and a plain HashSet corrupts under that.
