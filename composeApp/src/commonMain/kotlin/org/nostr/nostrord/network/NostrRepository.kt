@@ -2492,33 +2492,51 @@ class NostrRepository(
         }
     }
 
+    /** What a wrap publish achieved, and why not when it achieved nothing. */
+    private data class WrapPublish(val accepted: Boolean, val reason: String?)
+
     // Publish a pre-serialized gift wrap event and wait for a relay OK, so a DM has a real delivered
     // signal (not fire-and-forget). Returns true once any relay accepts the event.
-    private suspend fun publishWrapJsonAwaitOk(relays: List<String>, wrapJson: String, wrapId: String): Boolean {
-        if (wrapId.isBlank()) return false
+    private suspend fun publishWrapJsonAwaitOk(relays: List<String>, wrapJson: String, wrapId: String): Boolean = publishWrapJsonAwaitOkDetailed(relays, wrapJson, wrapId).accepted
+
+    /**
+     * As [publishWrapJsonAwaitOk], but keeps a relay's stated reason for refusing. A DM that no
+     * relay took has to be able to say why: "rate-limited" and "auth-required" are the difference
+     * between waiting and fixing something.
+     */
+    private suspend fun publishWrapJsonAwaitOkDetailed(relays: List<String>, wrapJson: String, wrapId: String): WrapPublish {
+        if (wrapId.isBlank()) return WrapPublish(false, "the message could not be addressed")
         val frame = """["EVENT",$wrapJson]"""
         // Concurrent for the same reason as publishEventToRelays: a relay that never answers OK
         // costs the full timeout, and serially those stack into a send that looks hung.
-        return coroutineScope {
-            relays.distinct().map { url ->
-                async {
-                    try {
-                        val result =
-                            withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
-                                val client =
-                                    connectionManager.getClientForRelay(url)
-                                        ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-                                client?.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
-                            }
-                        result is PublishResult.Success
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Throwable) {
-                        false
+        val results =
+            coroutineScope {
+                relays.distinct().map { url ->
+                    async {
+                        try {
+                            val result =
+                                withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
+                                    val client =
+                                        connectionManager.getClientForRelay(url)
+                                            ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+                                    client?.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
+                                }
+                            url to result
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Throwable) {
+                            url to null
+                        }
                     }
-                }
-            }.awaitAll().any { it }
-        }
+                }.awaitAll()
+            }
+        if (results.any { it.second is PublishResult.Success }) return WrapPublish(true, null)
+        // A stated rejection is worth more than a timeout, which only says nobody answered.
+        val rejection = results.firstNotNullOfOrNull { (url, r) -> (r as? PublishResult.Rejected)?.let { url to it.reason } }
+        val reason =
+            rejection?.let { (url, why) -> "${url.removePrefix("wss://").trimEnd('/')} refused it: $why" }
+                ?: "no DM relay accepted it"
+        return WrapPublish(false, reason)
     }
 
     // Persisted DM send queue: undelivered wraps by account, mirrored to SecureStorage.
@@ -2548,19 +2566,25 @@ class NostrRepository(
     // stay persisted and resume on the next startDmInbox.
     private suspend fun deliverPendingDmWrap(myPub: String, entry: PendingDmWrap) {
         var attempt = 0
+        var lastReason: String? = null
         while (attempt < DM_SEND_MAX_ATTEMPTS) {
             if (dmManager.messageStatus.value[entry.rumorId] is GroupManager.MessageStatus.Delivered) {
                 removeDmWrap(myPub, entry.wrapId)
                 return
             }
-            if (publishWrapJsonAwaitOk(entry.relays, entry.wrapJson, entry.wrapId)) {
+            val outcome = publishWrapJsonAwaitOkDetailed(entry.relays, entry.wrapJson, entry.wrapId)
+            if (outcome.accepted) {
                 dmManager.markDelivered(entry.rumorId)
                 removeDmWrap(myPub, entry.wrapId)
                 return
             }
+            lastReason = outcome.reason
             attempt++
             delay(minOf(DM_SEND_RETRY_MAX_MS, DM_SEND_RETRY_BASE_MS * attempt))
         }
+        // Out of attempts. The wrap stays queued for the next session, but the bubble stops
+        // pretending: a message that reached no relay was never sent, and only the sender can tell.
+        dmManager.markFailed(entry.rumorId, lastReason ?: "no DM relay accepted it")
     }
 
     // Resume undelivered wraps from disk on login so a send interrupted by an app close still lands.
