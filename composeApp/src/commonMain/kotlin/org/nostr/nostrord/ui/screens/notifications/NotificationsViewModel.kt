@@ -16,6 +16,7 @@ import org.nostr.nostrord.notifications.NotificationEntry
 import org.nostr.nostrord.notifications.NotificationType
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.ui.text.flattenMarkdownForPreview
+import org.nostr.nostrord.utils.groupKey
 
 /** Notifications type filter (prototype tabs). Reactions have no tab; they show under [ALL]. */
 enum class NotifFilter { ALL, MENTIONS, REPLIES, MESSAGES }
@@ -28,8 +29,13 @@ data class NotifTypeCounts(
     val messages: Int = 0,
 )
 
-/** A group that appears in the notifications, for the sidebar group filter. */
+/**
+ * A group that appears in the notifications, for the sidebar group filter.
+ * Identified by [key] ([groupKey]) because the same id on two relays is two groups.
+ */
 data class NotifGroupBucket(
+    val key: String,
+    val relayUrl: String,
     val groupId: String,
     val name: String,
     val unread: Int,
@@ -73,8 +79,9 @@ class NotificationsViewModel(
         SecureStorage.saveBooleanPref(KEY_UNREAD_ONLY, value)
     }
 
-    fun setGroupFilter(groupId: String?) {
-        _groupFilter.value = groupId
+    /** [key] is a [groupKey], or null for "all groups". */
+    fun setGroupFilter(key: String?) {
+        _groupFilter.value = key
     }
 
     private fun matchesType(
@@ -97,7 +104,7 @@ class NotificationsViewModel(
         combine(entries, _typeFilter, _unreadOnly, _groupFilter) { list, type, unread, group ->
             list.filter { e ->
                 matchesType(e, type) &&
-                    (group == null || e.groupId == group) &&
+                    (group == null || groupKey(e.relayUrl, e.groupId) == group) &&
                     (!unread || !e.read)
             }.map { e -> e.copy(preview = flattenMarkdownForPreview(e.preview)) }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -125,10 +132,13 @@ class NotificationsViewModel(
             val base = if (unread) list.filter { !it.read } else list
             val order = LinkedHashMap<String, NotifGroupBucket>()
             base.forEach { e ->
-                val prev = order[e.groupId]
+                val key = groupKey(e.relayUrl, e.groupId)
+                val prev = order[key]
                 val unreadInc = if (e.read) 0 else 1
-                order[e.groupId] =
+                order[key] =
                     NotifGroupBucket(
+                        key = key,
+                        relayUrl = e.relayUrl,
                         groupId = e.groupId,
                         name = prev?.name?.takeIf { it.isNotBlank() }
                             ?: e.groupName?.takeIf { it.isNotBlank() }

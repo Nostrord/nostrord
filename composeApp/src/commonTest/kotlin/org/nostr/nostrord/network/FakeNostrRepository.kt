@@ -21,6 +21,7 @@ import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip46Client
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.groupKey
 
 /**
  * In-memory fake of [NostrRepositoryApi] for ViewModel unit tests.
@@ -50,7 +51,7 @@ class FakeNostrRepository : NostrRepositoryApi {
     val _groupAdmins = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val _userMetadata = MutableStateFlow<Map<String, UserMetadata>>(emptyMap())
     val _cachedEvents = MutableStateFlow<Map<String, CachedEvent>>(emptyMap())
-    val _unreadCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val _unreadByGroupKey = MutableStateFlow<Map<String, Int>>(emptyMap())
     val _userRelayList = MutableStateFlow<List<Nip65Relay>>(emptyList())
     val _relayMetadata = MutableStateFlow<Map<String, Nip11RelayInfo>>(emptyMap())
     val _unreachableRelays = MutableStateFlow<Set<String>>(emptySet())
@@ -139,7 +140,7 @@ class FakeNostrRepository : NostrRepositoryApi {
     override val groupAdmins: StateFlow<Map<String, List<String>>> = _groupAdmins
     override val userMetadata: StateFlow<Map<String, UserMetadata>> = _userMetadata
     override val cachedEvents: StateFlow<Map<String, CachedEvent>> = _cachedEvents
-    override val unreadCounts: StateFlow<Map<String, Int>> = _unreadCounts
+    override val unreadByGroupKey: StateFlow<Map<String, Int>> = _unreadByGroupKey
     override val dmConversations: StateFlow<List<DmConversation>> = MutableStateFlow(emptyList())
     override val dmMessagesByPeer: StateFlow<Map<String, List<DmMessage>>> = MutableStateFlow(emptyMap())
     override val dmUnreadByPeer: StateFlow<Map<String, Int>> = MutableStateFlow(emptyMap())
@@ -590,13 +591,13 @@ class FakeNostrRepository : NostrRepositoryApi {
         relayHints[groupId] = relayUrl
     }
 
-    override fun markGroupAsRead(groupId: String) {}
+    override fun markGroupAsRead(relayUrl: String, groupId: String) {}
 
-    override fun markGroupAsReadUpTo(groupId: String, timestamp: Long) {}
+    override fun markGroupAsReadUpTo(relayUrl: String, groupId: String, timestamp: Long) {}
 
-    override fun getUnreadCount(groupId: String): Int = unreadCounts.value[groupId] ?: 0
+    override fun getUnreadCount(relayUrl: String, groupId: String): Int = unreadByGroupKey.value[groupKey(relayUrl, groupId)] ?: 0
 
-    override fun getLastReadTimestamp(groupId: String): Long? = null
+    override fun getLastReadTimestamp(relayUrl: String, groupId: String): Long? = null
 
     override suspend fun requestUserMetadata(pubkeys: Set<String>, forceStale: Boolean) {}
 
@@ -719,7 +720,7 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     override fun onDestroy() {}
 
-    override fun setActiveGroup(groupId: String?) {}
+    override fun setActiveGroup(relayUrl: String?, groupId: String?) {}
 
     var addUserResult: Result<Unit> = Result.Success(Unit)
     var addUserCalls = mutableListOf<Triple<String, String, List<String>>>()

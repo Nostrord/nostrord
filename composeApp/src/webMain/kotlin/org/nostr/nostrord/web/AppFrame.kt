@@ -29,6 +29,7 @@ import org.nostr.nostrord.ui.screens.home.railKey
 import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.accountDisplayLabel
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
@@ -334,10 +335,10 @@ val AppFrame =
         useEffect(groupRoute?.relayUrl, groupRoute?.groupId, groupRoute?.inviteCode) {
             val r = groupRoute
             if (r == null) {
-                repo.setActiveGroup(null)
+                repo.setActiveGroup(null, null)
             } else {
-                repo.setActiveGroup(r.groupId)
-                repo.markGroupAsRead(r.groupId)
+                repo.setActiveGroup(r.relayUrl, r.groupId)
+                repo.markGroupAsRead(r.relayUrl, r.groupId)
                 val code = r.inviteCode
                 if (code != null) {
                     consumeInviteInHash(r)
@@ -513,13 +514,13 @@ val AppFrame =
                                         icon(Ic.NotificationsOff)
                                     }
                                 }
-                                val unread = railUnread[group.meta.id] ?: 0
+                                val unread = railUnread[groupKey(group.relayUrl, group.meta.id)] ?: 0
                                 if (unread > 0) {
                                     span {
                                         className = ClassName("rail-badge")
                                         +(if (unread > 99) "99+" else "$unread")
                                     }
-                                } else if (group.meta.id in railMutedActivity) {
+                                } else if (groupKey(group.relayUrl, group.meta.id) in railMutedActivity) {
                                     // Muted but moving: a dot in the free corner, since the
                                     // bell-off badge owns the bottom one.
                                     span { className = ClassName("rail-badge top muted-dot") }

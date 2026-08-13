@@ -87,6 +87,7 @@ import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.ui.util.grabPointerIcon
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import kotlin.math.roundToInt
 
@@ -113,7 +114,7 @@ fun GroupSidebar(
     val groupMembers by vm.groupMembers.collectAsState()
     val groupAdmins by vm.groupAdmins.collectAsState()
     val joinedGroupsByRelay by vm.joinedGroupsByRelay.collectAsState()
-    val unreadCounts by AppModule.nostrRepository.unreadCounts.collectAsState()
+    val unreadByGroupKey by AppModule.nostrRepository.unreadByGroupKey.collectAsState()
     val muteState by AppModule.notificationSettings.muteState.collectAsState()
     val kind10009Relays by AppModule.nostrRepository.kind10009Relays.collectAsState()
     val relayMetadata by vm.relayMetadata.collectAsState()
@@ -294,7 +295,7 @@ fun GroupSidebar(
                         // First-level channels sit flush; only nesting below them indents.
                         depth = entry.depth - 1,
                         locked = isLockedChannel(channel, isJoined = entry.id in joinedHere),
-                        unread = unreadCounts[entry.id] ?: 0,
+                        unread = unreadByGroupKey[groupKey(route.relayUrl, entry.id)] ?: 0,
                         // Muting the root silences the whole tree, so a channel inside a
                         // muted group reads as muted without an override of its own.
                         muted = muteState.isMuted(entry.id) || muteState.isMuted(rootId),

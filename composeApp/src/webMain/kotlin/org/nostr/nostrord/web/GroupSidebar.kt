@@ -15,6 +15,7 @@ import org.nostr.nostrord.ui.screens.group.isLockedChannel
 import org.nostr.nostrord.ui.screens.group.moveChannelBefore
 import org.nostr.nostrord.ui.screens.group.rootGroupId
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
@@ -65,7 +66,7 @@ val GroupSidebar =
         val groupAdmins = useStateFlow(vm.groupAdmins)
         val relayMetadata = useStateFlow(vm.relayMetadata)
         val joinedGroupsByRelay = useStateFlow(vm.joinedGroupsByRelay)
-        val unreadCounts = useStateFlow(AppModule.nostrRepository.unreadCounts)
+        val unreadByGroupKey = useStateFlow(AppModule.nostrRepository.unreadByGroupKey)
         val muteState = useStateFlow(AppModule.notificationSettings.muteState)
         // Open group context menu: which row, and where it was right-clicked.
         val (groupMenu, setGroupMenu) = useState<GroupMenuAnchor?> { null }
@@ -369,7 +370,7 @@ val GroupSidebar =
                                     icon(Ic.NotificationsOff)
                                 }
                             }
-                            val unread = unreadCounts[entry.id] ?: 0
+                            val unread = unreadByGroupKey[groupKey(route.relayUrl, entry.id)] ?: 0
                             if (unread > 0) {
                                 if (channelMuted) {
                                     // Dot, not a count: the number is exactly the noise muting removes.

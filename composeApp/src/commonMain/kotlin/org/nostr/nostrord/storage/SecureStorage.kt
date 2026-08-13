@@ -11,6 +11,7 @@ import org.nostr.nostrord.network.outbox.Kind10009Baseline
 import org.nostr.nostrord.nostr.Crypto
 import org.nostr.nostrord.nostr.toHexString
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.groupKey
 
 // 128-bit (32 hex) SHA-256 prefix of the pubkey. Used as the storage subkey
 // for all per-account slots: hashCode is 32-bit (collision-feasible) and the
@@ -951,6 +952,29 @@ fun SecureStorage.removeLeftGroupForRelay(
         }
     }
 }
+
+// ── Last-read anchor, per (relay, group) ────────────────────────────────────
+// The bare-id slot underneath is reused with a composite key so the same group
+// id on two relays keeps two independent read positions.
+
+fun SecureStorage.saveLastReadFor(
+    pubkey: String,
+    relayUrl: String,
+    groupId: String,
+    timestamp: Long,
+) = saveLastReadTimestamp(pubkey, groupKey(relayUrl, groupId), timestamp)
+
+/**
+ * Read anchor for [groupId] on [relayUrl], falling back to the legacy bare-id slot
+ * written before group state was relay-scoped. The fallback seeds both same-id groups
+ * from the old value once; each then diverges on its own composite slot.
+ */
+fun SecureStorage.lastReadFor(
+    pubkey: String,
+    relayUrl: String,
+    groupId: String,
+): Long? = getLastReadTimestamp(pubkey, groupKey(relayUrl, groupId))
+    ?: getLastReadTimestamp(pubkey, groupId)
 
 // ── Unread state persistence ────────────────────────────────────────────────
 // Persists per-account unread counters + high-water timestamps so badges,

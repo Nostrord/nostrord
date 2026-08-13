@@ -33,6 +33,7 @@ import org.nostr.nostrord.storage.loadFollowingCacheFor
 import org.nostr.nostrord.storage.saveFollowingCacheFor
 import org.nostr.nostrord.ui.screens.group.aggregateUnread
 import org.nostr.nostrord.ui.screens.group.aggregateUnreadUnmuted
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
@@ -180,8 +181,8 @@ class HomePageViewModel(
             .toList()
     }
 
-    /** Unread message counts per group id (drives the rail badges). */
-    val unreadCounts: StateFlow<Map<String, Int>> = repo.unreadCounts
+    /** Unread message counts keyed by [groupKey] (drives the rail badges). */
+    val unreadByGroupKey: StateFlow<Map<String, Int>> = repo.unreadByGroupKey
 
     /** Unread notifications (drives the bell badge on the groups rail). */
     val notificationUnread: StateFlow<Int> =
@@ -342,8 +343,11 @@ class HomePageViewModel(
      * zero here and surface through [railMutedActivity] as a dot instead.
      */
     val railUnreadCounts: StateFlow<Map<String, Int>> =
-        combine(railRootGroups, repo.childrenByParent, repo.unreadCounts, muteState) { roots, children, unread, mute ->
-            roots.associate { it.meta.id to aggregateUnreadUnmuted(it.meta.id, children, unread, mute::isMuted) }
+        combine(railRootGroups, repo.childrenByParent, repo.unreadByGroupKey, muteState) { roots, children, unread, mute ->
+            roots.associate { root ->
+                groupKey(root.relayUrl, root.meta.id) to
+                    aggregateUnreadUnmuted(root.relayUrl, root.meta.id, children, unread, mute::isMuted)
+            }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     /**
@@ -352,10 +356,14 @@ class HomePageViewModel(
      * group moved.
      */
     val railMutedActivity: StateFlow<Set<String>> =
-        combine(railRootGroups, repo.childrenByParent, repo.unreadCounts, muteState) { roots, children, unread, mute ->
+        combine(railRootGroups, repo.childrenByParent, repo.unreadByGroupKey, muteState) { roots, children, unread, mute ->
             roots.mapNotNullTo(HashSet()) { root ->
+                val relay = root.relayUrl
                 val id = root.meta.id
-                id.takeIf { aggregateUnreadUnmuted(id, children, unread, mute::isMuted) == 0 && aggregateUnread(id, children, unread) > 0 }
+                groupKey(relay, id).takeIf {
+                    aggregateUnreadUnmuted(relay, id, children, unread, mute::isMuted) == 0 &&
+                        aggregateUnread(relay, id, children, unread) > 0
+                }
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 

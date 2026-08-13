@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
+import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
  * Notifications filter column (prototype NotificationsSidebar): the type tabs with counts,
@@ -117,16 +118,19 @@ fun NotificationsSidebar(
             icon = Icons.Default.People,
         ) { vm.setGroupFilter(null) }
         buckets.forEach { bucket ->
+            // This relay's kind:39000 first: a same-id group elsewhere is a different group and
+            // must not lend its avatar to this tab.
             val picture =
-                groupsByRelay.values.firstNotNullOfOrNull { list -> list.firstOrNull { it.id == bucket.groupId }?.picture }
+                groupsByRelay.entries.firstOrNull { it.key.normalizeRelayUrl() == bucket.relayUrl.normalizeRelayUrl() }
+                    ?.value?.firstOrNull { it.id == bucket.groupId }?.picture
             GroupTab(
                 picture = picture,
-                identifier = bucket.groupId,
+                identifier = bucket.key,
                 label = bucket.name,
                 unread = bucket.unread,
-                active = groupFilter == bucket.groupId,
+                active = groupFilter == bucket.key,
                 icon = null,
-            ) { vm.setGroupFilter(bucket.groupId) }
+            ) { vm.setGroupFilter(bucket.key) }
         }
     }
 }

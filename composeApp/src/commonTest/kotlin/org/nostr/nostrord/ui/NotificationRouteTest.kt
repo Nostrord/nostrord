@@ -60,7 +60,7 @@ class NotificationReadScopeTest {
         store.add(entry("chat1", "g1", threadRootId = null))
         store.add(entry("thread1", "g1", threadRootId = "root1"))
 
-        store.markReadForGroup("g1")
+        store.markReadForGroup("wss://relay.example", "g1")
 
         assertEquals(true, store.entries.value.first { it.id == "chat1" }.read)
         assertEquals(false, store.entries.value.first { it.id == "thread1" }.read)

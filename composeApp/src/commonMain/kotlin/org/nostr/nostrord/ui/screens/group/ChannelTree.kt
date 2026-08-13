@@ -1,6 +1,7 @@
 package org.nostr.nostrord.ui.screens.group
 
 import org.nostr.nostrord.network.GroupMetadata
+import org.nostr.nostrord.utils.groupKey
 
 /**
  * Discord-style channel model over the NIP-29 subgroup topology: the rail shows only
@@ -57,12 +58,17 @@ fun channelTree(
     return out
 }
 
-/** Unread total for a rail root: its own count plus every descendant channel's. */
+/**
+ * Unread total for a rail root: its own count plus every descendant channel's.
+ * [unreadByGroupKey] is keyed by [groupKey], so the tree is resolved against [relayUrl]
+ * and a same-id group on another relay never contributes.
+ */
 fun aggregateUnread(
+    relayUrl: String,
     rootId: String,
     childrenByParent: Map<String, Set<String>>,
-    unreadCounts: Map<String, Int>,
-): Int = channelTree(rootId, childrenByParent, emptyMap()).sumOf { unreadCounts[it.id] ?: 0 }
+    unreadByGroupKey: Map<String, Int>,
+): Int = channelTree(rootId, childrenByParent, emptyMap()).sumOf { unreadByGroupKey[groupKey(relayUrl, it.id)] ?: 0 }
 
 /**
  * [aggregateUnread] with muted subtrees removed, for badge rollups. Muting a root
@@ -71,16 +77,17 @@ fun aggregateUnread(
  * tracked either way, so opening a muted group still lands on its unread divider.
  */
 fun aggregateUnreadUnmuted(
+    relayUrl: String,
     rootId: String,
     childrenByParent: Map<String, Set<String>>,
-    unreadCounts: Map<String, Int>,
+    unreadByGroupKey: Map<String, Int>,
     isMuted: (String) -> Boolean,
 ): Int = if (isMuted(rootId)) {
     0
 } else {
     channelTree(rootId, childrenByParent, emptyMap())
         .filterNot { isMuted(it.id) }
-        .sumOf { unreadCounts[it.id] ?: 0 }
+        .sumOf { unreadByGroupKey[groupKey(relayUrl, it.id)] ?: 0 }
 }
 
 /** A channel the user can see but not read/post without joining (private or closed, not a member). */
