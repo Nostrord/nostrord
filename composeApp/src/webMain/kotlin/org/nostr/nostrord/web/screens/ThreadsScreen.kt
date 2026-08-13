@@ -767,6 +767,7 @@ val ThreadsScreen =
                                     ?.let { parentId -> { jumpToMessage(parentId) } },
                                 // A group ref in the body opens that group's chat page.
                                 onGroupRef = { gid, relay -> props.onNavigate(GroupRoute(relay ?: route.relayUrl, gid)) },
+                                hostRelayUrl = route.relayUrl,
                                 onRetry = { vm.retrySend(msg.id) },
                                 onDismiss = { vm.dismissFailed(msg.id) },
                             )
@@ -1006,6 +1007,8 @@ private fun ChildrenBuilder.threadMessage(
     // Tapping the quoted parent scrolls to it; null when the parent is not in this thread.
     onJumpToParent: (() -> Unit)?,
     onGroupRef: (String, String?) -> Unit,
+    /** Relay this thread's group is open on, for resolving quoted references against it. */
+    hostRelayUrl: String,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1102,6 +1105,7 @@ private fun ChildrenBuilder.threadMessage(
                     onGroupRef = onGroupRef,
                     // The event's own NIP-29 `h` tag scopes a quoted reference's by-id REQ.
                     groupId = msg.tags.firstOrNull { it.size >= 2 && it[0] == "h" }?.get(1),
+                    hostRelay = hostRelayUrl,
                 )
                 // Inline send-state icon (clock/check) so no extra line shifts the list.
                 if (myPubkey != null && myPubkey == msg.pubkey) {

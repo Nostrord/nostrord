@@ -16,6 +16,9 @@ import web.cssom.ClassName
 
 external interface ShareGroupModalProps : Props {
     var group: GroupMetadata
+
+    /** Relay the group is open on. The shared address must point at this relay's copy of it. */
+    var relayUrl: String
     var onClose: () -> Unit
 }
 
@@ -26,7 +29,7 @@ external interface ShareGroupModalProps : Props {
 val ShareGroupModal =
     FC<ShareGroupModalProps> { props ->
         val group = props.group
-        val relayUrl = useStateFlow(AppModule.nostrRepository.currentRelayUrl)
+        val relayUrl = props.relayUrl
         val relayMetadata = useStateFlow(AppModule.nostrRepository.relayMetadata)
         // Author = NIP-11 `self` (relay signing key), else `pubkey`; falls back to zero bytes inside encodeNaddr.
         val relayPubkey = relayMetadata[relayUrl]?.groupNaddrAuthor ?: relayMetadata[relayUrl.trimEnd('/')]?.groupNaddrAuthor

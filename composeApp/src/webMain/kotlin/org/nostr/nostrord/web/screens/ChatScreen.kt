@@ -975,6 +975,11 @@ val ChatScreen =
         val allGroups = useStateFlow(vm.mentionableGroups)
         val relayMetadata = useStateFlow(vm.relayMetadata)
         val relayUrl = useStateFlow(vm.currentRelayUrl)
+        // Relay this group is OPEN on. `relayUrl` above is merely the connected one, which drifts
+        // to whichever relay was focused last; anything that identifies the group - shared links,
+        // nevent hints, quote resolution - must use the route's relay or it points at the other
+        // relay's same-id group.
+        val hostRelay = (props.relayUrl ?: relayUrl).normalizeRelayUrl()
         val isLoadingMore = useStateFlow(vm.isLoadingMore)[group.id] ?: false
         val hasMore = useStateFlow(vm.hasMoreMessages)[group.id] ?: true
         // Per-group GroupLoadingState. Only the Exhausted state means the relay
@@ -1009,22 +1014,19 @@ val ChatScreen =
         // would otherwise re-sort the whole list 15+ times during a group switch).
         val messages = useMemo(rawMessages) { rawMessages.sortedBy { it.createdAt } }
         val messagesById = useMemo(messages) { messages.associateBy { it.id } }
-        // The relay that actually HOSTS this group (where its kind:39000 lives), which may differ
-        // from the relay we're viewing it through. The copied nevent embeds this so readers fetch
-        // the event from its real home, not from wherever we happened to be connected.
-        val allGroupsByRelay = useStateFlow(AppModule.nostrRepository.groupsByRelay)
-        val neventRelay =
-            allGroupsByRelay.entries.firstOrNull { it.value.any { g -> g.id == group.id } }?.key ?: relayUrl
+        // Copied nevents and links embed the relay this group is open on. Scanning for "some relay
+        // serving this id" would hand out the other relay's same-id group, and the link would open
+        // a stranger's chat.
         // Pure per-message values (bech32 nevent, the event JSON, the share link): expensive to
         // compute and constant for a message, so build them once per message-list change instead of
         // re-encoding/re-serializing all 200 rows on every re-render.
         val rowMeta =
-            useMemo(messages, group.id, relayUrl, neventRelay) {
-                val host = relayUrl.removePrefix("wss://").removePrefix("ws://")
+            useMemo(messages, group.id, hostRelay) {
+                val host = hostRelay.removePrefix("wss://").removePrefix("ws://")
                 messages.associate { m ->
                     m.id to
                         RowMeta(
-                            nevent = Nip19.encodeNevent(m.id, relays = listOf(neventRelay), authorHex = m.pubkey, kind = m.kind),
+                            nevent = Nip19.encodeNevent(m.id, relays = listOf(hostRelay), authorHex = m.pubkey, kind = m.kind),
                             eventJson = m.toEventJson(),
                             link = "https://nostrord.com/open/?relay=$host&group=${group.id}&e=${m.id}",
                         )
@@ -2125,6 +2127,7 @@ val ChatScreen =
                                             val zapInfo = zapsByMsg[message.id]
                                             val meta = rowMeta[message.id]
                                             MessageRow {
+                                                this.relayUrl = hostRelay
                                                 key = message.id
                                                 domId = "msg-${message.id}"
                                                 highlighted = message.id == highlightId
@@ -2454,6 +2457,7 @@ val ChatScreen =
                 "share" ->
                     ShareGroupModal {
                         this.group = group
+                        this.relayUrl = hostRelay
                         onClose = { setModal(null) }
                     }
                 "members" ->
@@ -2750,6 +2754,9 @@ external interface MessageRowProps : Props {
 
     /** Group this row belongs to; scopes a quoted event's by-id REQ with `#h`. */
     var groupId: String
+
+    /** Relay that group is open on; copied links and quote resolution are scoped to it. */
+    var relayUrl: String
     var onEventRef: (String) -> Unit
     var onGroupRef: (String, String?) -> Unit
     var replyTo: ReplyPreviewData?
@@ -3092,6 +3099,7 @@ private val MessageRow =
                         props.onEventRef,
                         props.onGroupRef,
                         props.groupId,
+                        props.relayUrl,
                     )
                     // Send-state icon (own messages: clock while sending, check when
                     // delivered) flows inline after the content so no extra line shifts
@@ -3447,6 +3455,9 @@ internal fun ChildrenBuilder.renderMessageContent(
     /** Group this message was read in: a quoted event is looked up with `#h`, which some
      *  NIP-29 relays require even for a lookup by id. */
     groupId: String?,
+    /** Relay that group is open on. A quote of the same id on another relay is a quote of a
+     *  different group, so the card must forward instead of resolving locally. */
+    hostRelay: String,
 ) {
     // Markdown image embeds collapse to their bare url so URL_REGEX sees a plain link; the
     // surrounding `![alt](` / `)` would otherwise render as literal text. Mirrors native.
@@ -3459,16 +3470,16 @@ internal fun ChildrenBuilder.renderMessageContent(
     var qLast = 0
     for (q in BLOCKQUOTE_REGEX.findAll(content)) {
         if (q.range.first > qLast) {
-            renderBody(content.substring(qLast, q.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+            renderBody(content.substring(qLast, q.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
         }
         div {
             className = ClassName("msg-quote")
-            renderBody(q.value.replace(BLOCKQUOTE_LINE_PREFIX, ""), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+            renderBody(q.value.replace(BLOCKQUOTE_LINE_PREFIX, ""), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
         }
         qLast = q.range.last + 1
     }
     if (qLast < content.length) {
-        renderBody(content.substring(qLast), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+        renderBody(content.substring(qLast), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
     }
 }
 
@@ -3486,11 +3497,14 @@ private fun ChildrenBuilder.renderBody(
     /** Group this message was read in: a quoted event is looked up with `#h`, which some
      *  NIP-29 relays require even for a lookup by id. */
     groupId: String?,
+    /** Relay that group is open on. A quote of the same id on another relay is a quote of a
+     *  different group, so the card must forward instead of resolving locally. */
+    hostRelay: String,
 ) {
     var last = 0
     for (block in CODE_BLOCK_REGEX.findAll(content)) {
         if (block.range.first > last) {
-            renderInline(content.substring(last, block.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+            renderInline(content.substring(last, block.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
         }
         val lang = block.groupValues[1].takeIf { it.isNotBlank() }
         div {
@@ -3509,7 +3523,7 @@ private fun ChildrenBuilder.renderBody(
         last = block.range.last + 1
     }
     if (last < content.length) {
-        renderInline(content.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+        renderInline(content.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
     }
 }
 
@@ -3527,11 +3541,14 @@ private fun ChildrenBuilder.renderInline(
     /** Group this message was read in: a quoted event is looked up with `#h`, which some
      *  NIP-29 relays require even for a lookup by id. */
     groupId: String?,
+    /** Relay that group is open on. A quote of the same id on another relay is a quote of a
+     *  different group, so the card must forward instead of resolving locally. */
+    hostRelay: String,
 ) {
     var last = 0
     for (m in INLINE_CODE_REGEX.findAll(text)) {
         if (m.range.first > last) {
-            renderEntities(text.substring(last, m.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+            renderEntities(text.substring(last, m.range.first), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
         }
         code {
             className = ClassName("msg-code")
@@ -3540,7 +3557,7 @@ private fun ChildrenBuilder.renderInline(
         last = m.range.last + 1
     }
     if (last < text.length) {
-        renderEntities(text.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId)
+        renderEntities(text.substring(last), emojiMap, posters, dims, userMetadata, messagesById, onUser, onEventRef, onGroupRef, groupId, hostRelay)
     }
 }
 
@@ -3557,6 +3574,9 @@ private fun ChildrenBuilder.renderEntities(
     /** Group this message was read in: a quoted event is looked up with `#h`, which some
      *  NIP-29 relays require even for a lookup by id. */
     groupId: String?,
+    /** Relay that group is open on. A quote of the same id on another relay is a quote of a
+     *  different group, so the card must forward instead of resolving locally. */
+    hostRelay: String,
 ) {
     var last = 0
     for (match in URL_REGEX.findAll(content)) {
@@ -3641,6 +3661,7 @@ private fun ChildrenBuilder.renderEntities(
                         kind = entity.kind
                         localById = messagesById
                         this.groupId = groupId
+                        this.relayUrl = hostRelay
                         onScrollTo = onEventRef
                         this.onUser = onUser
                         this.onGroupRef = onGroupRef
@@ -3653,6 +3674,7 @@ private fun ChildrenBuilder.renderEntities(
                         kind = null
                         localById = messagesById
                         this.groupId = groupId
+                        this.relayUrl = hostRelay
                         onScrollTo = onEventRef
                         this.onUser = onUser
                         this.onGroupRef = onGroupRef
@@ -3753,6 +3775,9 @@ private external interface QuotedEventProps : Props {
 
     /** Group the reference was read in; scopes the by-id REQ with `#h`. */
     var groupId: String?
+
+    /** Relay that group is open on, for telling a local quote from a same-id cross-relay one. */
+    var relayUrl: String
     var onScrollTo: (String) -> Unit
     var onUser: (String) -> Unit
     var onGroupRef: (String, String?) -> Unit
@@ -3834,13 +3859,21 @@ private val QuotedEvent =
         val groupsByRelay = useStateFlow(repo.groupsByRelay)
         val refGroupId =
             cachedEv?.tags?.firstOrNull { it.size >= 2 && it.getOrNull(0) == "h" }?.getOrNull(1)
-        val isForwarded = local == null && refGroupId != null
-        // Navigate using the nevent's own relay hint — that's where the event lives. The
-        // navigation effect connects that relay on demand if it isn't already, then loads the
-        // group + scrolls to the message. (The group name/avatar below resolve from any relay we
-        // already know the group on, so the header still fills in.)
-        val fwdRelay = props.relays.firstOrNull()
-        val fwdGroupMeta = refGroupId?.let { gid -> groupsByRelay.values.flatten().firstOrNull { it.id == gid } }
+        // Navigate using the nevent's own relay hint — that's where the event lives. Normalized so
+        // a hint like "wss://Relay/" routes to the same slot as the connected relay. The navigation
+        // effect connects that relay on demand, then loads the group + scrolls to the message.
+        val fwdRelay = props.relays.firstOrNull()?.normalizeRelayUrl()
+        // A quote of the same group id on a DIFFERENT relay is a quote of a different group, so it
+        // forwards too: otherwise it renders as local and the click never leaves this chat.
+        val isForwarded =
+            refGroupId != null && (local == null || (fwdRelay != null && fwdRelay != props.relayUrl.normalizeRelayUrl()))
+        // The source relay's own kind:39000 names the card; a same-id group elsewhere is a
+        // different group and must not paint it.
+        val fwdGroupMeta =
+            refGroupId?.let { gid ->
+                val onSource = fwdRelay?.let { r -> groupsByRelay.entries.firstOrNull { it.key.normalizeRelayUrl() == r }?.value }
+                onSource?.firstOrNull { it.id == gid } ?: groupsByRelay.values.flatten().firstOrNull { it.id == gid }
+            }
         val fwdGroupName = fwdGroupMeta?.name?.takeIf { it.isNotBlank() } ?: refGroupId.orEmpty()
         useEffect(refGroupId, fwdRelay, fwdGroupMeta?.name) {
             if (isForwarded && refGroupId != null && fwdRelay != null && fwdGroupMeta?.name == null) {
@@ -4050,6 +4083,7 @@ private val QuotedEvent =
                                 props.onScrollTo,
                                 props.onGroupRef,
                                 props.groupId,
+                                props.relayUrl,
                             )
                         }
                     }
@@ -4086,6 +4120,7 @@ private val QuotedEvent =
                             props.onScrollTo,
                             props.onGroupRef,
                             props.groupId,
+                            props.relayUrl,
                         )
                     }
                 }

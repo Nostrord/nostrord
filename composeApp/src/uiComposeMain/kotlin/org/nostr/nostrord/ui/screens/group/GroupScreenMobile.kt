@@ -257,6 +257,7 @@ fun GroupScreenMobile(
                         ) {
                             MessagesList(
                                 groupId = groupId,
+                                hostRelayUrl = relayUrl,
                                 chatItems = chatItems,
                                 messages = messages,
                                 userMetadata = userMetadata,

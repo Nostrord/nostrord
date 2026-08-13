@@ -109,6 +109,8 @@ private fun LazyListState.scrollSearchHitToTop(index: Int) {
 @Composable
 fun MessagesList(
     groupId: String,
+    /** Relay this group is open on. Every copied nevent/link points here. */
+    hostRelayUrl: String = "",
     chatItems: List<ChatItem>,
     messages: List<NostrGroupClient.NostrMessage> = emptyList(),
     userMetadata: Map<String, UserMetadata>,
@@ -205,11 +207,10 @@ fun MessagesList(
     }
     val imageViewerUrl = remember { mutableStateOf<String?>(null) }
     val currentRelayUrl by AppModule.nostrRepository.currentRelayUrl.collectAsState()
-    // Relay that HOSTS this group (its kind:39000 home), which may differ from the relay we're
-    // viewing it through. The copied nevent embeds this so readers fetch from the event's real home.
-    val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
-    val neventRelay =
-        groupsByRelay.entries.firstOrNull { entry -> entry.value.any { it.id == groupId } }?.key ?: currentRelayUrl
+    // Copied nevents and links carry the relay this group is open on. Scanning for "some relay
+    // serving this id" would hand out the other relay's same-id group, and the link would open a
+    // stranger's chat.
+    val neventRelay = hostRelayUrl.ifBlank { currentRelayUrl.orEmpty() }.takeIf { it.isNotBlank() }
     val copyToClipboard = rememberClipboardWriter()
     val shareText = rememberTextSharer()
 
@@ -772,11 +773,11 @@ fun MessagesList(
                                             },
                                             onCopyText = { copyToClipboard(item.message.content) },
                                             onCopyLink = {
-                                                val relay = currentRelayUrl ?: return@MessageItem
+                                                val relay = neventRelay ?: return@MessageItem
                                                 copyToClipboard(buildShareMessageLink(relay, groupId, item.message.id))
                                             },
                                             onShareLink = {
-                                                val relay = currentRelayUrl ?: return@MessageItem
+                                                val relay = neventRelay ?: return@MessageItem
                                                 shareText(buildShareMessageLink(relay, groupId, item.message.id))
                                             },
                                             onCopyJson = {
