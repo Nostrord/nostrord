@@ -44,6 +44,7 @@ import org.nostr.nostrord.utils.epochSeconds
 import org.nostr.nostrord.utils.formatDateTime
 import org.nostr.nostrord.utils.formatTime
 import org.nostr.nostrord.utils.formatTimestamp
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeForSearch
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.shortNpub
@@ -290,7 +291,6 @@ private val ChatComposer =
         val members = props.members
         val userMetadata = props.userMetadata
         val allGroups = props.allGroups
-        val relayUrl = props.relayUrl
         val groupName = props.groupName
 
         val (draft, setDraft) = useState { "" }
@@ -327,11 +327,12 @@ private val ChatComposer =
         val composerInputRef = useRef<HTMLTextAreaElement>(null)
         val composerHighlightRef = useRef<HTMLDivElement>(null)
 
-        // Per-group draft: restore what was being typed when this group was last open.
-        // Runs on group change only (the same component is reused across groups, so the
-        // draft state would otherwise leak from one group to the next).
-        useEffect(props.groupId) {
-            val draftEntry = AppModule.messageDraftStore.get(props.groupId)
+        // Per-chat draft: restore what was being typed when this chat was last open. Keyed by
+        // (relay, group) so the same group id on another relay keeps its own draft. Runs on chat
+        // change only (the same component is reused, so the state would otherwise leak forward).
+        val draftKey = groupKey(props.relayUrl, props.groupId)
+        useEffect(draftKey) {
+            val draftEntry = AppModule.messageDraftStore.get(draftKey)
             setDraft(draftEntry.text)
             setMentions(draftEntry.mentions)
             setGroupMentions(draftEntry.groupMentions)
@@ -340,9 +341,9 @@ private val ChatComposer =
         // on every keystroke is free. On group switch this effect's deps are still the old
         // group's values, so it does not fire until the load effect above swaps them in.
         useEffect(draft, mentions, groupMentions) {
-            AppModule.messageDraftStore.setText(props.groupId, draft)
-            AppModule.messageDraftStore.setMentions(props.groupId, mentions)
-            AppModule.messageDraftStore.setGroupMentions(props.groupId, groupMentions)
+            AppModule.messageDraftStore.setText(draftKey, draft)
+            AppModule.messageDraftStore.setMentions(draftKey, mentions)
+            AppModule.messageDraftStore.setGroupMentions(draftKey, groupMentions)
         }
 
         // Autocomplete suggestions for the active mention (members for @, groups for %).
@@ -1078,8 +1079,7 @@ val ChatScreen =
         // Restricted: relay returned a CLOSED "restricted" frame for this group.
         // Used to render the "Private group" UI in place of skeletons when the
         // account has no read access (NIP-29 private+closed group).
-        val restrictedGroups = useStateFlow(vm.restrictedGroups)
-        val isGroupRestricted = group.id in restrictedGroups
+        val isGroupRestricted = useStateFlow(vm.isRestrictedHere)
         // Orphaned: pinned in kind:10009 but the relay served no kind:39000 after its group list
         // finished, i.e. the group was deleted / no longer exists. Drives the "no longer available"
         // panel instead of perpetual loading skeletons.
@@ -2271,7 +2271,7 @@ val ChatScreen =
                         this.members = members
                         this.allGroups = allGroups
                         this.userMetadata = userMetadata
-                        this.relayUrl = relayUrl
+                        this.relayUrl = hostRelay
                         this.relayPubkeyOf = { r -> relayMetadata[r]?.groupNaddrAuthor ?: relayMetadata[r.normalizeRelayUrl()]?.groupNaddrAuthor }
                         this.replyingToId = replyingToId
                         this.replyNonce = replyNonce

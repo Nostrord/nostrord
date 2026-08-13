@@ -86,6 +86,7 @@ import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.ui.theme.rememberEmojiFontFamily
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.formatTimestamp
+import org.nostr.nostrord.utils.groupKey
 
 /**
  * Message input field with Discord-style keyboard behavior.
@@ -104,6 +105,8 @@ fun MessageInput(
     onCancelJoinRequest: () -> Unit = {},
     selectedChannel: String,
     groupId: String,
+    /** Relay this group is open on; the draft slot is per (relay, group). */
+    hostRelayUrl: String = "",
     groupName: String?,
     messageInput: String,
     onSendMessage: (String) -> Unit,
@@ -182,17 +185,18 @@ fun MessageInput(
     // Seed the field from the saved per-group draft and re-seed when the group changes,
     // so leaving a group and coming back restores the unsent text (text lives here, not
     // hoisted to the screen, so this is the source of truth for the draft body).
-    var textFieldValue by remember(groupId) {
-        val savedText = AppModule.messageDraftStore.get(groupId).text
+    val chatKey = groupKey(hostRelayUrl, groupId)
+    var textFieldValue by remember(chatKey) {
+        val savedText = AppModule.messageDraftStore.get(chatKey).text
         mutableStateOf(TextFieldValue(savedText, TextRange(savedText.length)))
     }
 
     // Persist the text on every change to the in-memory draft store. snapshotFlow keeps
     // this out of composition (a plain map write, no recomposition), so it does not
     // reintroduce the per-keystroke chat re-render this composer was split out to avoid.
-    LaunchedEffect(groupId) {
+    LaunchedEffect(chatKey) {
         snapshotFlow { textFieldValue.text }
-            .collect { AppModule.messageDraftStore.setText(groupId, it) }
+            .collect { AppModule.messageDraftStore.setText(chatKey, it) }
     }
 
     suspend fun handlePastedMedia(bytes: ByteArray, filename: String) {

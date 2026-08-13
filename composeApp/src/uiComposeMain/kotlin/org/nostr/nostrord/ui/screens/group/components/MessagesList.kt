@@ -81,6 +81,7 @@ import org.nostr.nostrord.ui.scroll.JumpPillTarget
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.ui.util.buildShareMessageLink
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.rememberClipboardWriter
 import org.nostr.nostrord.utils.rememberTextSharer
 import kotlin.time.Duration.Companion.milliseconds
@@ -231,7 +232,9 @@ fun MessagesList(
                 LazyListState()
             }
         }
-    val scrollStateHolder = rememberScrollStateHolder(groupId)
+    // Scroll position belongs to (relay, group): the twin group on another relay has its own.
+    val chatKey = groupKey(hostRelayUrl, groupId)
+    val scrollStateHolder = rememberScrollStateHolder(chatKey)
     val isSeekingTarget = targetMessageId != null
 
     // Two-stage jump pill: the first tap focuses the "New messages" divider, the next
@@ -271,7 +274,7 @@ fun MessagesList(
     val currentSearchActive by rememberUpdatedState(searchActive)
 
     ScrollPositionEffect(
-        groupId = groupId,
+        chatKey = chatKey,
         listState = listState,
         items = chatItems,
         stateHolder = scrollStateHolder,

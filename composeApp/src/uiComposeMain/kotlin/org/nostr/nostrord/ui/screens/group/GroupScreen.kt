@@ -42,6 +42,7 @@ import org.nostr.nostrord.ui.screens.group.model.buildChatItems
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.shortNpub
 
@@ -138,13 +139,15 @@ fun GroupScreen(
     val allGroupAdmins by vm.groupAdmins.collectAsState()
     val loadingMembersSet by vm.loadingMembers.collectAsState()
     val currentRelayUrl by vm.currentRelayUrl.collectAsState()
-    val allRestrictedGroups by vm.restrictedGroups.collectAsState()
     // Orphaned: pinned in kind:10009 but no kind:39000 from the relay (deleted / gone). Shows a
     // "no longer available" panel instead of the perpetual loading skeletons.
     val isOrphaned by vm.isOrphaned.collectAsState()
     val childrenByParent by vm.childrenByParent.collectAsState()
     // Subgroup UI is gated on the relay advertising nip29:{subgroups:true} in its NIP-11 (mirrors GroupSidebar).
     val screenRelay = relayUrl ?: currentRelayUrl
+    // Composer draft and scroll position belong to (relay, group), so the twin group on
+    // another relay never shows this one's half-typed message.
+    val chatKey = groupKey(screenRelay, groupId)
     val supportsSubgroups =
         (relayMetadata[screenRelay] ?: relayMetadata[screenRelay.normalizeRelayUrl()])?.supportsSubgroups == true
     val currentUserPubkey = vm.getPublicKey()
@@ -175,7 +178,7 @@ fun GroupScreen(
                 }.distinctBy { it.id }
         }
 
-    val isGroupRestricted = allRestrictedGroups.containsKey(groupId)
+    val isGroupRestricted by vm.isRestrictedHere.collectAsState()
 
     val parentGroupName =
         remember(groups, currentGroupMetadata?.parent, childrenByParent, groupId) {
@@ -205,9 +208,9 @@ fun GroupScreen(
     // Mention maps are part of the per-group draft: seed from the store on group change so
     // an @user / %group typed before switching is restored (and doesn't bleed into the next
     // group, which the un-keyed remember used to do).
-    var mentions by remember(groupId) { mutableStateOf(AppModule.messageDraftStore.get(groupId).mentions) }
-    var groupMentions by remember(groupId) {
-        mutableStateOf(decodeGroupMentions(AppModule.messageDraftStore.get(groupId).groupMentions))
+    var mentions by remember(chatKey) { mutableStateOf(AppModule.messageDraftStore.get(chatKey).mentions) }
+    var groupMentions by remember(chatKey) {
+        mutableStateOf(decodeGroupMentions(AppModule.messageDraftStore.get(chatKey).groupMentions))
     }
     var replyingToMessage by remember(groupId) { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
     // Bumped on EVERY reply tap so re-replying to the same message still refocuses the
@@ -395,12 +398,12 @@ fun GroupScreen(
     // Persist the per-group draft's mention maps whenever they change (MessageInput owns
     // and persists the text itself). Plain in-memory map writes, no recomposition. When a
     // send clears mentions (and the text), the store entry empties and is dropped.
-    LaunchedEffect(groupId) {
-        snapshotFlow { mentions }.collect { AppModule.messageDraftStore.setMentions(groupId, it) }
+    LaunchedEffect(chatKey) {
+        snapshotFlow { mentions }.collect { AppModule.messageDraftStore.setMentions(chatKey, it) }
     }
-    LaunchedEffect(groupId) {
+    LaunchedEffect(chatKey) {
         snapshotFlow { groupMentions }.collect {
-            AppModule.messageDraftStore.setGroupMentions(groupId, encodeGroupMentions(it))
+            AppModule.messageDraftStore.setGroupMentions(chatKey, encodeGroupMentions(it))
         }
     }
 
