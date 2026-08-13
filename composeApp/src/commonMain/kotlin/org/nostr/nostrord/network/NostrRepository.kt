@@ -326,6 +326,11 @@ class NostrRepository(
     // never answers, or genuinely malformed ones.
     private val DM_MAX_DECRYPT_ATTEMPTS = 10
 
+    // How long the full-sync latch waits for a subscribed DM relay to EOSE before treating it as
+    // settled. Generous: it only has to outlast a slow backlog delivery, and latching early on a
+    // relay still streaming would advance the cursor past undelivered wraps.
+    private val DM_INBOX_EOSE_TIMEOUT_MS = 90_000L
+
     // Keeps the decrypt backlog off the signer for the first seconds of a session so
     // login-critical signs (NIP-42 AUTH, handshake acks - including another device's login
     // against the same signer) find its queue empty. Set in startDmInbox.
@@ -377,11 +382,24 @@ class NostrRepository(
     @kotlin.concurrent.Volatile
     private var dmGivenUpWrapIds: Set<String> = emptySet()
 
+    // created_at of the oldest wrap given up this session, 0 when none. The full-sync latch rewinds
+    // the sync cursor to it, so the next session's incremental REQ still covers the wraps this one
+    // could not decrypt instead of skipping past them forever.
+    @kotlin.concurrent.Volatile
+    private var dmGivenUpOldestAt: Long = 0L
+
     // Which DM relays have EOSEd the inbox sub this session. The full-sync latch waits for ALL
     // subscribed DM relays, so a relay that EOSEs early with an empty/partial set can't latch
     // "synced" before the slower relays deliver the rest of the backlog.
     @kotlin.concurrent.Volatile
     private var dmInboxEosedRelays: Set<String> = emptySet()
+
+    // Deadline for the wait above. A relay that accepts the REQ and never EOSEs (or silently drops
+    // the sub) would otherwise pin `since = 0` forever, so every launch re-streams the whole
+    // backlog. Past the deadline the silent relays count as settled, provided at least one relay
+    // did answer.
+    @kotlin.concurrent.Volatile
+    private var dmInboxEoseDeadlineMs: Long = 0L
     private var dmProcessedSaveJob: kotlinx.coroutines.Job? = null
     private var dmSeenRelaysSaveJob: kotlinx.coroutines.Job? = null
 
@@ -3000,6 +3018,7 @@ class NostrRepository(
         dmInFlightWrapIds = emptySet()
         dmFailCounts = emptyMap()
         dmGivenUpWrapIds = emptySet()
+        dmGivenUpOldestAt = 0L
         dmInboxEosedRelays = emptySet()
 
         // Consistency guard: decrypt progress claims processed wraps, but the message store
@@ -3061,6 +3080,10 @@ class NostrRepository(
                     val pending = dmReceivedWrapIds.count { it !in dmProcessedWrapIds && it !in dmGivenUpWrapIds }
                     if (pending > 0) {
                         resendDmInboxReq(pub)
+                    } else {
+                        // Nothing arriving means nothing calls the latch: re-check here so an
+                        // expired EOSE deadline can still close the sync.
+                        maybeLatchDmFullSync(pub)
                     }
                 }
             }
@@ -3080,6 +3103,7 @@ class NostrRepository(
                         if (!connected) return@collect
                         if (dmGivenUpWrapIds.isEmpty() && dmFailCounts.isEmpty()) return@collect
                         dmGivenUpWrapIds = emptySet()
+                        dmGivenUpOldestAt = 0L
                         dmFailCounts = emptyMap()
                         sessionManager.getPublicKey()?.let { resendDmInboxReq(it) }
                     }
@@ -3299,11 +3323,20 @@ class NostrRepository(
         // freezes `since` at now so the next launch's incremental REQ excludes the older wraps and
         // they are never re-requested (the inbox stalls partway through across restarts).
         val subscribed = dmInboxSubscribedRelays
-        if (subscribed.isEmpty() || !dmInboxEosedRelays.containsAll(subscribed)) return
-        if (!dmProcessedWrapIds.containsAll(dmReceivedWrapIds)) return
+        if (subscribed.isEmpty()) return
+        // Past the deadline the silent relays count as settled, but at least one relay must have
+        // EOSEd: latching off a pool where nothing answered would call an unsynced inbox complete.
+        val deadlinePassed = dmInboxEoseDeadlineMs > 0L && org.nostr.nostrord.utils.epochMillis() > dmInboxEoseDeadlineMs
+        if (!dmInboxEosedRelays.containsAll(subscribed) && !(deadlinePassed && dmInboxEosedRelays.isNotEmpty())) return
+        // Wraps given up this session count as settled too, otherwise one permanently undecryptable
+        // wrap pins `since = 0` and every launch re-streams the entire backlog. They are not lost:
+        // the cursor below rewinds to the oldest of them so the next REQ still covers them.
+        if (dmReceivedWrapIds.any { it !in dmProcessedWrapIds && it !in dmGivenUpWrapIds }) return
         SecureStorage.saveDmProcessedWrapIds(myPub, dmProcessedWrapIds)
         SecureStorage.saveBooleanPref(dmFullSyncKey(myPub), true)
-        SecureStorage.saveDmSyncCursor(myPub, epochSeconds())
+        val now = epochSeconds()
+        val cursor = if (dmGivenUpOldestAt > 0L) minOf(dmGivenUpOldestAt, now) else now
+        SecureStorage.saveDmSyncCursor(myPub, cursor)
     }
 
     // DM relays the inbox sub is currently subscribed on, so a re-derived (but unchanged)
@@ -3349,7 +3382,14 @@ class NostrRepository(
                 add(filter)
             }.toString()
         val urls = dmRelaysWithDefaults(myPub).distinct()
-        dmInboxSubscribedRelays = urls.toSet()
+        val urlSet = urls.toSet()
+        // Arm (or re-arm) the EOSE deadline only when a relay joins the sub: a plain resend of the
+        // same set must not keep pushing the deadline out, or the 120s retry loop below would defer
+        // the latch forever on a relay that never EOSEs.
+        if (!dmInboxSubscribedRelays.containsAll(urlSet)) {
+            dmInboxEoseDeadlineMs = org.nostr.nostrord.utils.epochMillis() + DM_INBOX_EOSE_TIMEOUT_MS
+        }
+        dmInboxSubscribedRelays = urlSet
         // Keep DM relays alive: register them with the reconnect scheduler so a dropped DM
         // socket is revived (and re-subscribed via resubscribePoolRelay) rather than going
         // silent until the next app start. They host no NIP-29 groups, so group-resubscribe
@@ -6187,6 +6227,10 @@ class NostrRepository(
                             if (fails >= DM_MAX_DECRYPT_ATTEMPTS) {
                                 dmGivenUpWrapIds = dmGivenUpWrapIds + wrapId
                                 refreshDmSyncing()
+                                val at = giftWrap.createdAt
+                                if (dmGivenUpOldestAt == 0L || at < dmGivenUpOldestAt) dmGivenUpOldestAt = at
+                                // Settling the last unprocessed wrap can complete the sync.
+                                maybeLatchDmFullSync(myPub)
                             }
                         }
                     } finally {
