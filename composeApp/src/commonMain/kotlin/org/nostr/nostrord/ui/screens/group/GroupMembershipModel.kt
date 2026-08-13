@@ -9,6 +9,8 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.GroupMetadata
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.NostrRepositoryApi
+import org.nostr.nostrord.utils.groupKey
+import org.nostr.nostrord.utils.groupKeyId
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
@@ -144,7 +146,14 @@ class GroupMembershipModel(
             if (meta != null) {
                 GroupAccess(isPrivate = !meta.isPublic, isOpen = meta.isOpen)
             } else {
-                val restrictedHere = groupId in restricted
+                // Denied on THIS relay only: the twin group's denial elsewhere says nothing
+                // about access here.
+                val restrictedHere =
+                    if (hostRelay != null) {
+                        groupKey(hostRelay, groupId) in restricted
+                    } else {
+                        restricted.keys.any { groupKeyId(it) == groupId }
+                    }
                 GroupAccess(isPrivate = restrictedHere, isOpen = !restrictedHere)
             }
         }.stateIn(scope, SharingStarted.Eagerly, GroupAccess())

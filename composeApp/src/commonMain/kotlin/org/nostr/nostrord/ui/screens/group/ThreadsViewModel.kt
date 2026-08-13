@@ -21,6 +21,8 @@ import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.groupKey
+import org.nostr.nostrord.utils.groupKeyId
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /** One row in the threads list: a kind:11 root plus stats derived from its kind:1111 replies. */
@@ -433,11 +435,21 @@ class ThreadsViewModel(
         }
     }
 
+    /**
+     * Denied on THIS relay. Access is granted per relay, so the twin group's denial elsewhere
+     * must not lock this pane. With no host relay on the route, any denial for the id counts.
+     */
+    private fun restrictedHere(restricted: Map<String, String>): Boolean = if (hostRelay != null) {
+        groupKey(hostRelay, groupId) in restricted
+    } else {
+        restricted.keys.any { groupKeyId(it) == groupId }
+    }
+
     /** The relay withholds this group's events until you are a member (NIP-29 private group). */
     val isRestricted: StateFlow<Boolean> =
         repo.restrictedGroups
-            .map { groupId in it }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), groupId in repo.restrictedGroups.value)
+            .map { restrictedHere(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), restrictedHere(repo.restrictedGroups.value))
 
     /** A join request is in flight and no admin has answered yet. */
     val isPendingApproval: StateFlow<Boolean> =

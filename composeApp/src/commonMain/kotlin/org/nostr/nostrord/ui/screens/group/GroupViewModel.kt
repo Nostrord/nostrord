@@ -31,6 +31,8 @@ import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.groupKey
+import org.nostr.nostrord.utils.groupKeyId
 import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.shortNpub
@@ -314,7 +316,24 @@ class GroupViewModel(
             }.stateIn(viewModelScope, SharingStarted.Eagerly, repo.groupRoles.value)
         }
     val loadingMembers = repo.loadingMembers
-    val restrictedGroups = repo.restrictedGroups
+
+    /**
+     * The route's relay withholds this group's events until you are a member. Scoped to
+     * (relay, group): access is granted per relay, so the twin group's denial elsewhere must
+     * not lock this screen. Both UIs read this instead of the raw map, which is keyed by
+     * [groupKey] and would silently match the wrong group by bare id.
+     */
+    val isRestrictedHere: StateFlow<Boolean> =
+        repo.restrictedGroups
+            .map { restrictedHere(it) }
+            .distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private fun restrictedHere(restricted: Map<String, String>): Boolean = if (hostRelay != null) {
+        groupKey(hostRelay, groupId) in restricted
+    } else {
+        restricted.keys.any { groupKeyId(it) == groupId }
+    }
     val isLoadingMore = repo.isLoadingMore
     val hasMoreMessages = repo.hasMoreMessages
     val currentRelayUrl = repo.currentRelayUrl
@@ -370,7 +389,7 @@ class GroupViewModel(
             val relayDone = (hostRelay ?: currentRelay.normalizeRelayUrl()) in doneRelays
             relayDone &&
                 !hasMetadata &&
-                groupId !in restricted &&
+                !restrictedHere(restricted) &&
                 connState is ConnectionManager.ConnectionState.Connected
         }.flatMapLatest { gone ->
             // The relay's group-list EOSE can land before this group's kind:39000, so hold the verdict

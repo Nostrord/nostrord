@@ -51,6 +51,7 @@ import org.nostr.nostrord.storage.cache.CacheStore
 import org.nostr.nostrord.storage.cache.createCacheStore
 import org.nostr.nostrord.ui.text.flattenMarkdownForPreview
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 
 /**
@@ -388,7 +389,7 @@ object AppModule {
             isJoined = { relayUrl, groupId ->
                 groupManager.joinedGroupsByRelay.value[relayUrl].orEmpty().contains(groupId)
             },
-            isRestricted = { _, groupId -> groupManager.restrictedGroups.value.containsKey(groupId) },
+            isRestricted = { relayUrl, groupId -> groupKey(relayUrl, groupId) in groupManager.restrictedGroups.value },
             isAppFocused = { focusTracker.isAppFocused.value },
             findMessageAuthor = { messageId ->
                 groupManager.findMessageByIdAcrossGroups(messageId)?.second?.pubkey
