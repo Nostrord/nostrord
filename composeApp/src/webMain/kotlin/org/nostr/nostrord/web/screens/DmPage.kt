@@ -432,8 +432,10 @@ val DmPage =
                                             { props.onOpenProfile(UserRoute(it)) },
                                             {},
                                             { gid, relay -> relay?.let { props.onOpenGroup(GroupRoute(it, gid)) } },
-                                            // A DM is not in a group: the by-id REQ stays unscoped.
+                                            // A DM is not in a group: the by-id REQ stays unscoped
+                                            // and there is no host relay to compare a quote against.
                                             null,
+                                            "",
                                         )
                                     }
                                     if (invite != null) {

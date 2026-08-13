@@ -89,6 +89,7 @@ import org.nostr.nostrord.utils.formatTime
 import org.nostr.nostrord.utils.getImageUrl
 import org.nostr.nostrord.utils.isAnimatedImageUrl
 import org.nostr.nostrord.utils.isBlockedImageHost
+import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.proxyViaWeserv
 import org.nostr.nostrord.utils.rememberClipboardWriter
 import org.nostr.nostrord.utils.shortNpub
@@ -1367,11 +1368,16 @@ private fun ThreadQuoteCard(
     val groupId = extractGroupFromEvent(event)?.first ?: currentGroupId
     val navigate = LocalFrameNavigator.current
     val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
-    // Flattening every relay's group list is an allocation plus a linear scan, and this card sits
-    // in a scrolling list: keyed so it runs when the lists change, not on every recomposition.
-    val groupName = remember(groupsByRelay, groupId) {
-        groupId?.let { gid -> groupsByRelay.values.flatten().firstOrNull { it.id == gid }?.name }
-            ?.takeIf { it.isNotBlank() }
+    // The hinted relay's own kind:39000 names the card; a same-id group elsewhere is a different
+    // group. Keyed so the scan runs when the lists change, not on every recomposition (this card
+    // sits in a scrolling list).
+    val groupName = remember(groupsByRelay, groupId, relayHint) {
+        groupId?.let { gid ->
+            val onHint = relayHint?.let { r ->
+                groupsByRelay.entries.firstOrNull { e -> e.key.normalizeRelayUrl() == r.normalizeRelayUrl() }?.value
+            }
+            (onHint?.firstOrNull { it.id == gid } ?: groupsByRelay.values.flatten().firstOrNull { it.id == gid })?.name
+        }?.takeIf { it.isNotBlank() }
     }
 
     val title = event.tags.firstOrNull { it.size >= 2 && (it[0] == "subject" || it[0] == "title") }
@@ -1840,7 +1846,7 @@ private fun QuotedEvent(
         ThreadQuoteCard(
             event = event,
             eventId = eventId,
-            relayHint = extractGroupFromEvent(event)?.second ?: relayHints.firstOrNull() ?: currentRelayUrl,
+            relayHint = (extractGroupFromEvent(event)?.second ?: relayHints.firstOrNull() ?: currentRelayUrl)?.normalizeRelayUrl(),
             currentGroupId = currentGroupId,
             modifier = modifier,
         )
@@ -1851,34 +1857,40 @@ private fun QuotedEvent(
     if (event != null) {
         val sourceGroupInfo = extractGroupFromEvent(event)
         if (sourceGroupInfo != null) {
-            val (sourceGroupId, sourceRelayUrl) = sourceGroupInfo
+            val (sourceGroupId, sourceRelayUrlRaw) = sourceGroupInfo
+            // The `h` tag rarely carries a relay; the nevent's hint is what says which relay's
+            // copy of the group the event lives in. Normalized so a hint like "wss://Relay/"
+            // compares and routes as the same relay as the connected one.
+            val sourceRelayUrl = (sourceRelayUrlRaw ?: relayHints.firstOrNull())?.normalizeRelayUrl()
+            val hostRelay = currentRelayUrl?.normalizeRelayUrl()
 
-            // Determine if this is a forwarded event
-            // It's forwarded if: we have a current group context AND the source group is different
-            // OR if the source relay is different from current relay
+            // Forwarded when the source is a different group. A different relay makes it a
+            // different group even at the same id: quoting 0xchat's "nostrord" inside wisp's
+            // "nostrord" must open 0xchat's, not silently stay here.
             val isFromDifferentGroup =
                 when {
                     currentGroupId != null && sourceGroupId != currentGroupId -> true
-                    currentRelayUrl != null &&
-                        sourceRelayUrl != null &&
-                        sourceRelayUrl != currentRelayUrl -> true
+                    hostRelay != null && sourceRelayUrl != null && sourceRelayUrl != hostRelay -> true
                     // If no current context provided, assume it's a quote from same group (not forwarded)
                     else -> false
                 }
 
             if (isFromDifferentGroup) {
-                // Look up the source group across ALL relays (not just the current one) so a
-                // cross-relay forwarded group still shows its name + avatar; fetch a preview from
-                // the relay hint when we don't know it yet (parity with web / GroupLinkCard).
+                // Prefer the source relay's own kind:39000 for the card's name + avatar; a same-id
+                // group on another relay is a different group and must not paint this card. Fetch a
+                // preview from the hint when that relay's copy isn't cached yet.
                 val sourceGroup =
-                    remember(groupsByRelay, groups, sourceGroupId) {
-                        groupsByRelay.values.flatten().find { it.id == sourceGroupId }
+                    remember(groupsByRelay, groups, sourceGroupId, sourceRelayUrl) {
+                        val onSource = sourceRelayUrl
+                            ?.let { r -> groupsByRelay.entries.firstOrNull { e -> e.key.normalizeRelayUrl() == r } }
+                            ?.value
+                        onSource?.find { it.id == sourceGroupId }
+                            ?: groupsByRelay.values.flatten().find { it.id == sourceGroupId }
                             ?: groups.find { it.id == sourceGroupId }
                     }
-                val previewRelay = sourceRelayUrl ?: relayHints.firstOrNull()
-                LaunchedEffect(sourceGroupId, previewRelay, sourceGroup?.name) {
-                    if (sourceGroup?.name == null && previewRelay != null) {
-                        AppModule.nostrRepository.fetchGroupPreview(sourceGroupId, previewRelay)
+                LaunchedEffect(sourceGroupId, sourceRelayUrl, sourceGroup?.name) {
+                    if (sourceGroup?.name == null && sourceRelayUrl != null) {
+                        AppModule.nostrRepository.fetchGroupPreview(sourceGroupId, sourceRelayUrl)
                     }
                 }
 
@@ -1887,10 +1899,7 @@ private fun QuotedEvent(
                     sourceGroupId = sourceGroupId,
                     sourceGroupName = sourceGroup?.name,
                     sourceGroupPicture = sourceGroup?.picture,
-                    // The `h` tag rarely carries a relay; fall back to the nevent's relay hint so
-                    // the click opens the group on the relay the event actually lives on (the nav
-                    // effect connects it on demand), matching web.
-                    sourceRelayUrl = sourceRelayUrl ?: relayHints.firstOrNull(),
+                    sourceRelayUrl = sourceRelayUrl,
                     onClick = onClick,
                     onNavigateToGroup = onNavigateToGroup,
                     modifier = modifier,
