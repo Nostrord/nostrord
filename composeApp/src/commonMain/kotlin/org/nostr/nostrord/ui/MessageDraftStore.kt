@@ -17,8 +17,11 @@ data class MessageDraft(
 }
 
 /**
- * Per-group composer drafts kept in memory for the session, so switching groups and
+ * Per-chat composer drafts kept in memory for the session, so switching groups and
  * coming back preserves what you were typing.
+ *
+ * Keyed by [org.nostr.nostrord.utils.groupKey]: the same group id on two relays is two
+ * chats, and one draft must not surface in the other's composer.
  *
  * Writes are plain map mutations (no StateFlow, no recomposition / re-render), so callers
  * can persist on every keystroke for free — this never triggers a chat re-render and so
@@ -27,20 +30,20 @@ data class MessageDraft(
 class MessageDraftStore {
     private val drafts = mutableMapOf<String, MessageDraft>()
 
-    fun get(groupId: String): MessageDraft = drafts[groupId] ?: MessageDraft()
+    fun get(chatKey: String): MessageDraft = drafts[chatKey] ?: MessageDraft()
 
-    fun setText(groupId: String, text: String) = update(groupId) { it.copy(text = text) }
+    fun setText(chatKey: String, text: String) = update(chatKey) { it.copy(text = text) }
 
-    fun setMentions(groupId: String, mentions: Map<String, String>) = update(groupId) { it.copy(mentions = mentions) }
+    fun setMentions(chatKey: String, mentions: Map<String, String>) = update(chatKey) { it.copy(mentions = mentions) }
 
-    fun setGroupMentions(groupId: String, groupMentions: Map<String, String>) = update(groupId) { it.copy(groupMentions = groupMentions) }
+    fun setGroupMentions(chatKey: String, groupMentions: Map<String, String>) = update(chatKey) { it.copy(groupMentions = groupMentions) }
 
-    fun clear(groupId: String) {
-        drafts.remove(groupId)
+    fun clear(chatKey: String) {
+        drafts.remove(chatKey)
     }
 
-    private inline fun update(groupId: String, transform: (MessageDraft) -> MessageDraft) {
-        val updated = transform(get(groupId))
-        if (updated.isEmpty) drafts.remove(groupId) else drafts[groupId] = updated
+    private inline fun update(chatKey: String, transform: (MessageDraft) -> MessageDraft) {
+        val updated = transform(get(chatKey))
+        if (updated.isEmpty) drafts.remove(chatKey) else drafts[chatKey] = updated
     }
 }

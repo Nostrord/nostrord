@@ -314,6 +314,7 @@ fun GroupScreenMobile(
                                 isGroupClosed = isClosed,
                                 selectedChannel = selectedChannel,
                                 groupId = groupId,
+                                hostRelayUrl = relayUrl,
                                 groupName = groupName,
                                 messageInput = messageInput,
                                 onSendMessage = onSendMessage,

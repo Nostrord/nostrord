@@ -32,23 +32,24 @@ data class ScrollPosition(
 )
 
 /**
- * In-memory cache for scroll positions per group.
+ * In-memory cache for scroll positions per group. Keyed by [org.nostr.nostrord.utils.groupKey]:
+ * the same group id on two relays is two chats with their own reading position.
  * Survives navigation but not process death.
  */
 object ScrollPositionCache {
     private val positions = mutableMapOf<String, ScrollPosition>()
 
     fun save(
-        groupId: String,
+        chatKey: String,
         position: ScrollPosition,
     ) {
-        positions[groupId] = position
+        positions[chatKey] = position
     }
 
-    fun get(groupId: String): ScrollPosition? = positions[groupId]
+    fun get(chatKey: String): ScrollPosition? = positions[chatKey]
 
-    fun remove(groupId: String) {
-        positions.remove(groupId)
+    fun remove(chatKey: String) {
+        positions.remove(chatKey)
     }
 
     fun clear() {
@@ -61,7 +62,8 @@ object ScrollPositionCache {
  */
 @Stable
 class ScrollStateHolder(
-    val groupId: String,
+    /** [org.nostr.nostrord.utils.groupKey] of the chat this holder tracks. */
+    val chatKey: String,
     initialPosition: ScrollPosition? = null,
 ) {
     var savedPosition by mutableStateOf(initialPosition)
@@ -116,7 +118,7 @@ class ScrollStateHolder(
     ) {
         val position = ScrollPosition(anchorKey, offset)
         savedPosition = position
-        ScrollPositionCache.save(groupId, position)
+        ScrollPositionCache.save(chatKey, position)
     }
 
     fun markRestored() {
@@ -129,34 +131,34 @@ class ScrollStateHolder(
         fun saver(): Saver<ScrollStateHolder, List<Any?>> = Saver(
             save = { holder ->
                 listOf(
-                    holder.groupId,
+                    holder.chatKey,
                     holder.savedPosition?.anchorKey,
                     holder.savedPosition?.offset,
                 )
             },
             restore = { saved ->
-                val groupId = saved[0] as String
+                val chatKey = saved[0] as String
                 val anchorKey = saved[1] as? String
                 val offset = saved[2] as? Int
                 val position =
                     if (anchorKey != null && offset != null) {
                         ScrollPosition(anchorKey, offset)
                     } else {
-                        ScrollPositionCache.get(groupId)
+                        ScrollPositionCache.get(chatKey)
                     }
-                ScrollStateHolder(groupId, position)
+                ScrollStateHolder(chatKey, position)
             },
         )
     }
 }
 
 @Composable
-fun rememberScrollStateHolder(groupId: String): ScrollStateHolder = rememberSaveable(
-    inputs = arrayOf(groupId),
+fun rememberScrollStateHolder(chatKey: String): ScrollStateHolder = rememberSaveable(
+    inputs = arrayOf(chatKey),
     saver = ScrollStateHolder.saver(),
 ) {
-    val cached = ScrollPositionCache.get(groupId)
-    ScrollStateHolder(groupId, cached)
+    val cached = ScrollPositionCache.get(chatKey)
+    ScrollStateHolder(chatKey, cached)
 }
 
 /**
@@ -165,7 +167,7 @@ fun rememberScrollStateHolder(groupId: String): ScrollStateHolder = rememberSave
  */
 @Composable
 fun <T> ScrollPositionEffect(
-    groupId: String,
+    chatKey: String,
     listState: LazyListState,
     items: List<T>,
     stateHolder: ScrollStateHolder,
@@ -175,7 +177,7 @@ fun <T> ScrollPositionEffect(
     val currentItems by rememberUpdatedState(items)
 
     // initialScrollToEnd is false while a deep-link seek owns positioning, then flips true
-    // once the target is consumed. The effects below are keyed on (groupId, listState), so
+    // once the target is consumed. The effects below are keyed on (chatKey, listState), so
     // they read this LIVE value instead of the launch-time capture: an early `return` on the
     // captured value would disarm bottom-pinning, the restore gate, and the latch tracker for
     // the whole visit (a notification-link entry then never shows the jump pill, never
@@ -187,8 +189,8 @@ fun <T> ScrollPositionEffect(
     // strand the open above the true bottom (the latch can briefly read "not at bottom" mid-reflow).
     // A seek entry gets NO settle window: the seek scrolls mid-history and the window's
     // latch-bypass would fight it toward the bottom.
-    var settling by remember(groupId) { mutableStateOf(initialScrollToEnd) }
-    LaunchedEffect(groupId) {
+    var settling by remember(chatKey) { mutableStateOf(initialScrollToEnd) }
+    LaunchedEffect(chatKey) {
         if (!settling) return@LaunchedEffect
         kotlinx.coroutines.delay(1500)
         settling = false
@@ -197,7 +199,7 @@ fun <T> ScrollPositionEffect(
     // A real user gesture ends the settle window immediately. While it is open the
     // pin ignores the atBottom latch, so a scroll-up right after opening would fight
     // the pin frame by frame (web parity: 712fe5b3).
-    LaunchedEffect(groupId, listState) {
+    LaunchedEffect(chatKey, listState) {
         listState.interactionSource.interactions.collect { interaction ->
             if (interaction is DragInteraction.Start) settling = false
         }
@@ -209,16 +211,16 @@ fun <T> ScrollPositionEffect(
     // auto-pin start applying. Default latch (atBottom = true) means a group with no
     // unread divider simply opens at the bottom via the pin effect below.
     //
-    // Keyed on listState (not just groupId): on a cold load the list starts empty so
+    // Keyed on listState (not just chatKey): on a cold load the list starts empty so
     // MessagesList builds a throwaway LazyListState, then swaps in a new one anchored
-    // at the last item once messages arrive. If this effect stayed keyed on groupId
+    // at the last item once messages arrive. If this effect stayed keyed on chatKey
     // it would keep awaiting totalItemsCount > 0 on the discarded (detached) state
     // forever, so markRestored never fires, the tracker's readings are dropped, and
     // the jump-to-bottom FAB never appears until the group is re-entered.
     // Runs on seek entries too: restoration only opens the user-scroll tracker gate, and a
     // deep-link visit needs the latch/FAB tracking just as much (the seek lands mid-history,
     // which is exactly when the jump pill must be able to appear).
-    LaunchedEffect(groupId, listState) {
+    LaunchedEffect(chatKey, listState) {
         snapshotFlow { listState.layoutInfo.totalItemsCount }
             .first { it > 0 }
         stateHolder.markRestored()
@@ -235,7 +237,7 @@ fun <T> ScrollPositionEffect(
     // Keyed on listState too: it must rebind to the live LazyListState after the
     // cold-load swap described above, otherwise stick-to-bottom would drive the
     // discarded state and never move the visible list.
-    LaunchedEffect(groupId, listState) {
+    LaunchedEffect(chatKey, listState) {
         snapshotFlow {
             // Height-aware key. Re-pin on a new tail item (size) AND on tail height growth
             // (the last visible item's index and measured size), so a late-decoding image,
@@ -288,7 +290,7 @@ fun <T> ScrollPositionEffect(
     // whose target happens to sit within the bottom tolerance is not spuriously
     // promoted back to bottom (web's `wasNotAtBottom` round-trip gate). The pin
     // effect reads the latch, not the layout, so this can never race it.
-    LaunchedEffect(groupId, listState) {
+    LaunchedEffect(chatKey, listState) {
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
@@ -316,7 +318,7 @@ fun <T> ScrollPositionEffect(
     }
 
     // Continuously save position for group-switch restore.
-    LaunchedEffect(groupId, listState) {
+    LaunchedEffect(chatKey, listState) {
         snapshotFlow {
             Pair(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
         }.distinctUntilChanged()
@@ -330,7 +332,7 @@ fun <T> ScrollPositionEffect(
     }
 
     // Save position when leaving group.
-    DisposableEffect(groupId) {
+    DisposableEffect(chatKey) {
         onDispose {
             val index = listState.firstVisibleItemIndex
             if (index < items.size && items.isNotEmpty()) {
