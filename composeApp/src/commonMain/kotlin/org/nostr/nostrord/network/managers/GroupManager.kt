@@ -69,6 +69,9 @@ import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochMillis
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.groupKey
+import org.nostr.nostrord.utils.groupKeyId
+import org.nostr.nostrord.utils.groupKeyRelay
 import org.nostr.nostrord.utils.isJoinedOn
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import kotlin.coroutines.cancellation.CancellationException
@@ -618,9 +621,10 @@ class GroupManager(
         }
     }
 
-    // Groups whose subscriptions were closed with "restricted" by the relay.
-    // For private groups, the relay denies access to non-members (including metadata).
-    // The UI uses this to show a "Private Group" placeholder with invite code input.
+    // Groups whose subscriptions were closed with "restricted" by the relay, keyed by
+    // [groupKey] -> reason. For private groups the relay denies access to non-members
+    // (including metadata); the UI shows a "Private Group" placeholder with invite input.
+    // Access is granted per relay, so a denial here never gates the same id elsewhere.
     private val _restrictedGroups = MutableStateFlow<Map<String, String>>(emptyMap())
     val restrictedGroups: StateFlow<Map<String, String>> = _restrictedGroups.asStateFlow()
 
@@ -804,33 +808,41 @@ class GroupManager(
      * relay would keep CLOSE-ing the whole mux whenever this group is in it,
      * starving the other joined groups of metadata/delete updates.
      */
-    fun markGroupRestricted(groupId: String, reason: String) {
-        val wasAlreadyRestricted = groupId in _restrictedGroups.value
-        _restrictedGroups.update { it + (groupId to reason) }
+    fun markGroupRestricted(relayUrl: String, groupId: String, reason: String) {
+        val host = relayUrl.normalizeRelayUrl()
+        val key = groupKey(host, groupId)
+        val wasAlreadyRestricted = key in _restrictedGroups.value
+        _restrictedGroups.update { it + (key to reason) }
         if (!wasAlreadyRestricted) {
-            val relayUrl = getRelayForGroup(groupId)
-            if (relayUrl != null) {
-                currentPubkey?.let { pk ->
-                    try {
-                        SecureStorage.addRestrictedGroupForRelay(pk, relayUrl, groupId, reason, epochSeconds())
-                    } catch (_: Exception) {}
-                }
-                refreshMuxDebounced(relayUrl)
+            currentPubkey?.let { pk ->
+                try {
+                    SecureStorage.addRestrictedGroupForRelay(pk, host, groupId, reason, epochSeconds())
+                } catch (_: Exception) {}
             }
+            refreshMuxDebounced(host)
         }
     }
 
     /**
      * Clear restricted status for a group (e.g. after successful join).
+     *
+     * A null [relayUrl] clears the marker on every relay serving [groupId]; use it only where
+     * the origin is genuinely unknown, since access is per relay.
      */
-    fun clearGroupRestricted(groupId: String) {
-        if (groupId !in _restrictedGroups.value) return
-        _restrictedGroups.update { it - groupId }
-        val relayUrl = getRelayForGroup(groupId)
-        if (relayUrl != null) {
-            currentPubkey?.let { pk ->
+    fun clearGroupRestricted(relayUrl: String?, groupId: String) {
+        val relays =
+            if (relayUrl != null) {
+                listOf(relayUrl.normalizeRelayUrl())
+            } else {
+                _restrictedGroups.value.keys.filter { groupKeyId(it) == groupId }.map { groupKeyRelay(it) }
+            }
+        val keys = relays.map { groupKey(it, groupId) }.filter { it in _restrictedGroups.value }
+        if (keys.isEmpty()) return
+        _restrictedGroups.update { it - keys.toSet() }
+        currentPubkey?.let { pk ->
+            keys.forEach { key ->
                 try {
-                    SecureStorage.removeRestrictedGroupForRelay(pk, relayUrl, groupId)
+                    SecureStorage.removeRestrictedGroupForRelay(pk, groupKeyRelay(key), groupId)
                 } catch (_: Exception) {}
             }
         }
@@ -848,7 +860,8 @@ class GroupManager(
         val loaded = mutableMapOf<String, String>()
         for (url in relayUrls) {
             try {
-                loaded.putAll(SecureStorage.getRestrictedGroupsForRelay(pubKey, url, now))
+                SecureStorage.getRestrictedGroupsForRelay(pubKey, url, now)
+                    .forEach { (gid, reason) -> loaded[groupKey(url, gid)] = reason }
             } catch (_: Exception) {}
         }
         if (loaded.isNotEmpty()) {
@@ -955,15 +968,29 @@ class GroupManager(
     private val observedGroupsMutex = Mutex()
 
     /**
-     * Returns the relay URL that hosts the given group, by scanning the per-relay cache.
-     * Uses an immutable snapshot of _groupsByRelay so no lock is needed.
+     * Relay hosting [groupId], from the open-group hint or the per-relay caches.
+     *
+     * Returns null when the id is AMBIGUOUS - served by more than one relay with no hint to
+     * break the tie. A group id is only unique within a relay, so guessing here is what routed
+     * sends, invites and previews to a stranger's same-id group; callers that fall back to the
+     * connected relay are at least on a relay the user chose. Anything that knows its relay
+     * should pass it instead of asking.
+     *
+     * Uses immutable snapshots, so no lock is needed.
      */
-    fun getRelayForGroup(groupId: String): String? = groupRelayHints.value[groupId]
-        ?: _groupsByRelay.value.entries.firstOrNull { (_, groups) -> groups.any { it.id == groupId } }?.key
-        // Fallback: private groups may not appear in kind 39000 listing but are
-        // tracked in _joinedGroupsByRelay (from kind 10009). Without this,
-        // clientForGroup() falls back to the focused client which may be wrong.
-        ?: _joinedGroupsByRelay.value.entries.firstOrNull { (_, groupIds) -> groupId in groupIds }?.key
+    fun getRelayForGroup(groupId: String): String? {
+        groupRelayHints.value[groupId]?.let { return it }
+        val serving = LinkedHashSet<String>()
+        _groupsByRelay.value.forEach { (relay, groups) ->
+            if (groups.any { it.id == groupId }) serving.add(relay.normalizeRelayUrl())
+        }
+        // Private groups may not appear in the kind:39000 listing but are tracked in
+        // _joinedGroupsByRelay (from kind:10009).
+        _joinedGroupsByRelay.value.forEach { (relay, groupIds) ->
+            if (groupId in groupIds) serving.add(relay.normalizeRelayUrl())
+        }
+        return serving.singleOrNull()
+    }
 
     /**
      * Returns the WebSocket client for the relay that hosts [groupId].
@@ -1138,7 +1165,7 @@ class GroupManager(
                     hydrateJob?.join()
                     val newest = _messages.value[groupId]?.lastOrNull()?.createdAt
                     if (newest != null &&
-                        groupId !in _restrictedGroups.value.keys &&
+                        groupKey(url, groupId) !in _restrictedGroups.value &&
                         shouldRequest(groupId, "entry_gapfill", cooldownMs = 20_000L)
                     ) {
                         try {
@@ -1194,12 +1221,12 @@ class GroupManager(
         // Drop restricted groups from every batched filter — including a single
         // restricted #d/#h value makes the relay CLOSE the entire subscription,
         // silencing metadata/delete updates for the groups we DO belong to.
-        val restricted = _restrictedGroups.value.keys
-        val allGroupIds = getGroupIdsForMux(relayUrl).filter { it !in restricted }
+        val restricted = _restrictedGroups.value
+        val allGroupIds = getGroupIdsForMux(relayUrl).filter { groupKey(relayUrl, it) !in restricted }
         // The metadata + delete watches also cover every descendant channel of the mux
         // groups: the sidebar renders the whole subgroup subtree, so channel renames and
         // deletions must sync even for channels the user never joined or opened.
-        val metadataIds = expandWithDescendants(allGroupIds).filter { it !in restricted }
+        val metadataIds = expandWithDescendants(allGroupIds).filter { groupKey(relayUrl, it) !in restricted }
         // The put-user watch must be armed even with zero groups on this relay —
         // that is exactly the state in which an external add can only arrive via #p.
         val selfPubkey = currentPubkey
@@ -1677,7 +1704,7 @@ class GroupManager(
 
             publishJoinedGroups()
 
-            clearGroupRestricted(groupId)
+            clearGroupRestricted(normalizedGroupRelay, groupId)
             // Seconds, to match GroupMembershipState.requestedAtSeconds (the "Requested ..." label).
             _pendingApprovalSince.update { it + (groupId to epochSeconds()) }
             refreshMuxSubscriptionsForRelay(groupRelayUrl)
@@ -2545,7 +2572,7 @@ class GroupManager(
             // non-member and the relay WILL re-CLOSE our reads "restricted" a round-trip later.
             // Leaving is an explicit reset of intent — a future rejoin should
             // get a fresh access attempt instead of being silently excluded.
-            clearGroupRestricted(groupId)
+            clearGroupRestricted(null, groupId)
 
             // Overwrite the persisted membership cache (now that the in-memory maps no longer carry
             // this group) so a restart does not re-hydrate self into the left group's member list —
@@ -3004,9 +3031,9 @@ class GroupManager(
     suspend fun backfillRecentGapsForRelay(relayUrl: String) {
         val client = connectionManager.getClientForRelay(relayUrl) ?: return
         if (!client.isConnected()) return
-        val restricted = _restrictedGroups.value.keys
+        val restricted = _restrictedGroups.value
         val loaded = getGroupIdsForMux(relayUrl)
-            .filter { it !in restricted }
+            .filter { groupKey(relayUrl, it) !in restricted }
             .mapNotNull { gid -> _messages.value[gid]?.lastOrNull()?.createdAt?.let { gid to it } }
         if (loaded.isEmpty()) return
         val since = loaded.minOf { it.second } - LiveCursorStore.RECONNECT_OVERLAP_S
@@ -4155,14 +4182,17 @@ class GroupManager(
         // messages never reach us until an app restart.
         if (selfNowMember &&
             selfWasAbsent &&
-            (members.groupId in _pendingApprovalSince.value || members.groupId in _restrictedGroups.value)
+            (
+                members.groupId in _pendingApprovalSince.value ||
+                    (relayUrl != null && groupKey(relayUrl, members.groupId) in _restrictedGroups.value)
+                )
         ) {
-            onApprovalDetected(members.groupId)
-        } else if (selfNowMember && members.groupId in _restrictedGroups.value) {
+            onApprovalDetected(relayUrl, members.groupId)
+        } else if (selfNowMember && relayUrl != null && groupKey(relayUrl, members.groupId) in _restrictedGroups.value) {
             // Confirmed membership with no live transition (e.g. a stale 7-day restricted marker
             // restored from SecureStorage on cold start): just drop the "Private group / invite
             // code" placeholder. The mux is built fresh this session, so no re-arm is needed.
-            clearGroupRestricted(members.groupId)
+            clearGroupRestricted(relayUrl, members.groupId)
         }
 
         // Self-heal a stale durable left marker: the relay lists us as a member AND we are joined
@@ -4372,7 +4402,7 @@ class GroupManager(
         // Pre-add the relay may have CLOSED our reads "restricted"; we are a member now, so
         // the preview (opening the group from the notification / DM card) must get a fresh
         // read attempt while the decision is pending.
-        clearGroupRestricted(groupId)
+        clearGroupRestricted(relay, groupId)
         _externalAddPending.tryEmit(
             ExternalGroupAdd(groupId, relay, actorPubkey, eventId, invite.createdAtSeconds),
         )
@@ -4480,7 +4510,7 @@ class GroupManager(
             discardPendingInvite(groupId)
             // Grace against the orphan auto-forget while this group's kind:39000 is in flight.
             markRecentlyJoined(groupId)
-            clearGroupRestricted(groupId)
+            clearGroupRestricted(relay, groupId)
             _externalMembershipAdopted.tryEmit(
                 ExternalGroupAdd(
                     groupId = groupId,
@@ -4502,9 +4532,9 @@ class GroupManager(
     // tail, so without this the group stays on "No messages yet" until someone posts. We go
     // through requestGroupMessages (the state-machine path), NOT a raw _messages fetch /
     // dedup eviction, which is what broke pagination before.
-    private fun onApprovalDetected(groupId: String) {
+    private fun onApprovalDetected(relayUrl: String?, groupId: String) {
         _pendingApprovalSince.update { it - groupId }
-        clearGroupRestricted(groupId)
+        clearGroupRestricted(relayUrl, groupId)
         scope.launch {
             try {
                 loadingRegistry.getController(groupId).reset()

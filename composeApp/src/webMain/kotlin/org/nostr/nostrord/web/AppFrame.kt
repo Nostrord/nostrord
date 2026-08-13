@@ -390,7 +390,7 @@ val AppFrame =
                     // and the invite-code affordance) instead of the misleading public/open. A plain
                     // unknown group (metadata still loading on a public relay) keeps the permissive
                     // public/open default.
-                    val restricted = r.groupId in restrictedGroups
+                    val restricted = groupKey(r.relayUrl, r.groupId) in restrictedGroups
                     lastGroupRef.current ?: GroupMetadata(
                         id = r.groupId,
                         name = null,

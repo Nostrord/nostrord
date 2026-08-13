@@ -3708,7 +3708,7 @@ class NostrRepository(
      */
     private fun knownGroupIdsForRelay(relayUrl: String): List<String> {
         val normalized = relayUrl.normalizeRelayUrl()
-        val restricted = groupManager.restrictedGroups.value.keys
+        val restricted = groupManager.restrictedGroups.value
         val ids = LinkedHashSet<String>()
         groupManager.joinedGroupsByRelay.value[normalized].orEmpty().forEach { ids.add(it) }
         val lists = _userGroupLists.value
@@ -3724,7 +3724,7 @@ class NostrRepository(
         // converge one level per round.
         val metaById = groupManager.groupsByRelay.value[normalized].orEmpty().associateBy { it.id }
         ids.toList().forEach { id -> metaById[id]?.children?.forEach { ids.add(it) } }
-        return ids.filter { it !in restricted }
+        return ids.filter { groupKey(normalized, it) !in restricted }
     }
 
     // Group ids already requested (targeted #d) per normalized relay this session, so the
@@ -4652,8 +4652,11 @@ class NostrRepository(
             signEvent = { sessionManager.signEvent(it) },
         )
         if (notifyViaDm && result is Result.Success && targetPubkey != pubKey) {
+            // Resolve the relay on the ADD path, where the group is unambiguous: the invite naddr
+            // must address the relay the user was actually added on, not a same-id group elsewhere.
+            val inviteRelay = groupManager.getRelayForGroup(groupId) ?: connectionManager.currentRelayUrl.value
             // Fire-and-forget: the DM is a courtesy reach-out; its failure must not fail the add.
-            scope.launch { sendGroupAddedDm(groupId, targetPubkey) }
+            scope.launch { sendGroupAddedDm(inviteRelay, groupId, targetPubkey) }
         }
         return result
     }
@@ -4664,10 +4667,8 @@ class NostrRepository(
      * connect to the group's NIP-29 relay (the put-user #p watch can't). The naddr sits on
      * its own line so clients that card-preview group links render the invite card.
      */
-    private suspend fun sendGroupAddedDm(groupId: String, targetPubkey: String) {
+    private suspend fun sendGroupAddedDm(relayUrl: String, groupId: String, targetPubkey: String) {
         try {
-            val relayUrl = groupManager.getRelayForGroup(groupId)
-                ?: connectionManager.currentRelayUrl.value
             val relayPubkey = (relayMetadata.value[relayUrl] ?: relayMetadata.value[relayUrl.normalizeRelayUrl()])
                 ?.groupNaddrAuthor
             val naddr = Nip19.encodeNaddr(identifier = groupId, relay = relayUrl, kind = 39000, pubkeyHex = relayPubkey)
@@ -6218,7 +6219,7 @@ class NostrRepository(
                         val groupId = groupManager.getGroupIdByPrefix(prefix)
                             ?: groupManager.activeGroupId?.takeIf { it.startsWith(prefix) }
                         if (groupId != null) {
-                            groupManager.markGroupRestricted(groupId, reason)
+                            groupManager.markGroupRestricted(client.getRelayUrl(), groupId, reason)
                         }
                     }
                 }
@@ -6798,7 +6799,7 @@ class NostrRepository(
         // "Private group" placeholder. If the relay still denies a group post-AUTH, the fresh
         // CLOSED re-marks it.
         for (groupId in groupIds) {
-            groupManager.clearGroupRestricted(groupId)
+            groupManager.clearGroupRestricted(relayUrl, groupId)
         }
         // Re-request history ONLY for the empty groups (see needHistory above). An already
         // -loaded group keeps its messages + pagination state; requesting it here would reset
