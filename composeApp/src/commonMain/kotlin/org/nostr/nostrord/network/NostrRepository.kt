@@ -2783,6 +2783,8 @@ class NostrRepository(
      * request made before this app happened to subscribe — which is the normal order (the user
      * opens the requesting client first, then comes here to approve).
      */
+    // Fire-and-forget per relay: connecting is serial-blocking otherwise, and one cold or dead
+    // relay in the list costs a full connect timeout that the caller has no reason to wait on.
     private suspend fun sendPairingReq(myPub: String) {
         val filter =
             buildJsonObject {
@@ -3353,13 +3355,17 @@ class NostrRepository(
         // silent until the next app start. They host no NIP-29 groups, so group-resubscribe
         // on them is a harmless no-op.
         connectedPoolRelays.addAll(urls)
+        // One coroutine per relay: a relay that is down costs its own connect timeout instead of
+        // delaying the REQ to every relay behind it in the list.
         urls.forEach { url ->
-            val client =
-                connectionManager.getClientForRelay(url)
-                    ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-            try {
-                client?.send(req)
-            } catch (_: Throwable) {
+            scope.launch {
+                val client =
+                    connectionManager.getClientForRelay(url)
+                        ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+                try {
+                    client?.send(req)
+                } catch (_: Throwable) {
+                }
             }
         }
     }
