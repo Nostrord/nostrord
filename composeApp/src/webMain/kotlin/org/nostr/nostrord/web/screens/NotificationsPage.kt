@@ -8,6 +8,7 @@ import org.nostr.nostrord.ui.screens.notifications.NotifFilter
 import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
 import org.nostr.nostrord.ui.screens.notifications.notificationActionLabel
 import org.nostr.nostrord.utils.formatTimestamp
+import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.shortNpub
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.components.AvatarKind
@@ -229,12 +230,14 @@ val NotificationsSidebar =
             }
             ngroupTab(null, "all", "All groups", 0, groupFilter == null, Ic.People) { vm.setGroupFilter(null) }
             buckets.forEach { bucket ->
+                // This relay's kind:39000 first: a same-id group elsewhere is a different group and
+                // must not lend its avatar to this tab.
                 val picture =
-                    groupsByRelay.values.firstNotNullOfOrNull { list ->
-                        list.firstOrNull { it.id == bucket.groupId }?.picture
-                    }
-                ngroupTab(picture, bucket.groupId, bucket.name, bucket.unread, groupFilter == bucket.groupId, null) {
-                    vm.setGroupFilter(bucket.groupId)
+                    groupsByRelay.entries
+                        .firstOrNull { it.key.normalizeRelayUrl() == bucket.relayUrl.normalizeRelayUrl() }
+                        ?.value?.firstOrNull { it.id == bucket.groupId }?.picture
+                ngroupTab(picture, bucket.key, bucket.name, bucket.unread, groupFilter == bucket.key, null) {
+                    vm.setGroupFilter(bucket.key)
                 }
             }
         }

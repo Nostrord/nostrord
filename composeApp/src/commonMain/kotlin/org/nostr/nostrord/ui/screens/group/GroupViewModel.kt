@@ -829,15 +829,22 @@ class GroupViewModel(
         viewModelScope.launch { repo.switchRelay(relayUrl) }
     }
 
+    /**
+     * Relay whose copy of [groupId] this screen is reading. Unread state is per (relay, group),
+     * so a route without a relay falls back to where the group is actually listed before the
+     * connected relay - never to a bare-id lookup.
+     */
+    private fun readRelay(): String = hostRelay ?: listedRelay.value ?: repo.currentRelayUrl.value.normalizeRelayUrl()
+
     fun markAsRead() {
-        repo.markGroupAsRead(groupId)
+        repo.markGroupAsRead(readRelay(), groupId)
     }
 
     fun markAsReadUpTo(timestamp: Long) {
-        repo.markGroupAsReadUpTo(groupId, timestamp)
+        repo.markGroupAsReadUpTo(readRelay(), groupId, timestamp)
     }
 
-    fun getLastReadTimestamp(): Long? = repo.getLastReadTimestamp(groupId)
+    fun getLastReadTimestamp(): Long? = repo.getLastReadTimestamp(readRelay(), groupId)
 
     fun resetGroupLoadingState() {
         viewModelScope.launch { repo.resetGroupLoadingState(groupId) }

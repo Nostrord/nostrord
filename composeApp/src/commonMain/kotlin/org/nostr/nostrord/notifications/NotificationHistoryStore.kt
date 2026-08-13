@@ -10,6 +10,7 @@ import org.nostr.nostrord.storage.getAnnouncedNotificationIds
 import org.nostr.nostrord.storage.getPersistedNotifications
 import org.nostr.nostrord.storage.saveAnnouncedNotificationIds
 import org.nostr.nostrord.storage.savePersistedNotifications
+import org.nostr.nostrord.utils.normalizeRelayUrl
 
 @Serializable
 enum class NotificationType { REPLY, MENTION, REACTION, MESSAGE, GROUP_ADD }
@@ -101,18 +102,24 @@ class NotificationHistoryStore {
         if (changed) persist()
     }
 
-    /** Mark every unread notification for [groupId] as read. No-op if none match. */
     /**
      * Mark a group's CHAT notifications read, as reading its chat does.
+     *
+     * Scoped to [relayUrl]: the same group id on another relay is a different group, and its
+     * entries must survive reading this one.
      *
      * Thread entries are left alone: their event is not in the chat, so opening the chat is no
      * evidence the user saw it. They clear via [markReadForThread] when that thread is opened.
      */
-    fun markReadForGroup(groupId: String) {
+    fun markReadForGroup(
+        relayUrl: String,
+        groupId: String,
+    ) {
+        val host = relayUrl.normalizeRelayUrl()
         var changed = false
         _entries.update { current ->
             current.map {
-                if (it.groupId == groupId && it.threadRootId == null && !it.read) {
+                if (it.groupId == groupId && it.relayUrl.normalizeRelayUrl() == host && it.threadRootId == null && !it.read) {
                     changed = true
                     it.copy(read = true)
                 } else {

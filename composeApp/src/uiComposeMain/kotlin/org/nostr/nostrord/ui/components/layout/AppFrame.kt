@@ -174,6 +174,7 @@ import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.window.LocalDesktopWindowControls
 import org.nostr.nostrord.ui.window.onBackForwardMouseButtons
 import org.nostr.nostrord.utils.accountDisplayLabel
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.rememberClipboardWriter
 import kotlin.math.roundToInt
@@ -358,8 +359,8 @@ fun AppFrame() {
             if (r != null && r.relayUrl != AppModule.nostrRepository.currentRelayUrl.value) {
                 AppModule.nostrRepository.switchRelay(r.relayUrl)
             }
-            AppModule.nostrRepository.setActiveGroup(r?.groupId)
-            if (r != null) AppModule.nostrRepository.markGroupAsRead(r.groupId)
+            AppModule.nostrRepository.setActiveGroup(r?.relayUrl, r?.groupId)
+            if (r != null) AppModule.nostrRepository.markGroupAsRead(r.relayUrl, r.groupId)
         }
     }
 
@@ -466,9 +467,9 @@ fun AppFrame() {
                             name = group.meta.name ?: group.meta.id,
                             picture = group.meta.picture,
                             groupId = group.meta.id,
-                            unread = railUnread[group.meta.id] ?: 0,
+                            unread = railUnread[groupKey(group.relayUrl, group.meta.id)] ?: 0,
                             muted = muteState.isMuted(group.meta.id),
-                            mutedActivity = group.meta.id in railMutedActivity,
+                            mutedActivity = groupKey(group.relayUrl, group.meta.id) in railMutedActivity,
                             onToggleMute = { AppModule.notificationSettings.toggleMute(group.meta.id) },
                             active = activeRootId == group.meta.id &&
                                 activeRelay == group.relayUrl.normalizeRelayUrl() &&

@@ -1,12 +1,15 @@
 package org.nostr.nostrord.ui.screens.group
 
 import org.nostr.nostrord.network.GroupMetadata
+import org.nostr.nostrord.utils.groupKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ChannelTreeTest {
+
+    private val RELAY = "wss://relay.example"
     private fun meta(
         id: String,
         name: String? = null,
@@ -98,17 +101,25 @@ class ChannelTreeTest {
 
     // ── aggregateUnread ─────────────────────────────────────────────────────
 
+    /** Counts are keyed by (relay, group), so build the keys the aggregates read. */
+    private fun unreadOn(
+        relayUrl: String,
+        vararg counts: Pair<String, Int>,
+    ): Map<String, Int> = counts.associate { (id, n) -> groupKey(relayUrl, id) to n }
+
     @Test
     fun unreadAggregatesRootAndDescendants() {
         val children = mapOf("root" to setOf("a", "b"), "a" to setOf("a1"))
-        val unread = mapOf("root" to 1, "a" to 2, "a1" to 4, "b" to 8, "other" to 100)
-        assertEquals(15, aggregateUnread("root", children, unread))
+        val unread = unreadOn(RELAY, "root" to 1, "a" to 2, "a1" to 4, "b" to 8, "other" to 100)
+        assertEquals(15, aggregateUnread(RELAY, "root", children, unread))
     }
 
     @Test
     fun unreadOfLeafIsItsOwnCount() {
-        assertEquals(3, aggregateUnread("g", emptyMap(), mapOf("g" to 3)))
-        assertEquals(0, aggregateUnread("g", emptyMap(), emptyMap()))
+        assertEquals(3, aggregateUnread(RELAY, "g", emptyMap(), unreadOn(RELAY, "g" to 3)))
+        assertEquals(0, aggregateUnread(RELAY, "g", emptyMap(), emptyMap()))
+        // A count from another relay's same-id group never lands in this root's total.
+        assertEquals(0, aggregateUnread(RELAY, "g", emptyMap(), unreadOn("wss://other.example", "g" to 3)))
     }
 
     // ── moveChannelBefore ───────────────────────────────────────────────────
@@ -141,25 +152,25 @@ class ChannelTreeTest {
     @Test
     fun mutedRootZeroesItsWholeTree() {
         val children = mapOf("root" to setOf("c1", "c2"))
-        val unread = mapOf("root" to 3, "c1" to 5, "c2" to 1)
-        assertEquals(9, aggregateUnread("root", children, unread))
-        assertEquals(0, aggregateUnreadUnmuted("root", children, unread) { it == "root" })
+        val unread = unreadOn(RELAY, "root" to 3, "c1" to 5, "c2" to 1)
+        assertEquals(9, aggregateUnread(RELAY, "root", children, unread))
+        assertEquals(0, aggregateUnreadUnmuted(RELAY, "root", children, unread) { it == "root" })
     }
 
     @Test
     fun mutedChannelDropsOutOfALiveRoot() {
         val children = mapOf("root" to setOf("c1", "c2"))
-        val unread = mapOf("root" to 3, "c1" to 5, "c2" to 1)
-        assertEquals(4, aggregateUnreadUnmuted("root", children, unread) { it == "c1" })
+        val unread = unreadOn(RELAY, "root" to 3, "c1" to 5, "c2" to 1)
+        assertEquals(4, aggregateUnreadUnmuted(RELAY, "root", children, unread) { it == "c1" })
     }
 
     @Test
     fun nothingMutedMatchesThePlainAggregate() {
         val children = mapOf("root" to setOf("c1"))
-        val unread = mapOf("root" to 2, "c1" to 4)
+        val unread = unreadOn(RELAY, "root" to 2, "c1" to 4)
         assertEquals(
-            aggregateUnread("root", children, unread),
-            aggregateUnreadUnmuted("root", children, unread) { false },
+            aggregateUnread(RELAY, "root", children, unread),
+            aggregateUnreadUnmuted(RELAY, "root", children, unread) { false },
         )
     }
 

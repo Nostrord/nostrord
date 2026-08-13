@@ -176,7 +176,9 @@ interface NostrRepositoryApi {
     // --- Metadata state ---
     val userMetadata: StateFlow<Map<String, UserMetadata>>
     val cachedEvents: StateFlow<Map<String, CachedEvent>>
-    val unreadCounts: StateFlow<Map<String, Int>>
+
+    /** Unread chat counts keyed by [org.nostr.nostrord.utils.groupKey], never by bare group id. */
+    val unreadByGroupKey: StateFlow<Map<String, Int>>
 
     // --- Direct messages (NIP-17) ---
     /** Conversations (most-recent first), derived from decrypted NIP-17 messages. */
@@ -454,7 +456,10 @@ interface NostrRepositoryApi {
      * The relay that hosts [groupId] is promoted to [RelayReconnectScheduler.Priority.ACTIVE]
      * so reconnect attempts for it use faster backoff. Pass null when leaving the group screen.
      */
-    fun setActiveGroup(groupId: String?)
+    fun setActiveGroup(
+        relayUrl: String?,
+        groupId: String?,
+    )
 
     // --- Group operations ---
     suspend fun createGroup(
@@ -796,14 +801,27 @@ interface NostrRepositoryApi {
         relayUrl: String,
     )
 
-    fun markGroupAsRead(groupId: String)
+    fun markGroupAsRead(
+        relayUrl: String,
+        groupId: String,
+    )
 
     /** Advance the last-read timestamp for partial-read tracking. See UnreadManager.markAsReadUpTo. */
-    fun markGroupAsReadUpTo(groupId: String, timestamp: Long)
+    fun markGroupAsReadUpTo(
+        relayUrl: String,
+        groupId: String,
+        timestamp: Long,
+    )
 
-    fun getUnreadCount(groupId: String): Int
+    fun getUnreadCount(
+        relayUrl: String,
+        groupId: String,
+    ): Int
 
-    fun getLastReadTimestamp(groupId: String): Long?
+    fun getLastReadTimestamp(
+        relayUrl: String,
+        groupId: String,
+    ): Long?
 
     // --- Metadata operations ---
     // [forceStale] re-fetches entries already cached but older than the staleness window

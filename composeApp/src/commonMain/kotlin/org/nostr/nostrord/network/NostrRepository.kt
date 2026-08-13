@@ -118,6 +118,7 @@ import org.nostr.nostrord.ui.screens.dm.eventJson
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.urlDecode
 import kotlin.concurrent.Volatile
@@ -571,7 +572,7 @@ class NostrRepository(
     override val userRelayList: StateFlow<List<Nip65Relay>> = outboxManager.userRelayList
 
     // Expose unread state
-    override val unreadCounts: StateFlow<Map<String, Int>> = unreadManager.unreadCounts
+    override val unreadByGroupKey: StateFlow<Map<String, Int>> = unreadManager.unreadByGroupKey
     override val latestMessageTimestamps: StateFlow<Map<String, Long>> = unreadManager.latestMessageTimestamps
 
     // Filtered to relays the UI can actually show (rail's source list:
@@ -580,7 +581,7 @@ class NostrRepository(
     // counter ("(2) Nostrord" with no visible badge anywhere).
     override val unreadByRelay: StateFlow<Map<String, Int>> = combine(
         groupManager.joinedGroupsByRelay,
-        unreadManager.unreadCounts,
+        unreadManager.unreadByGroupKey,
         outboxManager.kind10009Relays,
         outboxManager.groupTagRelays,
         connectionManager.currentRelayUrl,
@@ -591,7 +592,7 @@ class NostrRepository(
             .toSet()
         joined
             .filterKeys { it in visible }
-            .mapValues { (_, ids) -> ids.sumOf { counts[it] ?: 0 } }
+            .mapValues { (relay, ids) -> ids.sumOf { counts[groupKey(relay, it)] ?: 0 } }
             .filterValues { it > 0 }
     }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
     override val totalUnread: StateFlow<Int> = unreadByRelay
@@ -3647,12 +3648,16 @@ class NostrRepository(
      * so reconnect attempts for it use faster (500 ms base) backoff.
      * Pass null when the user leaves the group screen to revert to BACKGROUND priority.
      */
-    override fun setActiveGroup(groupId: String?) {
-        activeRelayUrl = if (groupId != null) groupManager.getRelayForGroup(groupId) else null
+    override fun setActiveGroup(
+        relayUrl: String?,
+        groupId: String?,
+    ) {
+        activeRelayUrl = relayUrl?.normalizeRelayUrl()
+            ?: groupId?.let { groupManager.getRelayForGroup(it) }
         // Update mux subscriptions to scope chat/reactions to the active group only.
         groupManager.setActiveGroupId(groupId)
         // Suppress unread-counter bumps for the group currently on screen.
-        unreadManager.setActiveGroup(groupId)
+        unreadManager.setActiveGroup(activeRelayUrl, groupId)
     }
 
     /**
@@ -4398,8 +4403,12 @@ class NostrRepository(
     }
 
     override suspend fun fetchGroupPreview(groupId: String, relayUrl: String) {
-        // Already have metadata for this group — skip
-        val existing = groupManager.groupsByRelay.value.values.flatten().find { it.id == groupId }
+        // Skip only when THIS relay's copy is already named. A same-id group on another relay is a
+        // different group, and treating it as a hit left the requested one permanently nameless.
+        val host = relayUrl.normalizeRelayUrl()
+        val existing = groupManager.groupsByRelay.value
+            .entries.firstOrNull { it.key.normalizeRelayUrl() == host }?.value
+            ?.find { it.id == groupId }
         if (existing?.name != null) return
 
         try {
@@ -4825,17 +4834,17 @@ class NostrRepository(
     ) = groupManager.setGroupRelayHint(groupId, relayUrl)
 
     // Unread message operations
-    override fun markGroupAsRead(groupId: String) {
-        unreadManager.markAsRead(groupId)
+    override fun markGroupAsRead(relayUrl: String, groupId: String) {
+        unreadManager.markAsRead(relayUrl, groupId)
     }
 
-    override fun markGroupAsReadUpTo(groupId: String, timestamp: Long) {
-        unreadManager.markAsReadUpTo(groupId, timestamp)
+    override fun markGroupAsReadUpTo(relayUrl: String, groupId: String, timestamp: Long) {
+        unreadManager.markAsReadUpTo(relayUrl, groupId, timestamp)
     }
 
-    override fun getUnreadCount(groupId: String): Int = unreadManager.getUnreadCount(groupId)
+    override fun getUnreadCount(relayUrl: String, groupId: String): Int = unreadManager.getUnreadCount(relayUrl, groupId)
 
-    override fun getLastReadTimestamp(groupId: String): Long? = unreadManager.getLastReadTimestamp(groupId)
+    override fun getLastReadTimestamp(relayUrl: String, groupId: String): Long? = unreadManager.getLastReadTimestamp(relayUrl, groupId)
 
     // Metadata operations
     private val metadataMessageHandler: (String, NostrGroupClient) -> Unit = { msg, client ->
@@ -6400,7 +6409,7 @@ class NostrRepository(
                                         ?.second?.pubkey == currentPubkey
                             }
                             if (isForSelf && groupId != null) {
-                                unreadManager.onReactionReceived(groupId, reaction)
+                                unreadManager.onReactionReceived(client.getRelayUrl(), groupId, reaction)
                             }
                         }
                     }

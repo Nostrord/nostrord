@@ -17,6 +17,7 @@ import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.ui.screens.home.Friend
 import org.nostr.nostrord.ui.screens.home.HomePageViewModel
 import org.nostr.nostrord.ui.screens.home.railKey
+import org.nostr.nostrord.utils.groupKey
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -97,18 +98,18 @@ class HomePageViewModelTest {
         val fake = FakeNostrRepository()
         fake._groupsByRelay.value = mapOf("wss://a" to listOf(meta("loud", "Loud"), meta("quiet", "Quiet")))
         fake._joinedGroupsByRelay.value = mapOf("wss://a" to setOf("loud", "quiet"))
-        fake._unreadCounts.value = mapOf("loud" to 4, "quiet" to 7)
+        fake._unreadByGroupKey.value = mapOf(groupKey("wss://a", "loud") to 4, groupKey("wss://a", "quiet") to 7)
         val mute = MutableStateFlow(MuteState(overrides = mapOf("quiet" to NotificationLevel.MUTED)))
         val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher, muteState = mute)
         testDispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals(mapOf("loud" to 4, "quiet" to 0), vm.railUnreadCounts.value)
-        assertEquals(setOf("quiet"), vm.railMutedActivity.value)
+        assertEquals(mapOf(groupKey("wss://a", "loud") to 4, groupKey("wss://a", "quiet") to 0), vm.railUnreadCounts.value)
+        assertEquals(setOf(groupKey("wss://a", "quiet")), vm.railMutedActivity.value)
 
         // Unmuting restores the number without any new traffic.
         mute.value = MuteState()
         testDispatcher.scheduler.advanceUntilIdle()
-        assertEquals(mapOf("loud" to 4, "quiet" to 7), vm.railUnreadCounts.value)
+        assertEquals(mapOf(groupKey("wss://a", "loud") to 4, groupKey("wss://a", "quiet") to 7), vm.railUnreadCounts.value)
         assertEquals(emptySet(), vm.railMutedActivity.value)
     }
 
@@ -121,7 +122,7 @@ class HomePageViewModelTest {
         val vm = HomePageViewModel(fake, computeDispatcher = testDispatcher, muteState = mute)
         testDispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals(mapOf("quiet" to 0), vm.railUnreadCounts.value)
+        assertEquals(mapOf(groupKey("wss://a", "quiet") to 0), vm.railUnreadCounts.value)
         assertEquals(emptySet(), vm.railMutedActivity.value)
     }
 

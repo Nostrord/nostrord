@@ -308,7 +308,7 @@ object AppModule {
         // Settled while we waited (create/join bookkeeping claimed its own echo, or the
         // user already decided): a notification for it would be noise.
         if (add.groupId !in groupManager.pendingGroupInvites.value) return
-        val groupName = groupDisplayName(add.groupId)
+        val groupName = groupDisplayName(add.relayUrl, add.groupId)
         notificationHistoryStore.add(
             NotificationEntry(
                 id = add.eventId ?: "gadd_${add.groupId}",
@@ -385,10 +385,10 @@ object AppModule {
             // groupManager.isGroupJoined() is scoped to the active primary relay —
             // wrong for our purpose: we need cross-relay membership so notifications
             // fire for joined groups on background relays too. Scan all relay buckets.
-            isJoined = { groupId ->
-                groupManager.joinedGroupsByRelay.value.values.any { groupId in it }
+            isJoined = { relayUrl, groupId ->
+                groupManager.joinedGroupsByRelay.value[relayUrl].orEmpty().contains(groupId)
             },
-            isRestricted = { groupId -> groupManager.restrictedGroups.value.containsKey(groupId) },
+            isRestricted = { _, groupId -> groupManager.restrictedGroups.value.containsKey(groupId) },
             isAppFocused = { focusTracker.isAppFocused.value },
             findMessageAuthor = { messageId ->
                 groupManager.findMessageByIdAcrossGroups(messageId)?.second?.pubkey
@@ -396,19 +396,17 @@ object AppModule {
             // Deferred to call time: by the first message flush the repository exists,
             // so this lazy access never cycles with unreadManager's own construction.
             isMutedAuthor = { pubkey -> pubkey in nostrRepository.mutedPubkeys.value },
-            shouldNotify = { groupId, isDirect ->
+            shouldNotify = { _, groupId, isDirect ->
                 notificationSettings.shouldNotify(
                     notificationSettings.effectiveLevelFor(groupId),
                     isDirect,
                 )
             },
-            onUnreadIncrement = { groupId, message, _ ->
+            onUnreadIncrement = { relayUrl, groupId, message, _ ->
                 val selfPubkey = sessionManager.getPublicKey()
                 if (selfPubkey == null || message.pubkey != selfPubkey) {
-                    val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
-                        ?: groupManager.getRelayForGroup(groupId) ?: ""
                     val preview = notificationPreview(message.content)
-                    val groupName = groupDisplayName(groupId)
+                    val groupName = groupDisplayName(relayUrl, groupId)
                     val relayName = relayDisplayName(relayUrl)
                     notificationHistoryStore.add(
                         NotificationEntry(
@@ -453,11 +451,9 @@ object AppModule {
                     }
                 }
             },
-            onReplyNotify = { groupId, message ->
-                val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
-                    ?: groupManager.getRelayForGroup(groupId) ?: ""
+            onReplyNotify = { relayUrl, groupId, message ->
                 val preview = notificationPreview(message.content)
-                val groupName = groupDisplayName(groupId)
+                val groupName = groupDisplayName(relayUrl, groupId)
                 val relayName = relayDisplayName(relayUrl)
                 notificationHistoryStore.add(
                     NotificationEntry(
@@ -495,11 +491,9 @@ object AppModule {
                     )
                 }
             },
-            onThreadReplyNotify = { groupId, reply ->
-                val relayUrl = reply.relayUrl
-                    ?: groupManager.getRelayForGroup(groupId) ?: ""
+            onThreadReplyNotify = { relayUrl, groupId, reply ->
                 val preview = notificationPreview(reply.content)
-                val groupName = groupDisplayName(groupId)
+                val groupName = groupDisplayName(relayUrl, groupId)
                 val relayName = relayDisplayName(relayUrl)
                 // The E tag is the thread root; without it the entry would open the chat, where a
                 // kind:1111 does not exist. Falls back to the reply itself so the pane still opens.
@@ -541,11 +535,9 @@ object AppModule {
                     )
                 }
             },
-            onMentionNotify = { groupId, message ->
-                val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
-                    ?: groupManager.getRelayForGroup(groupId) ?: ""
+            onMentionNotify = { relayUrl, groupId, message ->
                 val preview = notificationPreview(message.content)
-                val groupName = groupDisplayName(groupId)
+                val groupName = groupDisplayName(relayUrl, groupId)
                 val relayName = relayDisplayName(relayUrl)
                 notificationHistoryStore.add(
                     NotificationEntry(
@@ -583,13 +575,11 @@ object AppModule {
                     )
                 }
             },
-            onReactionNotify = { groupId, reaction ->
+            onReactionNotify = { relayUrl, groupId, reaction ->
                 val selfPubkey = sessionManager.getPublicKey()
                 if (selfPubkey == null || reaction.pubkey != selfPubkey) {
-                    val relayUrl = groupManager.getLatestMessageRelayForGroup(groupId)
-                        ?: groupManager.getRelayForGroup(groupId) ?: ""
                     val emoji = reaction.emoji.ifBlank { "+" }
-                    val groupName = groupDisplayName(groupId)
+                    val groupName = groupDisplayName(relayUrl, groupId)
                     val relayName = relayDisplayName(relayUrl)
                     notificationHistoryStore.add(
                         NotificationEntry(
@@ -637,7 +627,7 @@ object AppModule {
             },
             // Drop a group's notifications from the feed the moment its unread
             // badge is cleared, so opening/reading a chat clears both (issue #67).
-            onGroupRead = { groupId -> notificationHistoryStore.markReadForGroup(groupId) },
+            onGroupRead = { relayUrl, groupId -> notificationHistoryStore.markReadForGroup(relayUrl, groupId) },
             scope = appScope,
         )
     }
@@ -785,12 +775,15 @@ object AppModule {
      * the truncated id. Joined-group metadata is also restored from
      * [SecureStorage] at startup, so cached entries survive cold launches.
      */
-    private fun groupDisplayName(groupId: String): String {
-        val name = groupManager.groupsByRelay.value.values
-            .firstNotNullOfOrNull { list ->
-                list.firstOrNull { it.id == groupId }?.name?.takeIf { it.isNotBlank() }
-            }
-        return name ?: groupId.take(8)
+    private fun groupDisplayName(
+        relayUrl: String,
+        groupId: String,
+    ): String {
+        val byRelay = groupManager.groupsByRelay.value
+        val host = relayUrl.normalizeRelayUrl()
+        val onHost = (byRelay[host] ?: byRelay.entries.firstOrNull { it.key.normalizeRelayUrl() == host }?.value)
+            ?.firstOrNull { it.id == groupId }?.name?.takeIf { it.isNotBlank() }
+        return onHost ?: groupId.take(8)
     }
 
     /**

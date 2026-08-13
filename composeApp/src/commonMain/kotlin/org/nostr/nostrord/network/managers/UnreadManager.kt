@@ -10,12 +10,26 @@ import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.UnreadEntry
 import org.nostr.nostrord.storage.getUnreadEntries
+import org.nostr.nostrord.storage.lastReadFor
+import org.nostr.nostrord.storage.saveLastReadFor
 import org.nostr.nostrord.storage.saveUnreadEntries
 import org.nostr.nostrord.utils.epochSeconds
+import org.nostr.nostrord.utils.groupKey
+import org.nostr.nostrord.utils.groupKeyId
+import org.nostr.nostrord.utils.groupKeyRelay
+import org.nostr.nostrord.utils.isGroupKey
+import org.nostr.nostrord.utils.normalizeRelayUrl
 
+/**
+ * Unread badges and notification triggers, keyed by (relay, group id).
+ *
+ * The same group id on two relays is two distinct groups: reading one must not clear
+ * the other's badge, and a message on one must not raise a badge on the other. Every
+ * map here is keyed by [groupKey]; the bare id alone is never a key.
+ */
 class UnreadManager(
-    private val isJoined: (String) -> Boolean = { true },
-    private val isRestricted: (String) -> Boolean = { false },
+    private val isJoined: (relayUrl: String, groupId: String) -> Boolean = { _, _ -> true },
+    private val isRestricted: (relayUrl: String, groupId: String) -> Boolean = { _, _ -> false },
     private val isAppFocused: () -> Boolean = { true },
     private val findMessageAuthor: (messageId: String) -> String? = { null },
     // NIP-51 muted authors: their messages/reactions never bump badges or notify.
@@ -25,34 +39,35 @@ class UnreadManager(
     // mentions and reactions to the user's own message. Returning false suppresses
     // the notification callbacks below WITHOUT touching the unread badge — a muted
     // or "mentions only" group still accumulates its unread count.
-    private val shouldNotify: (groupId: String, isDirect: Boolean) -> Boolean = { _, _ -> true },
-    private val onUnreadIncrement: ((groupId: String, latestMessage: NostrGroupClient.NostrMessage, delta: Int) -> Unit)? = null,
-    private val onReplyNotify: ((groupId: String, message: NostrGroupClient.NostrMessage) -> Unit)? = null,
-    private val onMentionNotify: ((groupId: String, message: NostrGroupClient.NostrMessage) -> Unit)? = null,
-    private val onReactionNotify: ((groupId: String, reaction: NostrGroupClient.NostrReaction) -> Unit)? = null,
+    private val shouldNotify: (relayUrl: String, groupId: String, isDirect: Boolean) -> Boolean = { _, _, _ -> true },
+    private val onUnreadIncrement: ((relayUrl: String, groupId: String, latestMessage: NostrGroupClient.NostrMessage, delta: Int) -> Unit)? = null,
+    private val onReplyNotify: ((relayUrl: String, groupId: String, message: NostrGroupClient.NostrMessage) -> Unit)? = null,
+    private val onMentionNotify: ((relayUrl: String, groupId: String, message: NostrGroupClient.NostrMessage) -> Unit)? = null,
+    private val onReactionNotify: ((relayUrl: String, groupId: String, reaction: NostrGroupClient.NostrReaction) -> Unit)? = null,
     // A kind:1111 reply under a thread event of ours. Fired instead of [onReplyNotify] so the
     // entry can deep-link into the threads pane rather than the chat.
-    private val onThreadReplyNotify: ((groupId: String, reply: NostrGroupClient.NostrMessage) -> Unit)? = null,
+    private val onThreadReplyNotify: ((relayUrl: String, groupId: String, reply: NostrGroupClient.NostrMessage) -> Unit)? = null,
     // Called when a group is marked read so the notification feed can drop the
     // group's entries in lockstep with the unread badge (issue #67).
-    private val onGroupRead: ((groupId: String) -> Unit)? = null,
+    private val onGroupRead: ((relayUrl: String, groupId: String) -> Unit)? = null,
     // Background scope (Dispatchers.Default) for the SecureStorage writes. The badge update is an
     // in-memory StateFlow write that stays on the caller; only the EncryptedSharedPreferences
     // encryption + I/O is offloaded so marking-read can't block the Main thread (ANR on Android).
     private val scope: CoroutineScope,
 ) {
 
-    private val _unreadCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
-    val unreadCounts: StateFlow<Map<String, Int>> = _unreadCounts.asStateFlow()
+    /** Counts keyed by [groupKey], not by group id. */
+    private val _unreadByGroupKey = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unreadByGroupKey: StateFlow<Map<String, Int>> = _unreadByGroupKey.asStateFlow()
 
-    // High-water mark per group: createdAt of the newest message we've already
-    // processed. Used as an extra anchor floor so re-delivered history (across
-    // reconnects or restarts) doesn't double-count.
+    // High-water mark per (relay, group): createdAt of the newest message we've
+    // already processed. Used as an extra anchor floor so re-delivered history
+    // (across reconnects or restarts) doesn't double-count.
     private val _latestMessageTimestamps = MutableStateFlow<Map<String, Long>>(emptyMap())
     val latestMessageTimestamps: StateFlow<Map<String, Long>> = _latestMessageTimestamps.asStateFlow()
 
     private var currentPubkey: String? = null
-    private var activeGroupId: String? = null
+    private var activeGroupKey: String? = null
 
     // First-time-seen anchor for groups with no persisted lastRead. Prevents the
     // initial history sync from inflating the badge for groups never opened.
@@ -90,36 +105,49 @@ class UnreadManager(
         }
     }
 
-    fun setActiveGroup(groupId: String?) {
-        val previous = activeGroupId
-        activeGroupId = groupId
+    fun setActiveGroup(
+        relayUrl: String?,
+        groupId: String?,
+    ) {
+        val previous = activeGroupKey
+        val next = if (relayUrl != null && groupId != null) groupKey(relayUrl, groupId) else null
+        activeGroupKey = next
         // markAsRead the outgoing group so messages buffered inside GroupManager's
         // 300ms ordering window — flushed after the screen unmounts — don't
         // retroactively count as unread.
-        if (previous != null && previous != groupId) markAsRead(previous)
+        if (previous != null && previous != next) {
+            markAsRead(groupKeyRelay(previous), groupKeyId(previous))
+        }
     }
 
     fun initialize(pubkey: String?) {
         currentPubkey = pubkey
         firstSeenAtByGroup.clear()
         if (pubkey == null) {
-            _unreadCounts.value = emptyMap()
+            _unreadByGroupKey.value = emptyMap()
             _latestMessageTimestamps.value = emptyMap()
             return
         }
-        val persisted = SecureStorage.getUnreadEntries(pubkey)
-        _unreadCounts.value = persisted.mapValues { it.value.count }
+        // Legacy bare-id entries are dropped: their relay is unknowable, and attributing
+        // them to a guess is what put a count on the wrong same-id group. The badge
+        // reseeds from live traffic; the read anchor survives via [lastReadFor]'s fallback.
+        val persisted = SecureStorage.getUnreadEntries(pubkey).filterKeys { isGroupKey(it) }
+        _unreadByGroupKey.value = persisted.mapValues { it.value.count }
         _latestMessageTimestamps.value = persisted.mapValues { it.value.highWater }
     }
 
-    fun markAsRead(groupId: String) {
+    fun markAsRead(
+        relayUrl: String,
+        groupId: String,
+    ) {
         val pubkey = currentPubkey ?: return
+        val key = groupKey(relayUrl, groupId)
         val now = epochSeconds()
         // In-memory badge clear + feed drop happen immediately; the storage writes go off-Main.
-        _unreadCounts.update { it + (groupId to 0) }
-        onGroupRead?.invoke(groupId)
+        _unreadByGroupKey.update { it + (key to 0) }
+        onGroupRead?.invoke(relayUrl.normalizeRelayUrl(), groupId)
         scope.launch {
-            SecureStorage.saveLastReadTimestamp(pubkey, groupId, now)
+            SecureStorage.saveLastReadFor(pubkey, relayUrl, groupId, now)
             persistEntries()
         }
     }
@@ -132,42 +160,76 @@ class UnreadManager(
      * [timestamp] catches up to the high-water mark (everything seen); otherwise
      * the counter is left alone and the next markAsRead clears it.
      */
-    fun markAsReadUpTo(groupId: String, timestamp: Long) {
+    fun markAsReadUpTo(
+        relayUrl: String,
+        groupId: String,
+        timestamp: Long,
+    ) {
         val pubkey = currentPubkey ?: return
+        val key = groupKey(relayUrl, groupId)
         // Off-Main: this runs per scroll-past, and the read + writes are EncryptedSharedPreferences
         // I/O that must not block the scroll on the Main thread.
         scope.launch {
-            val stored = SecureStorage.getLastReadTimestamp(pubkey, groupId) ?: 0L
+            val stored = SecureStorage.lastReadFor(pubkey, relayUrl, groupId) ?: 0L
             if (timestamp <= stored) return@launch
-            SecureStorage.saveLastReadTimestamp(pubkey, groupId, timestamp)
-            val highWater = _latestMessageTimestamps.value[groupId] ?: 0L
+            SecureStorage.saveLastReadFor(pubkey, relayUrl, groupId, timestamp)
+            val highWater = _latestMessageTimestamps.value[key] ?: 0L
             if (timestamp >= highWater) {
-                _unreadCounts.update { it + (groupId to 0) }
-                onGroupRead?.invoke(groupId)
+                _unreadByGroupKey.update { it + (key to 0) }
+                onGroupRead?.invoke(relayUrl.normalizeRelayUrl(), groupId)
             }
             persistEntries()
         }
     }
 
-    fun getLastReadTimestamp(groupId: String): Long? = currentPubkey?.let { SecureStorage.getLastReadTimestamp(it, groupId) }
+    fun getLastReadTimestamp(
+        relayUrl: String,
+        groupId: String,
+    ): Long? = currentPubkey?.let { SecureStorage.lastReadFor(it, relayUrl, groupId) }
 
-    fun getUnreadCount(groupId: String): Int = _unreadCounts.value[groupId] ?: 0
+    fun getUnreadCount(
+        relayUrl: String,
+        groupId: String,
+    ): Int = _unreadByGroupKey.value[groupKey(relayUrl, groupId)] ?: 0
 
-    fun onMessagesFlushed(groupId: String, newMessages: List<NostrGroupClient.NostrMessage>) {
-        val pubkey = currentPubkey ?: return
+    /**
+     * Chat messages left GroupManager's ordering buffer. The bucket is shared by every
+     * relay serving [groupId], so split by origin relay first: each same-id group owns
+     * its badge, its read anchor and its notifications.
+     *
+     * Messages without an origin relay are optimistic local sends, which never qualify.
+     */
+    fun onMessagesFlushed(
+        groupId: String,
+        newMessages: List<NostrGroupClient.NostrMessage>,
+    ) {
         if (newMessages.isEmpty()) return
-        if (!isJoined(groupId) || isRestricted(groupId)) return
+        newMessages
+            .groupBy { it.relayUrl?.normalizeRelayUrl() }
+            .forEach { (relayUrl, batch) ->
+                if (relayUrl != null) onMessagesFlushed(relayUrl, groupId, batch)
+            }
+    }
+
+    private fun onMessagesFlushed(
+        relayUrl: String,
+        groupId: String,
+        newMessages: List<NostrGroupClient.NostrMessage>,
+    ) {
+        val pubkey = currentPubkey ?: return
+        if (!isJoined(relayUrl, groupId) || isRestricted(relayUrl, groupId)) return
+        val key = groupKey(relayUrl, groupId)
 
         // Capture the previous high-water *before* advancing it, so the anchor
         // can use it to filter re-delivered history that was already counted.
-        val previousHighWater = _latestMessageTimestamps.value[groupId] ?: 0L
+        val previousHighWater = _latestMessageTimestamps.value[key] ?: 0L
         val latestInBatch = newMessages.maxOfOrNull { it.createdAt } ?: 0L
         val highWaterAdvanced = latestInBatch > previousHighWater
         if (highWaterAdvanced) {
-            _latestMessageTimestamps.update { it + (groupId to latestInBatch) }
+            _latestMessageTimestamps.update { it + (key to latestInBatch) }
         }
 
-        val isActive = groupId == activeGroupId
+        val isActive = key == activeGroupKey
         // Active group + app focused: user is reading live — silent. Persist
         // any high-water advance so a future session doesn't re-process.
         if (isActive && isAppFocused()) {
@@ -175,9 +237,9 @@ class UnreadManager(
             return
         }
 
-        val lastRead = SecureStorage.getLastReadTimestamp(pubkey, groupId)
+        val lastRead = SecureStorage.lastReadFor(pubkey, relayUrl, groupId)
         val anchor = maxOf(
-            lastRead ?: firstSeenAtByGroup.getOrPut(groupId) { firstSeenFallback() },
+            lastRead ?: firstSeenAtByGroup.getOrPut(key) { firstSeenFallback() },
             previousHighWater,
         )
         val qualifying = newMessages.filter {
@@ -191,8 +253,8 @@ class UnreadManager(
         // Active-but-unfocused: still notify (sound + popup) but don't bump the
         // badge — refocus shows the messages immediately, marking them as read.
         if (!isActive) {
-            _unreadCounts.update { current ->
-                current + (groupId to ((current[groupId] ?: 0) + qualifying.size))
+            _unreadByGroupKey.update { current ->
+                current + (key to ((current[key] ?: 0) + qualifying.size))
             }
         }
         persistEntries()
@@ -224,12 +286,12 @@ class UnreadManager(
 
         when {
             latestReply != null ->
-                if (shouldNotify(groupId, true)) onReplyNotify?.invoke(groupId, latestReply)
+                if (shouldNotify(relayUrl, groupId, true)) onReplyNotify?.invoke(relayUrl, groupId, latestReply)
             latestMention != null ->
-                if (shouldNotify(groupId, true)) onMentionNotify?.invoke(groupId, latestMention)
+                if (shouldNotify(relayUrl, groupId, true)) onMentionNotify?.invoke(relayUrl, groupId, latestMention)
             else ->
-                if (shouldNotify(groupId, false)) {
-                    onUnreadIncrement?.invoke(groupId, qualifying.maxBy { it.createdAt }, qualifying.size)
+                if (shouldNotify(relayUrl, groupId, false)) {
+                    onUnreadIncrement?.invoke(relayUrl, groupId, qualifying.maxBy { it.createdAt }, qualifying.size)
                 }
         }
     }
@@ -250,31 +312,41 @@ class UnreadManager(
      * the same second. Re-announcing is handled where it belongs - the feed dedupes by event id,
      * and AppModule gates sound and popup on the event being realtime.
      */
-    fun onThreadEventReceived(groupId: String, event: NostrGroupClient.NostrMessage) {
+    fun onThreadEventReceived(
+        groupId: String,
+        event: NostrGroupClient.NostrMessage,
+    ) {
         val pubkey = currentPubkey
+        val relayUrl = event.relayUrl?.normalizeRelayUrl()
         val verdict = when {
             pubkey == null -> "no-session"
+            relayUrl == null -> "no-origin-relay"
             event.kind != 1111 -> "not-a-reply(${event.kind})"
             event.pubkey == pubkey -> "own-reply"
             isMutedAuthor(event.pubkey) -> "muted-author"
-            !isJoined(groupId) -> "not-joined"
+            !isJoined(relayUrl, groupId) -> "not-joined"
             !threadReplyTargetsMe(event.tags, pubkey, findMessageAuthor) -> "not-for-me"
-            !shouldNotify(groupId, true) -> "group-muted"
+            !shouldNotify(relayUrl, groupId, true) -> "group-muted"
             else -> null
         }
-        if (verdict != null) return
-        onThreadReplyNotify?.invoke(groupId, event)
+        if (verdict != null || relayUrl == null) return
+        onThreadReplyNotify?.invoke(relayUrl, groupId, event)
     }
 
-    fun onReactionReceived(groupId: String, reaction: NostrGroupClient.NostrReaction) {
+    fun onReactionReceived(
+        relayUrl: String,
+        groupId: String,
+        reaction: NostrGroupClient.NostrReaction,
+    ) {
         val pubkey = currentPubkey ?: return
         if (reaction.pubkey == pubkey) return
         if (isMutedAuthor(reaction.pubkey)) return
-        if (!isJoined(groupId) || isRestricted(groupId)) return
-        val lastRead = SecureStorage.getLastReadTimestamp(pubkey, groupId)
-        val previousHighWater = _latestMessageTimestamps.value[groupId] ?: 0L
+        if (!isJoined(relayUrl, groupId) || isRestricted(relayUrl, groupId)) return
+        val key = groupKey(relayUrl, groupId)
+        val lastRead = SecureStorage.lastReadFor(pubkey, relayUrl, groupId)
+        val previousHighWater = _latestMessageTimestamps.value[key] ?: 0L
         val anchor = maxOf(
-            lastRead ?: firstSeenAtByGroup.getOrPut(groupId) { firstSeenFallback() },
+            lastRead ?: firstSeenAtByGroup.getOrPut(key) { firstSeenFallback() },
             previousHighWater,
         )
         if (reaction.createdAt <= anchor) return
@@ -284,12 +356,12 @@ class UnreadManager(
         // Caller already verified the target message author == self.
         val highWaterAdvanced = reaction.createdAt > previousHighWater
         if (highWaterAdvanced) {
-            _latestMessageTimestamps.update { it + (groupId to reaction.createdAt) }
+            _latestMessageTimestamps.update { it + (key to reaction.createdAt) }
         }
 
         // Mirror onMessagesFlushed's active/focus handling so reactions don't behave
         // differently from messages for the group the user is looking at.
-        val isActive = groupId == activeGroupId
+        val isActive = key == activeGroupKey
         // Active group + app focused: user is reading live — silent.
         if (isActive && isAppFocused()) {
             persistEntries()
@@ -300,28 +372,28 @@ class UnreadManager(
         // reaction is seen on refocus (matches messages; fixes the relay count
         // appearing for the group you're currently viewing).
         if (!isActive) {
-            _unreadCounts.update { current ->
-                current + (groupId to ((current[groupId] ?: 0) + 1))
+            _unreadByGroupKey.update { current ->
+                current + (key to ((current[key] ?: 0) + 1))
             }
         }
         persistEntries()
 
         // A reaction is always to the user's own message, so it counts as a
         // direct interaction for the notification gate.
-        if (shouldNotify(groupId, true)) onReactionNotify?.invoke(groupId, reaction)
+        if (shouldNotify(relayUrl, groupId, true)) onReactionNotify?.invoke(relayUrl, groupId, reaction)
     }
 
     fun clear() {
         currentPubkey = null
-        activeGroupId = null
-        _unreadCounts.value = emptyMap()
+        activeGroupKey = null
+        _unreadByGroupKey.value = emptyMap()
         _latestMessageTimestamps.value = emptyMap()
         firstSeenAtByGroup.clear()
     }
 
     private fun persistEntries() {
         val pubkey = currentPubkey ?: return
-        val counts = _unreadCounts.value
+        val counts = _unreadByGroupKey.value
         val highWaters = _latestMessageTimestamps.value
         val entries = (counts.keys + highWaters.keys).associateWith { id ->
             UnreadEntry(counts[id] ?: 0, highWaters[id] ?: 0L)
