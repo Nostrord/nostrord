@@ -36,6 +36,7 @@ import kotlinx.serialization.json.*
 import org.nostr.nostrord.auth.Account
 import org.nostr.nostrord.auth.ActiveAccountManager
 import org.nostr.nostrord.auth.NostrSigner
+import org.nostr.nostrord.auth.SelfDecryptCache
 import org.nostr.nostrord.auth.parseSignedEventJson
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.livekit.LiveKitCredentials
@@ -57,6 +58,7 @@ import org.nostr.nostrord.network.managers.OutboxManager
 import org.nostr.nostrord.network.managers.PendingDmWrap
 import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.RelayMetadataManager
+import org.nostr.nostrord.network.managers.RelayProbeGuard
 import org.nostr.nostrord.network.managers.RelayReconnectScheduler
 import org.nostr.nostrord.network.managers.SessionManager
 import org.nostr.nostrord.network.managers.UnreadManager
@@ -135,12 +137,28 @@ private const val GIFT_WRAP_BACKDATE_SECONDS = 2L * 24 * 60 * 60
 // last minute proves the socket is alive; below this, probing is pure overhead.
 private const val FOREGROUND_PROBE_MIN_SILENCE_MS = 60_000L
 
+// Min gap between two foreground socket sweeps. Visibility changes come in bursts (tab
+// switching, app switching); each sweep can kill and rebuild sockets, and every rebuilt
+// socket costs a NIP-42 signature.
+private const val FOREGROUND_SWEEP_MIN_INTERVAL_MS = 60_000L
+
 /**
  * Coalescing window for kind:30078 notification-prefs publishes: a burst of toggles is
  * one event. Short on purpose — with a NIP-07 or bunker signer this is the delay before
  * the signing prompt appears, and anything longer reads as a popup out of nowhere.
  */
 private const val NOTIF_PREFS_PUBLISH_DEBOUNCE_MS = 600L
+
+/**
+ * How long a replaceable list waits after its first copy before its private section is
+ * decrypted. Relays hold different versions, and only the newest is worth reading: with a
+ * signer that asks the user, every other version in the burst is a dialog answered for
+ * nothing. Matches the settle window kind:10009 discovery already uses.
+ */
+private const val REPLACEABLE_SETTLE_MS = 1_500L
+
+/** Cap on one self-decrypt, for signers that answer on their own (local key, bunker). */
+private const val PRIVATE_DECRYPT_TIMEOUT_MS = 20_000L
 
 /** Floor between focus-driven kind:30078 re-fetches, so window flipping can't spam relays. */
 private const val NOTIF_PREFS_FETCH_MIN_INTERVAL_S = 3L
@@ -727,6 +745,11 @@ class NostrRepository(
     private var privateMuted: Set<String> = emptySet()
     private var muteListCreatedAt = 0L
     private var muteListContent = ""
+
+    // Shared by every self-encrypted list (kind:10000, kind:10009, kind:30078): one decrypt
+    // per distinct ciphertext, however many relays deliver a copy of the same event.
+    private val selfDecryptCache = SelfDecryptCache()
+
     private var muteListPublicTags: List<List<String>> = emptyList()
 
     // Decrypted private-section tags, valid only for the ciphertext they came from:
@@ -734,6 +757,12 @@ class NostrRepository(
     private var muteListPrivateTags: List<List<String>> = emptyList()
     private var muteListPrivateDecryptedFrom = ""
     private var muteListRequested = false
+
+    // Newest private section seen, and the job reading it. Same reason as the kind:30078
+    // pair: the decrypted-from marker only moves after a decrypt, so it cannot be the
+    // freshness floor while a burst of relay copies is arriving.
+    private var muteListPendingPrivate: String? = null
+    private var muteListPrivateApplyJob: Job? = null
     private var pendingMuteListPublish: Job? = null
     private var hasUnpublishedMuteChanges = false
     private val muteListMutex = Mutex()
@@ -805,28 +834,41 @@ class NostrRepository(
         }
         applyMutedSetsAndPersist(pubKey)
         if (!contentChanged && content == muteListPrivateDecryptedFrom) return
-        // Decrypt the private section off the ingest path (a bunker signer is a remote
-        // round-trip). One decrypt per new list, not per event.
-        scope.launch {
-            val signer = ActiveAccountManager.session.value?.signer ?: return@launch
-            val plaintext =
-                try {
-                    signer.nip44Decrypt(pubKey, content)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    // NIP-04-era or foreign encryption: leave the section opaque; the
-                    // writable() guard keeps it verbatim on publish.
-                    return@launch
+        muteListPendingPrivate = content
+        scheduleMuteListPrivateApply(pubKey)
+    }
+
+    /**
+     * Decrypts and applies the private mute section off the ingest path (a bunker signer is a
+     * remote round-trip), once the burst of relay copies has settled.
+     *
+     * Single-flight on purpose: a newer version landing mid-decrypt is picked up by the loop
+     * rather than starting a second one, so a prompting signer never shows two dialogs for
+     * one list. A ciphertext that is NIP-04-era, foreign, or already refused reads as null:
+     * the section stays opaque and the writable() guard keeps it verbatim on publish.
+     */
+    private fun scheduleMuteListPrivateApply(pubKey: String) {
+        if (muteListPrivateApplyJob?.isActive == true) return
+        muteListPrivateApplyJob = scope.launch {
+            // Slower relays get to land their newer version before anything is decrypted.
+            delay(REPLACEABLE_SETTLE_MS)
+            while (true) {
+                val content = muteListPendingPrivate ?: return@launch
+                if (content == muteListPrivateDecryptedFrom) return@launch
+                val plaintext = decryptOwnSection(pubKey, content) ?: return@launch
+                val privateTags = org.nostr.nostrord.nostr.Nip51.decodeTags(plaintext) ?: return@launch
+                if (sessionManager.getPublicKey() != pubKey) return@launch
+                // Superseded while decrypting (newer event, local tap): only the version the
+                // list currently carries may be applied.
+                if (hasUnpublishedMuteChanges) return@launch
+                if (muteListContent == content) {
+                    muteListPrivateTags = privateTags
+                    muteListPrivateDecryptedFrom = content
+                    privateMuted = org.nostr.nostrord.nostr.Nip51.mutedPubkeysFrom(privateTags)
+                    applyMutedSetsAndPersist(pubKey)
                 }
-            val privateTags = org.nostr.nostrord.nostr.Nip51.decodeTags(plaintext) ?: return@launch
-            // Superseded while decrypting (newer event, local tap, account switch): drop it.
-            if (muteListContent != content || hasUnpublishedMuteChanges) return@launch
-            if (sessionManager.getPublicKey() != pubKey) return@launch
-            muteListPrivateTags = privateTags
-            muteListPrivateDecryptedFrom = content
-            privateMuted = org.nostr.nostrord.nostr.Nip51.mutedPubkeysFrom(privateTags)
-            applyMutedSetsAndPersist(pubKey)
+                if (muteListPendingPrivate == content) return@launch
+            }
         }
     }
 
@@ -836,6 +878,13 @@ class NostrRepository(
     // hand any relay the account's group membership.
 
     private var notifPrefsCreatedAt = 0L
+
+    // Newest version seen, whether or not it has been decrypted yet, and its ciphertext.
+    // The applied timestamp above cannot serve as the freshness floor during a burst: it
+    // only rises after a decrypt, which with a prompting signer is the user's response time.
+    private var notifPrefsNewestSeenAt = 0L
+    private var notifPrefsPendingContent: String? = null
+    private var notifPrefsApplyJob: Job? = null
 
     /**
      * The override map as last agreed with the network: what this device published, or
@@ -870,8 +919,11 @@ class NostrRepository(
         val settings = notificationSettings ?: return
         notifPrefsWatchJob?.cancel()
         notifPrefsPublishJob?.cancel()
+        notifPrefsApplyJob?.cancel()
+        notifPrefsPendingContent = null
         notifPrefsPublishing = false
         notifPrefsCreatedAt = SecureStorage.loadKind30078TimestampFor(pubkey, Nip78.D_NOTIFICATIONS)
+        notifPrefsNewestSeenAt = notifPrefsCreatedAt
         // A change only survives once it is published, so whatever is on disk is by
         // definition the last state that reached the network.
         notifPrefsSynced = settings.muteState.value.overrides
@@ -1055,28 +1107,61 @@ class NostrRepository(
         if (createdAt <= notifPrefsCreatedAt) return
         val content = event["content"]?.jsonPrimitive?.contentOrNull ?: return
         if (content.isBlank()) return
-        // Decrypt off the ingest path: a bunker signer is a remote round-trip.
-        scope.launch {
-            val signer = ActiveAccountManager.session.value?.signer ?: return@launch
-            val plaintext =
-                try {
-                    signer.nip44Decrypt(pubKey, content)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    return@launch
+        // Recorded synchronously, before any decrypt: relays hold different versions of a
+        // replaceable event, and the applied-timestamp below only rises once a decrypt has
+        // finished. Without this floor every version in the burst reaches the signer, and
+        // all but the newest are discarded after the user answered for them.
+        if (createdAt <= notifPrefsNewestSeenAt) return
+        notifPrefsNewestSeenAt = createdAt
+        notifPrefsPendingContent = content
+        scheduleNotifPrefsApply(pubKey, settings)
+    }
+
+    /**
+     * Decrypts and applies the newest kind:30078 seen, once the burst has settled.
+     *
+     * Single-flight on purpose: a version landing while a decrypt is in flight is picked up
+     * by the loop below rather than starting a second one. Cancelling the in-flight decrypt
+     * instead would abandon a signer dialog the user is looking at and raise another.
+     */
+    private fun scheduleNotifPrefsApply(
+        pubKey: String,
+        settings: org.nostr.nostrord.settings.NotificationSettings,
+    ) {
+        if (notifPrefsApplyJob?.isActive == true) return
+        notifPrefsApplyJob = scope.launch {
+            // Slower relays get to land their newer version before anything is decrypted.
+            delay(REPLACEABLE_SETTLE_MS)
+            while (true) {
+                val createdAt = notifPrefsNewestSeenAt
+                val content = notifPrefsPendingContent ?: return@launch
+                if (createdAt <= notifPrefsCreatedAt) return@launch
+                if (notifPrefsPublishing) return@launch
+                val plaintext = decryptOwnSection(pubKey, content)
+                if (plaintext == null) {
+                    // Unread (signer refused, or was not reachable yet). Drop the floor so a
+                    // later delivery may try again; the decrypt cache is what keeps that retry
+                    // from reaching the signer while the refusal is still fresh.
+                    if (notifPrefsNewestSeenAt == createdAt) {
+                        notifPrefsNewestSeenAt = notifPrefsCreatedAt
+                        return@launch
+                    }
+                    continue // a newer version landed meanwhile: read that one instead
                 }
-            val decoded = Nip78.decodeNotifications(plaintext) ?: return@launch
-            // Superseded while decrypting (newer event, local change, account switch).
-            if (createdAt <= notifPrefsCreatedAt) return@launch
-            if (notifPrefsPublishing) return@launch
-            if (sessionManager.getPublicKey() != pubKey) return@launch
-            notifPrefsCreatedAt = createdAt
-            SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, createdAt)
-            // Recorded BEFORE the write: applying it makes muteState emit, and the watcher
-            // must already see this payload as the agreed state or it republishes it.
-            notifPrefsSynced = decoded.groupLevels
-            settings.applyRemoteGroupLevels(decoded.groupLevels)
+                val decoded = Nip78.decodeNotifications(plaintext) ?: return@launch
+                // Superseded while decrypting (newer event, local change, account switch).
+                if (createdAt <= notifPrefsCreatedAt) return@launch
+                if (notifPrefsPublishing) return@launch
+                if (sessionManager.getPublicKey() != pubKey) return@launch
+                notifPrefsCreatedAt = createdAt
+                SecureStorage.saveKind30078TimestampFor(pubKey, Nip78.D_NOTIFICATIONS, createdAt)
+                // Recorded BEFORE the write: applying it makes muteState emit, and the watcher
+                // must already see this payload as the agreed state or it republishes it.
+                notifPrefsSynced = decoded.groupLevels
+                settings.applyRemoteGroupLevels(decoded.groupLevels)
+                // A newer version landed while this one was being read: take it now.
+                if (notifPrefsNewestSeenAt <= createdAt) return@launch
+            }
         }
     }
 
@@ -1946,6 +2031,9 @@ class NostrRepository(
         AppModule.avSpaceHost.release()
         lastRequestGroupsAt.clear()
         relaysNeedingResubscribe.clear()
+        // Probe evidence is about the relay, but the sockets it judged belong to the account being
+        // torn down; the next one gets a fresh read.
+        RelayProbeGuard.reset()
         muxRestrictedRetryJobs.values.forEach { it.cancel() }
         muxRestrictedRetryJobs.clear()
         muxRestrictedRetryAttempts.clear()
@@ -3146,6 +3234,14 @@ class NostrRepository(
         muteListPrivateTags = emptyList()
         muteListPrivateDecryptedFrom = ""
         muteListRequested = false
+        muteListPrivateApplyJob?.cancel()
+        muteListPrivateApplyJob = null
+        muteListPendingPrivate = null
+        notifPrefsApplyJob?.cancel()
+        notifPrefsApplyJob = null
+        notifPrefsPendingContent = null
+        notifPrefsNewestSeenAt = 0L
+        selfDecryptCache.clear()
         publicMuted = emptySet()
         privateMuted = emptySet()
         _mutedPubkeys.value = emptySet()
@@ -3443,7 +3539,7 @@ class NostrRepository(
                 // here left their recovery to the periodic staleness net.
                 is ConnectionManager.ConnectionState.Reconnecting,
                 is ConnectionManager.ConnectionState.Connecting,
-                -> {
+                -> if (claimForegroundSweep()) {
                     probeIdleSockets()
                     groupManager.refreshLiveSubscriptions()
                     reconnectDroppedNip29PoolRelays()
@@ -3452,7 +3548,7 @@ class NostrRepository(
                 // Already connected — verify the sockets actually survived the
                 // background period (Doze/radio sleep kills TCP without a close
                 // frame; "Connected" can be a zombie), then refresh subs.
-                is ConnectionManager.ConnectionState.Connected -> {
+                is ConnectionManager.ConnectionState.Connected -> if (claimForegroundSweep()) {
                     probeIdleSockets()
                     groupManager.refreshLiveSubscriptions()
                     reconnectDroppedNip29PoolRelays()
@@ -3460,6 +3556,26 @@ class NostrRepository(
             }
             refreshUserListsOnForeground()
         }
+    }
+
+    private var lastForegroundSweepAtMs = 0L
+
+    /**
+     * True at most once per [FOREGROUND_SWEEP_MIN_INTERVAL_MS], for the socket sweep that
+     * follows a return to the foreground.
+     *
+     * "Foreground" fires on every visibility change: a browser tab switch, an app switch, a
+     * screen unlock. Sweeping on each one probes sockets that have simply been quiet, and a
+     * probe that misses its answer tears the socket down - so a user alt-tabbing produces a
+     * stream of reconnects, each of which costs the signer a fresh NIP-42 signature. A socket
+     * that really died during a 30 s absence is caught by the next sweep or by the 5-minute
+     * staleness net.
+     */
+    private fun claimForegroundSweep(): Boolean {
+        val now = org.nostr.nostrord.utils.epochMillis()
+        if (now - lastForegroundSweepAtMs < FOREGROUND_SWEEP_MIN_INTERVAL_MS) return false
+        lastForegroundSweepAtMs = now
+        return true
     }
 
     // Throttle for the foreground kind:3/kind:10000 re-fetch (seconds).
@@ -3487,9 +3603,9 @@ class NostrRepository(
 
     /**
      * Probe every connected relay socket that has been frame-silent for a while.
-     * Zombies are marked dead inside probeLiveness, and the resulting
-     * onConnectionLost drives reconnect + resubscribe + pending-event flush.
-     * Probes run concurrently so one dead socket doesn't delay the others.
+     * A zombie is marked dead by RelayProbeGuard once the misses add up, and the
+     * resulting onConnectionLost drives reconnect + resubscribe + pending-event
+     * flush. Probes run concurrently so one dead socket doesn't delay the others.
      */
     private suspend fun probeIdleSockets() {
         val clients = (
@@ -3499,7 +3615,7 @@ class NostrRepository(
         for (client in clients) {
             val silence = client.inboundSilenceMs() ?: continue
             if (silence < FOREGROUND_PROBE_MIN_SILENCE_MS) continue
-            scope.launch { client.probeLiveness() }
+            scope.launch { RelayProbeGuard.probe(client) }
         }
     }
 
@@ -5472,13 +5588,23 @@ class NostrRepository(
      */
     private suspend fun decryptOwnListSection(ciphertext: String): String? {
         val pubKey = sessionManager.getPublicKey() ?: return null
-        val signer = ActiveAccountManager.session.value?.signer ?: return null
-        return try {
+        return decryptOwnSection(pubKey, ciphertext)
+    }
+
+    /**
+     * One decrypt per distinct ciphertext of our own, shared by every self-encrypted list
+     * (kind:10000, kind:10009, kind:30078). Null when the signer cannot or will not read it.
+     */
+    private suspend fun decryptOwnSection(pubKey: String, ciphertext: String): String? = selfDecryptCache.decrypt(pubKey, ciphertext) {
+        val signer = ActiveAccountManager.session.value?.signer ?: return@decrypt null
+        // A signer that asks the user gets no deadline: only the user can answer, and a
+        // deadline here would abandon the open dialog and later raise a second one.
+        if (signer.promptsUser) {
             signer.nip44Decrypt(pubKey, ciphertext)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            null
+        } else {
+            kotlinx.coroutines.withTimeoutOrNull(PRIVATE_DECRYPT_TIMEOUT_MS) {
+                signer.nip44Decrypt(pubKey, ciphertext)
+            }
         }
     }
 

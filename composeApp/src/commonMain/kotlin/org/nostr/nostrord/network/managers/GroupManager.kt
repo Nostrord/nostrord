@@ -1092,7 +1092,7 @@ class GroupManager(
                 muxTracker.clearRelay(url)
                 val probeClient = client
                 if (probeClient != null && (probeClient.inboundSilenceMs(nowMs) ?: 0L) > MUX_OPEN_REARM_MS) {
-                    scope.launch { probeClient.probeLiveness() }
+                    scope.launch { RelayProbeGuard.probe(probeClient) }
                 }
             }
 
@@ -1331,11 +1331,12 @@ class GroupManager(
                     // A zombie socket eats the re-sent REQ silently and update()
                     // re-arms the staleness clock, deferring detection forever. When
                     // the socket itself has been frame-silent for the whole window,
-                    // verify it: probeLiveness marks it dead if nothing answers, and
-                    // onConnectionLost drives reconnect + resubscribe + pending flush.
+                    // verify it: the guard marks it dead once the probes go
+                    // unanswered, and onConnectionLost drives reconnect +
+                    // resubscribe + pending flush.
                     val client = connectionManager.getClientForRelay(relayUrl)
                     if (client != null && (client.inboundSilenceMs(now) ?: 0L) > MUX_STALE_REARM_MS) {
-                        scope.launch { client.probeLiveness() }
+                        scope.launch { RelayProbeGuard.probe(client) }
                     }
                 }
                 refreshMuxSubscriptionsForRelay(relayUrl)

@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.PublishResult
+import org.nostr.nostrord.network.SIGNER_DIAG_ROLE
 import org.nostr.nostrord.network.sendAndAwaitOkOrError
 import org.nostr.nostrord.network.summarizeFailures
 import org.nostr.nostrord.utils.epochMillis
@@ -137,7 +138,7 @@ actual class Nip46Client actual constructor(
      * adding the result to [relayClients].
      */
     private suspend fun openRelay(relayUrl: String): NostrGroupClient? = try {
-        val client = NostrGroupClient(relayUrl)
+        val client = NostrGroupClient(relayUrl, diagRole = SIGNER_DIAG_ROLE)
         client.connect { msg -> handleMessage(msg, client) }
         if (!client.waitForConnection(SIGNER_RELAY_CONNECT_TIMEOUT_MS) || !openResponseSubscription(client)) {
             client.disconnect()

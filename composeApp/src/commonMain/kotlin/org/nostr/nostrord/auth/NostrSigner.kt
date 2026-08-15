@@ -37,6 +37,13 @@ interface NostrSigner {
     val isRemote: Boolean get() = false
 
     /**
+     * True when every operation opens a dialog the user must answer (NIP-07 extension,
+     * NIP-55 signer app). Callers must not time out and retry against these: a retry cannot
+     * reach the user any faster, it only queues a second dialog behind the one on screen.
+     */
+    val promptsUser: Boolean get() = false
+
+    /**
      * Sign [event] with this account's key material.
      *
      * Throws [SigningException] on permission denial, signer disconnection,
@@ -141,6 +148,7 @@ interface NostrSigner {
             return try {
                 nip46Client.nip44Decrypt(peerPubkeyHex, ciphertext)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 throw SigningException("Bunker NIP-44 decryption failed: ${e.message}", e)
             }
         }
@@ -165,19 +173,30 @@ interface NostrSigner {
     ) : NostrSigner {
         override val isRemote: Boolean = true
 
+        // Every call renders an extension dialog, and a PIN-locked extension follows each
+        // one with an unlock prompt. [SignerPrompts] keeps them to one at a time.
+        override val promptsUser: Boolean = true
+
         @Volatile private var disposed = false
 
         override suspend fun signEvent(event: Event): Event {
             if (disposed) throw SigningException("NIP-07 signer has been disposed")
-            val signedJson = Nip07.signEvent(event.toJsonString())
+            val signedJson =
+                try {
+                    SignerPrompts.queued(promptsUser) { Nip07.signEvent(event.toJsonString()) }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    throw SigningException("NIP-07 signing failed: ${e.message}", e)
+                }
             return parseSignedEventJson(signedJson)
         }
 
         override suspend fun nip44Encrypt(peerPubkeyHex: String, plaintext: String): String {
             if (disposed) throw SigningException("NIP-07 signer has been disposed")
             return try {
-                Nip07.nip44Encrypt(peerPubkeyHex, plaintext)
+                SignerPrompts.queued(promptsUser) { Nip07.nip44Encrypt(peerPubkeyHex, plaintext) }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 throw SigningException("NIP-07 NIP-44 encryption failed: ${e.message}", e)
             }
         }
@@ -185,8 +204,9 @@ interface NostrSigner {
         override suspend fun nip44Decrypt(peerPubkeyHex: String, ciphertext: String): String {
             if (disposed) throw SigningException("NIP-07 signer has been disposed")
             return try {
-                Nip07.nip44Decrypt(peerPubkeyHex, ciphertext)
+                SignerPrompts.queued(promptsUser) { Nip07.nip44Decrypt(peerPubkeyHex, ciphertext) }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 throw SigningException("NIP-07 NIP-44 decryption failed: ${e.message}", e)
             }
         }
@@ -207,12 +227,19 @@ interface NostrSigner {
     ) : NostrSigner {
         override val isRemote: Boolean = true
 
+        // A request the user has not pre-authorized opens the signer's approval screen.
+        // Pre-authorized ones return over IPC in milliseconds, so taking a turn costs
+        // them nothing and keeps an unauthorized burst from stacking approval screens.
+        override val promptsUser: Boolean = true
+
         @Volatile private var disposed = false
 
         override suspend fun signEvent(event: Event): Event {
             if (disposed) throw SigningException("Amber signer has been disposed")
             return try {
-                parseSignedEventJson(Nip55.signEvent(event.toJsonString(), pubkey, signerPackage))
+                parseSignedEventJson(
+                    SignerPrompts.queued(promptsUser) { Nip55.signEvent(event.toJsonString(), pubkey, signerPackage) },
+                )
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 if (e is SigningException) throw e
@@ -223,7 +250,7 @@ interface NostrSigner {
         override suspend fun nip44Encrypt(peerPubkeyHex: String, plaintext: String): String {
             if (disposed) throw SigningException("Amber signer has been disposed")
             return try {
-                Nip55.nip44Encrypt(peerPubkeyHex, plaintext, pubkey, signerPackage)
+                SignerPrompts.queued(promptsUser) { Nip55.nip44Encrypt(peerPubkeyHex, plaintext, pubkey, signerPackage) }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 throw SigningException("Amber NIP-44 encryption failed: ${e.message}", e)
@@ -233,7 +260,7 @@ interface NostrSigner {
         override suspend fun nip44Decrypt(peerPubkeyHex: String, ciphertext: String): String {
             if (disposed) throw SigningException("Amber signer has been disposed")
             return try {
-                Nip55.nip44Decrypt(peerPubkeyHex, ciphertext, pubkey, signerPackage)
+                SignerPrompts.queued(promptsUser) { Nip55.nip44Decrypt(peerPubkeyHex, ciphertext, pubkey, signerPackage) }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 throw SigningException("Amber NIP-44 decryption failed: ${e.message}", e)

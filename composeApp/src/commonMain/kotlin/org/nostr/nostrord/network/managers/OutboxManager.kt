@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.outbox.Kind10009Baseline
@@ -54,9 +53,6 @@ class OutboxManager(
          * with an empty one, and a replaceable event leaves nothing to recover from.
          */
         const val BASELINE_WAIT_MS = 7_000L
-
-        /** Cap on one private-section decrypt: a bunker signer may be slow, offline, or refuse. */
-        const val PRIVATE_DECRYPT_TIMEOUT_MS = 20_000L
 
         /** How long a failed decrypt is remembered before the next event may try again. */
         const val PRIVATE_DECRYPT_RETRY_MS = 60_000L
@@ -256,6 +252,12 @@ class OutboxManager(
             } catch (_: Exception) {
                 Kind10009Baseline.EMPTY
             }
+        // The section this account already read, when the relays still hold that version: the
+        // signer is not asked again for a ciphertext whose plaintext is on disk.
+        val alreadyRead = kind10009Baseline.readablePrivateTags
+        privateTags = alreadyRead.orEmpty()
+        privateDecryptedFrom = if (alreadyRead != null) kind10009Baseline.content else ""
+        if (alreadyRead != null) _privateSectionOpaque.value = false
         // Which groups are private has to be known before the first publish of the session, not
         // only after a successful decrypt.
         _privateGroupEntries.value =
@@ -486,15 +488,15 @@ class OutboxManager(
             _privateSectionOpaque.value = true
             return emptyList()
         }
+        // No deadline here: [decryptPrivate] owns it, because only the caller knows whether
+        // the signer answers on its own or is waiting on the user at a dialog.
         val plaintext =
-            withTimeoutOrNull(PRIVATE_DECRYPT_TIMEOUT_MS) {
-                try {
-                    decryptPrivate(content)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    null
-                }
+            try {
+                decryptPrivate(content)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
             }
         val decoded = plaintext?.let { Nip51.decodeTags(it) }
         if (decoded == null) {
@@ -545,8 +547,14 @@ class OutboxManager(
         privateTags = newPrivateTags
         privateDecryptedFrom = ciphertext
         // Carry the new section, not the replaced one: a second publish before our own event
-        // comes back from the relays would otherwise undo the change.
-        val updated = baseline.copy(content = ciphertext)
+        // comes back from the relays would otherwise undo the change. The plaintext rides
+        // along: this client wrote the ciphertext, so its own event never needs a decrypt.
+        val updated =
+            baseline.copy(
+                content = ciphertext,
+                privateTags = newPrivateTags,
+                privateDecryptedFrom = ciphertext,
+            )
         groupsMutex.withLock { kind10009Baseline = updated }
         try {
             SecureStorage.saveKind10009BaselineFor(pubKey, updated)
@@ -865,12 +873,19 @@ class OutboxManager(
         if (!supersededByNewerSeen && !_privateSectionOpaque.value) {
             _privateGroupEntries.value = privateEntries - publicEntries
             _privateOnlyRelays.value = privateRelays - publicRelays
+            val readTags = privateTags
+            val readFrom = privateDecryptedFrom
             val withPrivate =
                 groupsMutex.withLock {
                     kind10009Baseline =
                         kind10009Baseline.copy(
                             privateEntries = _privateGroupEntries.value.map { (relay, id) -> listOf(relay, id) },
                             privateOnlyRelays = _privateOnlyRelays.value.toList(),
+                            // Stamped with the ciphertext it came from, so a session that
+                            // finds a newer version on the relays asks the signer instead of
+                            // trusting the plaintext of the one it replaced.
+                            privateTags = readTags,
+                            privateDecryptedFrom = readFrom,
                         )
                     kind10009Baseline
                 }

@@ -385,4 +385,59 @@ class Kind10009BaselineTest {
         assertTrue(outbox.currentKind10009Baseline().content.isEmpty(), "another account's content must never be republished as ours")
         scope.cancel()
     }
+
+    @Test
+    fun `a read private section is stamped with the ciphertext it came from`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+        val private = Nip51.encodeTags(listOf(listOf("group", "secret", "wss://relay.two")))
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { private },
+        )
+
+        // The next session reads this instead of opening a signer dialog for a ciphertext
+        // whose plaintext is already on disk.
+        val baseline = outbox.currentKind10009Baseline()
+        assertEquals(CIPHERTEXT, baseline.privateDecryptedFrom)
+        assertEquals(listOf(listOf("group", "secret", "wss://relay.two")), baseline.readablePrivateTags)
+        scope.cancel()
+    }
+
+    @Test
+    fun `a section the signer refused is not stamped`() = runTest {
+        val scope = TestScope(testScheduler)
+        val outbox = manager(scope)
+
+        outbox.handleKind10009Event(
+            event(100, CIPHERTEXT, """[["group","abc","wss://relay.one"]]"""),
+            "wss://relay.one",
+            OWNER,
+            {},
+            decryptPrivate = { null },
+        )
+
+        assertEquals(null, outbox.currentKind10009Baseline().readablePrivateTags)
+        scope.cancel()
+    }
+
+    @Test
+    fun `a stamp from a replaced version is not trusted`() {
+        val read =
+            Kind10009Baseline(
+                content = CIPHERTEXT,
+                privateTags = listOf(listOf("group", "secret", "wss://relay.two")),
+                privateDecryptedFrom = CIPHERTEXT,
+            )
+        assertEquals(read.privateTags, read.readablePrivateTags)
+
+        // Another client republished the list: the plaintext on disk describes the section
+        // that version replaced, so the signer has to read the new one.
+        assertEquals(null, read.copy(content = "AhDifferentPayload==").readablePrivateTags)
+        assertEquals(null, read.copy(privateDecryptedFrom = "").readablePrivateTags)
+    }
 }
