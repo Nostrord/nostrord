@@ -1,6 +1,8 @@
 package org.nostr.nostrord.network.managers
 
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.auth.Account
 import org.nostr.nostrord.network.AuthManager
@@ -31,12 +33,30 @@ class SessionManager(
     // so the in-flight retry loop always signs the relay's current challenge.
     private val latestChallenge = mutableMapOf<NostrGroupClient, String>()
 
+    // Sockets whose AUTH the user declined at a signer dialog. A decline is an answer, so
+    // this socket stops asking: a chatty relay re-challenging in a loop would otherwise
+    // reopen the dialog for as long as the connection lives. Pruned by liveness rather than
+    // by an explicit close hook, which this class does not get.
+    private val authDeclined = mutableSetOf<NostrGroupClient>()
+
+    // One 22242 signature in flight per relay. The focused client and a pool client can hold
+    // the same relay, and a reconnect opens the next socket before the previous one is reaped:
+    // their challenges take turns at the signer instead of arriving together. Only the sign
+    // call is gated (not the retry loop, which lives as long as its socket), so a socket
+    // sharing a relay is delayed, never starved.
+    private val relayAuthGates = mutableMapOf<String, Mutex>()
+    private val relayAuthGatesLock = Mutex()
+
+    private suspend fun gateFor(relayUrl: String): Mutex = relayAuthGatesLock.withLock {
+        relayAuthGates.getOrPut(relayUrl) { Mutex() }
+    }
+
+    // Per relay+identity pacing of the signatures themselves. Applies to every login method:
+    // the signer is a shared, rate-limited resource whether it is an extension, a signer app
+    // or a remote bunker.
+    private val authThrottle = AuthSignThrottle()
+
     private companion object {
-        // Bounds ONE sign attempt (a healthy bunker answers in 1-4s; local keys are
-        // instant). Well under Nip46Client's own 120s request timeout so a stalled
-        // signer transport frees this socket's attempt quickly and the retry loop —
-        // not the relay's goodwill in re-challenging — owns recovery.
-        const val AUTH_SIGN_TIMEOUT_MS = 20_000L
         const val AUTH_RETRY_BASE_MS = 5_000L
         const val AUTH_RETRY_MAX_MS = 30_000L
     }
@@ -102,6 +122,7 @@ class SessionManager(
         // re-requests group messages.
         authInProgress.clear()
         latestChallenge.clear()
+        authThrottle.clear()
         authManager.logout()
     }
 
@@ -186,6 +207,8 @@ class SessionManager(
     suspend fun handleAuthChallenge(client: NostrGroupClient, challenge: String): Boolean {
         val relayUrl = client.getRelayUrl()
         if (!client.isConnected()) return false // race-condition loser: already disconnected
+        authDeclined.removeAll { !it.isConnected() }
+        if (client in authDeclined) return false
         // Always record the newest challenge, even when this call loses the dedup below:
         // the in-flight loop reads it fresh on every attempt, so a relay that rotates
         // challenges never gets a stale one signed.
@@ -197,37 +220,59 @@ class SessionManager(
             return false
         }
 
+        val relayGate = gateFor(relayUrl)
+
         return try {
-            // Retry until the socket dies. One unbounded 120s bunker sign used to own the
-            // socket's ONLY attempt while the dedup above swallowed every re-challenge the
-            // relay sent (observed: 8 challenges ignored, zero AUTH frames, total deafness
-            // on a private relay when the signer transport was down). Each attempt now gets
-            // a bounded budget, and failures back off and retry — a deaf-but-connected
-            // socket has nothing better to do than keep trying to authenticate.
+            // Retry until the socket dies: the dedup above swallows every re-challenge the
+            // relay sends, so this loop - not the relay's goodwill - owns recovery (observed
+            // without it: 8 challenges ignored, zero AUTH frames, total deafness on a private
+            // relay while the signer transport was down). Attempts are sequential and paced,
+            // so a deaf-but-connected socket keeps trying without multiplying signer traffic.
             var attempt = 0
             while (client.isConnected()) {
                 attempt++
-                val authEvent = Event(
-                    pubkey = pubKey,
-                    createdAt = epochMillis() / 1000,
-                    kind = 22242,
-                    tags = listOf(
-                        listOf("relay", relayUrl),
-                        listOf("challenge", latestChallenge[client] ?: challenge),
-                    ),
-                    content = "",
-                )
 
-                // interactive=false: a failed background AUTH sign must not flip the
-                // bunker banner to "can't reach your signer". (banner-flicker fix)
-                val signedEvent = try {
-                    kotlinx.coroutines.withTimeoutOrNull(AUTH_SIGN_TIMEOUT_MS) {
+                val promptsUser =
+                    org.nostr.nostrord.auth.ActiveAccountManager.session.value?.signer?.promptsUser == true
+
+                val signedEvent = relayGate.withLock {
+                    // Pace repeats for this relay+identity, under the gate so a socket that
+                    // just waited its turn is measured against the signature that ran ahead
+                    // of it. The first signature is immediate; a relay that keeps dropping and
+                    // re-challenging waits progressively longer, so socket churn no longer
+                    // translates one-to-one into signer traffic.
+                    val wait = authThrottle.delayBeforeSignMs(relayUrl, pubKey, epochMillis())
+                    if (wait > 0) kotlinx.coroutines.delay(wait)
+                    if (!client.isConnected()) return false
+
+                    val authEvent = Event(
+                        pubkey = pubKey,
+                        createdAt = epochMillis() / 1000,
+                        kind = 22242,
+                        tags = listOf(
+                            listOf("relay", relayUrl),
+                            listOf("challenge", latestChallenge[client] ?: challenge),
+                        ),
+                        content = "",
+                    )
+
+                    // No deadline of our own, for any login method. Abandoning a request does
+                    // not recall it: a bunker still signs what it already received, and asking
+                    // again only adds a second request to the same queue. A prompting signer is
+                    // worse still - the dialog is on screen and a deadline just stacks another
+                    // behind it. Every signer path ends on its own (the NIP-46 client times a
+                    // request out at 120s) and the retry loop owns recovery from there.
+                    //
+                    // interactive=false: a failed background AUTH sign must not flip the
+                    // bunker banner to "can't reach your signer". (banner-flicker fix)
+                    authThrottle.recordSign(relayUrl, pubKey, epochMillis())
+                    try {
                         signEvent(authEvent, interactive = false)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        null // fail-fast throws (signer not connected yet) retry like failures
                     }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    null // fail-fast throws (signer not connected yet) retry like timeouts
                 }
 
                 if (signedEvent != null) {
@@ -249,6 +294,13 @@ class SessionManager(
                     // fires when this client is the focused relay.
                     kotlinx.coroutines.delay(500)
                     return true
+                }
+
+                // The only way a prompting signer fails is that the user said no (or closed
+                // the dialog). Retrying reopens it, so the answer stands for this socket.
+                if (promptsUser) {
+                    authDeclined.add(client)
+                    return false
                 }
 
                 kotlinx.coroutines.delay(minOf(AUTH_RETRY_BASE_MS * (1L shl (attempt - 1)), AUTH_RETRY_MAX_MS))

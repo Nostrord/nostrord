@@ -203,9 +203,17 @@ suspend fun NostrGroupClient.sendAndAwaitOkOrError(eventJson: String, eventId: S
     PublishResult.Error(eventId, e)
 }
 
+/** [NostrGroupClient.diagRole] for the sockets the NIP-46 client owns. */
+const val SIGNER_DIAG_ROLE = "signer"
+
 class NostrGroupClient(
     private val relayUrl: String = "wss://groups.fiatjaf.com",
+    diagRole: String? = null,
 ) {
+    // A NIP-46 socket: it carries the signer's response subscription, so it is worth far more
+    // alive than a group socket and is never torn down on a slow publish.
+    private val isSignerSocket = diagRole == SIGNER_DIAG_ROLE
+
     // Managed coroutine scope for this client - cancelled on disconnect
     // networkClientDispatcher, NOT Default: concurrent ws handshakes park their thread
     // in Ktor's generateNonce runBlocking and can deadlock the whole Default pool
@@ -311,8 +319,8 @@ class NostrGroupClient(
      * pongs never reach the frame loop, so inbound silence alone cannot
      * distinguish a quiet-but-alive relay from a dead socket.
      */
-    suspend fun probeLiveness(timeoutMs: Long = 5_000) {
-        if (!isConnected() || probeInFlight) return
+    suspend fun probeLiveness(timeoutMs: Long = 5_000): Boolean {
+        if (!isConnected() || probeInFlight) return true
         probeInFlight = true
         try {
             val sentAtMs = epochMillis()
@@ -320,8 +328,9 @@ class NostrGroupClient(
                 session?.send(Frame.Text("""["REQ","_probe",{"ids":["${"0".repeat(64)}"],"limit":1}]"""))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                // The write itself threw: the pipe is broken, no second opinion needed.
                 markDead()
-                return
+                return false
             }
             while (epochMillis() - sentAtMs < timeoutMs) {
                 delay(250)
@@ -329,10 +338,12 @@ class NostrGroupClient(
                     try {
                         session?.send(Frame.Text("""["CLOSE","_probe"]"""))
                     } catch (_: Exception) {}
-                    return
+                    return true
                 }
             }
-            markDead()
+            // Unanswered. Whether that convicts the socket is RelayProbeGuard's call: silence can
+            // be the relay ignoring the REQ, and one socket's worth of evidence never shows that.
+            return false
         } finally {
             probeInFlight = false
         }
@@ -563,14 +574,23 @@ class NostrGroupClient(
             // Wait for OK with timeout
             withTimeout(timeoutMs) {
                 deferred.await()
-            }
+            }.also { org.nostr.nostrord.network.managers.RelayProbeGuard.onPublishAnswered(relayUrl) }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             pendingOkMutex.withLock { pendingOkResponses.remove(eventId) }
-            // No OK and not a single frame of any kind while we waited: the socket
-            // is a zombie, not a slow relay. Tear it down so the reconnect path
-            // (resubscribe + pending-event flush) takes over; otherwise the write
-            // keeps buffering into a dead pipe and the message stays Sending forever.
-            if (lastInboundAtMs < sentAtMs) {
+            // No OK and not a single frame of any kind while we waited. That can be a zombie
+            // socket - tearing it down hands over to reconnect + resubscribe + pending-event
+            // flush, instead of buffering writes into a dead pipe forever - but it can equally be
+            // a relay rate-limiting the publish, which answers late rather than never. One late OK
+            // is not a corpse, so the kill waits for the count (RelayProbeGuard).
+            //
+            // A signer socket is never killed here at all. It carries the NIP-46 response
+            // subscription, so dropping it guarantees the reply we are waiting for lands on a
+            // relay we just left: a slow publish would become a signer that went silent for 90s,
+            // per request, which is exactly the failure this diagnostic was chasing.
+            if (lastInboundAtMs < sentAtMs &&
+                !isSignerSocket &&
+                org.nostr.nostrord.network.managers.RelayProbeGuard.onPublishTimeout(relayUrl)
+            ) {
                 markDead()
             }
             PublishResult.Timeout(eventId)

@@ -22,6 +22,12 @@ import kotlinx.serialization.json.longOrNull
  * decrypt found inside [content]. They persist so a session that cannot read the section — a
  * bunker that is offline or refuses — still knows to keep those groups out of the public tags
  * instead of publishing them in the clear.
+ *
+ * [privateTags] is that decrypt's full output, including the tags this client does not model,
+ * and [privateDecryptedFrom] is the ciphertext it came from. Together they let a new session
+ * skip the decrypt when the relays still hold the same version: with a signer that asks the
+ * user, that decrypt is a dialog on every launch to re-read what is already on disk. They are
+ * trusted only while [privateDecryptedFrom] still equals [content].
  */
 @Serializable
 data class Kind10009Baseline(
@@ -30,7 +36,16 @@ data class Kind10009Baseline(
     val foreignTags: List<List<String>> = emptyList(),
     val privateEntries: List<List<String>> = emptyList(),
     val privateOnlyRelays: List<String> = emptyList(),
+    val privateTags: List<List<String>> = emptyList(),
+    val privateDecryptedFrom: String = "",
 ) {
+    /**
+     * The private tags this snapshot may be read for, or null when the signer has to be asked.
+     * A ciphertext that no longer matches [content] belongs to a version the relays replaced.
+     */
+    val readablePrivateTags: List<List<String>>?
+        get() = privateTags.takeIf { privateDecryptedFrom.isNotBlank() && privateDecryptedFrom == content }
+
     companion object {
         val EMPTY = Kind10009Baseline()
 
