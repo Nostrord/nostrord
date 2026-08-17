@@ -137,7 +137,7 @@ fun ThreadsScreen(
         ThreadsViewModel(AppModule.nostrRepository, route.groupId, route.relayUrl)
     }
     val threads by vm.threads.collectAsState()
-    val isLoading by vm.isLoading.collectAsState()
+    val placeholder by vm.placeholder.collectAsState()
     val openThread by vm.openThread.collectAsState()
     val userMetadata by vm.userMetadata.collectAsState()
     val messageStatus by vm.messageStatus.collectAsState()
@@ -147,7 +147,6 @@ fun ThreadsScreen(
     val deleteError by vm.deleteError.collectAsState()
     val isAdmin by vm.isAdmin.collectAsState()
     val isRestricted by vm.isRestricted.collectAsState()
-    val isPendingApproval by vm.isPendingApproval.collectAsState()
     val membership by vm.membershipState.collectAsState()
     val groupAccess by vm.groupAccess.collectAsState()
     val joinError by vm.joinError.collectAsState()
@@ -538,7 +537,7 @@ fun ThreadsScreen(
                 }
                 HorizontalDivider(color = NostrordColors.Divider)
 
-                when (threadsPlaceholder(threads.isNotEmpty(), isLoading, isPendingApproval, isRestricted)) {
+                when (placeholder) {
                     ThreadsPlaceholder.LOADING -> EmptyState("Loading threads...")
                     ThreadsPlaceholder.PENDING_APPROVAL ->
                         LockedState(
