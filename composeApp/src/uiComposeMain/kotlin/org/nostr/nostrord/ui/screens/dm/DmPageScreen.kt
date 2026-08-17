@@ -454,6 +454,9 @@ fun DmPageScreen(
                                             // reusing the group chat renderer. White text on the "mine" bubble.
                                             MessageContent(
                                                 content = body,
+                                                // The rumor's own tags: custom emoji and the imeta
+                                                // hints that pre-size an inline image, same as chat.
+                                                tags = m.tags,
                                                 onMentionClick = { onOpenProfile(UserRoute(it)) },
                                                 textColor = if (m.mine) Color.White else NostrordColors.TextPrimary,
                                             )
