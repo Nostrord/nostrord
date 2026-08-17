@@ -42,6 +42,33 @@ class DmViewModel(
     /** Download + decryption state of kind:15 attachments, keyed by rumor id. */
     val fileStates = repo.dmFileStates
 
+    /** Reactions keyed by the message they target, then by emoji. */
+    val reactions = repo.dmReactions
+
+    /**
+     * Send [bytes] as an encrypted kind:15 attachment. Unlike pasting a url into the text, the
+     * file is unreadable to anyone who has not been sent the key.
+     */
+    fun sendFile(
+        recipientPubkey: String,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int? = null,
+        height: Int? = null,
+        onFailure: (String) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val result = repo.sendDmFile(recipientPubkey, bytes, filename, mimeType, width, height)
+            if (result is Result.Error) onFailure(result.error.message)
+        }
+    }
+
+    /** React to [messageId] in the conversation with [peerPubkey]. */
+    fun react(peerPubkey: String, messageId: String, emoji: String, emojiUrl: String? = null) {
+        viewModelScope.launch { repo.sendDmReaction(peerPubkey, messageId, emoji, emojiUrl) }
+    }
+
     /**
      * Start reading the attachment on [message], if it has one. Idempotent, so both UIs can call
      * it from the bubble as it renders and let the manager decide whether there is work to do.

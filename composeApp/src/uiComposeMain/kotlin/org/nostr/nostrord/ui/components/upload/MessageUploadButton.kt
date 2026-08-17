@@ -28,6 +28,10 @@ import org.nostr.nostrord.utils.Result
  * Attach/upload button for the message input row.
  * Picks a file, uploads to nostr.build, and returns the full upload result
  * (URL + NIP-68 metadata) so the caller can build imeta tags.
+ *
+ * [onFilePicked] takes the picked bytes instead, leaving the upload to the caller. DMs use it:
+ * their attachments are encrypted before they reach a media server, so the plain upload here
+ * would defeat the point.
  */
 @Composable
 fun MessageUploadButton(
@@ -36,6 +40,7 @@ fun MessageUploadButton(
     // Upload owned by the caller (paste / drag-and-drop) that doesn't go through
     // this button's picker. When true, the spinner shows here on the attach icon.
     externalBusy: Boolean = false,
+    onFilePicked: ((ByteArray, String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var isUploading by remember { mutableStateOf(false) }
@@ -54,6 +59,11 @@ fun MessageUploadButton(
                 uploadError = it
             },
         ) { bytes, filename ->
+            if (onFilePicked != null) {
+                isUploading = false
+                onFilePicked(bytes, filename)
+                return@rememberMediaPickerLauncher
+            }
             scope.launch {
                 try {
                     val mime = mimeTypeForFilename(filename)

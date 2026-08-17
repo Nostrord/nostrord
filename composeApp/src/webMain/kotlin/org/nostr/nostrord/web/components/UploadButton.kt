@@ -71,7 +71,20 @@ external interface UploadButtonProps : Props {
      * MediaAccept.Images. Defaults to the full image/video/audio set used by the composer.
      */
     var imagesOnly: Boolean?
+
+    /**
+     * Takes the validated bytes instead of uploading them. DMs use it: their attachments are
+     * encrypted before they reach a media server, so the plain upload here would defeat the point.
+     */
+    var onPicked: ((PickedFile) -> Unit)?
 }
+
+/** A picked file that passed validation, with the mime the upload should carry. */
+data class PickedFile(
+    val bytes: ByteArray,
+    val name: String,
+    val mimeType: String,
+)
 
 /**
  * Upload button — a styled `<label>` wrapping a hidden file input. On pick it validates
@@ -128,9 +141,17 @@ val UploadButton =
                         props.onBusyChange?.invoke(true)
                         launchApp {
                             try {
-                                when (val r = uploadBlob(f, props.imagesOnly == true)) {
-                                    is Result.Success -> props.onUploaded(r.data)
-                                    is Result.Error -> props.onError(r.error.message)
+                                val handOver = props.onPicked
+                                if (handOver != null) {
+                                    when (val picked = readPickedFile(f, props.imagesOnly == true)) {
+                                        is Result.Success -> handOver(picked.data)
+                                        is Result.Error -> props.onError(picked.error.message)
+                                    }
+                                } else {
+                                    when (val r = uploadBlob(f, props.imagesOnly == true)) {
+                                        is Result.Success -> props.onUploaded(r.data)
+                                        is Result.Error -> props.onError(r.error.message)
+                                    }
                                 }
                             } finally {
                                 setPicking(false)
@@ -152,6 +173,17 @@ val UploadButton =
  * [Result.Error] to surface. Reusable by the file picker and Ctrl+V paste / drag-and-drop.
  */
 suspend fun uploadBlob(file: dynamic, imagesOnly: Boolean = false): Result<UploadResult> {
+    val picked = readPickedFile(file, imagesOnly)
+    val data = picked.getOrNull() ?: return Result.Error(picked.errorOrNull() ?: AppError.Unknown("Upload failed"))
+    return uploadMedia(data.bytes, data.name, data.mimeType)
+}
+
+/**
+ * Validate a picked/pasted File (or Blob) and read its bytes: the 20 MB cap and the supported
+ * image/video/audio formats, with the same user-facing messages as the native picker. The step
+ * before an upload, and all a caller that encrypts the bytes itself needs.
+ */
+suspend fun readPickedFile(file: dynamic, imagesOnly: Boolean = false): Result<PickedFile> {
     val name = (file.name.unsafeCast<String?>())?.takeIf { it.isNotBlank() } ?: "file"
     val size = (file.size.unsafeCast<Double?>())?.toLong() ?: 0L
     if (size > MAX_UPLOAD_BYTES) {
@@ -180,7 +212,7 @@ suspend fun uploadBlob(file: dynamic, imagesOnly: Boolean = false): Result<Uploa
     }
     val bytes = readFileBytes(file)
     if (bytes.isEmpty()) return Result.Error(AppError.Unknown("Could not read the selected file."))
-    return uploadMedia(bytes, name, mime)
+    return Result.Success(PickedFile(bytes, name, mime))
 }
 
 /** Read a picked file's bytes via the Blob arrayBuffer() promise. */

@@ -541,7 +541,7 @@ private fun ContextMenuContent(
  * `.ctx-reactions` row.
  */
 @Composable
-private fun QuickReactionsRow(
+internal fun QuickReactionsRow(
     onQuickReact: (String) -> Unit,
     onOpenPicker: () -> Unit,
 ) {

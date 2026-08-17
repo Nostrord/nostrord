@@ -106,6 +106,19 @@ class DmManager(
     private val _messagesByPeer = MutableStateFlow<Map<String, List<DmMessage>>>(emptyMap())
     val messagesByPeer: StateFlow<Map<String, List<DmMessage>>> = _messagesByPeer.asStateFlow()
 
+    // Reaction rumors (kind:7) kept per peer, apart from the messages: they are not bubbles, so
+    // they must not reach the thread, the conversation preview or the unread counts. Held in the
+    // same DmMessage shape because they persist through the same cache path.
+    private val _reactionRumorsByPeer = MutableStateFlow<Map<String, List<DmMessage>>>(emptyMap())
+    val reactionRumorsByPeer: StateFlow<Map<String, List<DmMessage>>> = _reactionRumorsByPeer.asStateFlow()
+
+    // Aggregated on every change rather than derived through a flow operator: the UI reads this
+    // in the same frame a reaction is filed, and a stateIn would only catch up a dispatch later.
+    private val _reactions = MutableStateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>>(emptyMap())
+
+    /** Reactions keyed by the rumor they target, then by emoji. Same shape as group chat's. */
+    val reactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> = _reactions.asStateFlow()
+
     // Read high-water per peer: createdAt of the newest message marked read. Persisted by the repo.
     private val _lastReadByPeer = MutableStateFlow<Map<String, Long>>(emptyMap())
     val lastReadByPeer: StateFlow<Map<String, Long>> = _lastReadByPeer.asStateFlow()
@@ -236,6 +249,10 @@ class DmManager(
             return false
         }
         val rumor = unwrapped.rumor
+        if (rumor.kind == Nip17.KIND_REACTION) {
+            fileReaction(rumor, unwrapped.senderPubkey, myPubkey)
+            return true
+        }
         if (!isConversationRumor(rumor)) return true
         val rumorId = rumor.id ?: return true
         val sender = unwrapped.senderPubkey
@@ -332,6 +349,83 @@ class DmManager(
      * message like any other, so dropping it would silently lose the sender's attachment.
      */
     private fun isConversationRumor(rumor: Event): Boolean = rumor.kind == Nip17.KIND_CHAT || rumor.kind == Nip17.KIND_FILE
+
+    /** File an incoming kind:7 rumor under its conversation. Ignores one we already hold. */
+    private fun fileReaction(rumor: Event, sender: String, myPubkey: String) {
+        val rumorId = rumor.id ?: return
+        val peer = (if (sender == myPubkey) rumor.getTag("p")?.getOrNull(1) else sender) ?: return
+        if (!markRumorSeen(rumorId)) return
+        addReactionRumor(
+            peer,
+            DmMessage(
+                id = rumorId,
+                peerPubkey = peer,
+                senderPubkey = sender,
+                content = rumor.content,
+                createdAt = rumor.createdAt,
+                mine = sender == myPubkey,
+                rumorJson = rumor.toJsonString(),
+                kind = Nip17.KIND_REACTION,
+            ),
+        )
+    }
+
+    /** Show our own reaction before its wrap round-trips; the echo dedups on the rumor id. */
+    fun addOptimisticReaction(rumor: Event, recipientPubkey: String, myPubkey: String) {
+        val rumorId = rumor.id ?: return
+        if (!markRumorSeen(rumorId)) return
+        addReactionRumor(
+            recipientPubkey,
+            DmMessage(
+                id = rumorId,
+                peerPubkey = recipientPubkey,
+                senderPubkey = myPubkey,
+                content = rumor.content,
+                createdAt = rumor.createdAt,
+                mine = true,
+                rumorJson = rumor.toJsonString(),
+                kind = Nip17.KIND_REACTION,
+            ),
+        )
+    }
+
+    /** Restore reaction rumors from the cache. */
+    fun hydrateReactions(rumors: List<DmMessage>) {
+        if (rumors.isEmpty()) return
+        seenRumorIds.update { it + rumors.map { r -> r.id } }
+        _reactionRumorsByPeer.value = rumors.groupBy { it.peerPubkey }
+        _reactions.value = aggregateReactions(rumors)
+    }
+
+    private fun addReactionRumor(peer: String, reaction: DmMessage) {
+        _reactionRumorsByPeer.update { current ->
+            current + (peer to (current[peer].orEmpty() + reaction))
+        }
+        _reactions.value = aggregateReactions(_reactionRumorsByPeer.value.values.flatten())
+    }
+
+    /**
+     * Collapse reaction rumors into per-target emoji counts. A reactor is counted once per emoji,
+     * and a custom emoji's url comes from the rumor's own NIP-30 tag.
+     */
+    private fun aggregateReactions(rumors: List<DmMessage>): Map<String, Map<String, GroupManager.ReactionInfo>> {
+        val out = mutableMapOf<String, MutableMap<String, GroupManager.ReactionInfo>>()
+        for (r in rumors) {
+            val rumor = r.rumorJson?.let { Nip17.parseAnyRumor(it) } ?: continue
+            val target = rumor.getTag("e")?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: continue
+            val emoji = r.content.takeIf { it.isNotBlank() } ?: continue
+            val byEmoji = out.getOrPut(target) { mutableMapOf() }
+            val existing = byEmoji[emoji]
+            if (existing != null && r.senderPubkey in existing.reactors) continue
+            val emojiTag = rumor.getTag("emoji")
+            byEmoji[emoji] =
+                GroupManager.ReactionInfo(
+                    emojiUrl = emojiTag?.getOrNull(2) ?: existing?.emojiUrl,
+                    reactors = (existing?.reactors ?: emptyList()) + r.senderPubkey,
+                )
+        }
+        return out
+    }
 
     private fun addMessage(peer: String, message: DmMessage) {
         peerByRumor.update { it + (message.id to peer) }
@@ -499,6 +593,8 @@ class DmManager(
         relaysByRumor.value = emptyMap()
         _messageStatus.value = emptyMap()
         _messagesByPeer.value = emptyMap()
+        _reactionRumorsByPeer.value = emptyMap()
+        _reactions.value = emptyMap()
         _dmRelaysByPubkey.value = emptyMap()
         _encKeyByPubkey.value = emptyMap()
         _lastReadByPeer.value = emptyMap()

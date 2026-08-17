@@ -1,6 +1,7 @@
 package org.nostr.nostrord.ui.screens.dm
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.upload.mimeTypeForFilename
+import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.chat.DateSeparator
 import org.nostr.nostrord.ui.components.chat.DmAttachment
@@ -60,8 +63,10 @@ import org.nostr.nostrord.ui.components.chat.DmRelaysDialog
 import org.nostr.nostrord.ui.components.chat.GroupInviteCard
 import org.nostr.nostrord.ui.components.chat.MessageComposer
 import org.nostr.nostrord.ui.components.chat.MessageContent
+import org.nostr.nostrord.ui.components.chat.ReactionBadges
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
 import org.nostr.nostrord.ui.components.chat.rightClickContextMenuModifier
+import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.components.layout.DmConversationList
 import org.nostr.nostrord.ui.components.layout.FrameMenuButton
 import org.nostr.nostrord.ui.components.layout.PageHeader
@@ -155,6 +160,12 @@ fun DmPageScreen(
         val messages = messagesByPeer[pubkey].orEmpty()
         val dmStatus by dmVm.messageStatus.collectAsState()
         val dmFiles by dmVm.fileStates.collectAsState()
+        val dmReactions by dmVm.reactions.collectAsState()
+        val userMetadata by dmVm.userMetadata.collectAsState()
+        val myPubkey = remember { dmVm.getPublicKey() }
+        // Message the emoji picker was opened for; null while it is closed.
+        var reactingTo by remember { mutableStateOf<String?>(null) }
+        var uploadError by remember { mutableStateOf<String?>(null) }
         // Resolve where this peer reads before the first message is written, not after their reply.
         LaunchedEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -387,6 +398,8 @@ fun DmPageScreen(
                                 onDismiss = { menuForId = null },
                                 onViewSource = { sourceForId = m.id },
                                 onCopyText = { copyToClipboard(m.content) },
+                                onReact = { dmVm.react(pubkey, m.id, it) },
+                                onOpenReactionPicker = { reactingTo = m.id },
                             )
                             // Web parity (.dm-bubble max-width 75%): the spacer eats the other
                             // 25% on the bubble's growth side; the Box owns the 75% slot and
@@ -449,6 +462,17 @@ fun DmPageScreen(
                                                 }
                                             }
                                         }
+                                        // Reactions sit inside the bubble so they follow its edge,
+                                        // the way the group chat hangs them under a message.
+                                        dmReactions[m.id]?.let { byEmoji ->
+                                            ReactionBadges(
+                                                reactions = byEmoji,
+                                                currentUserPubkey = myPubkey,
+                                                resolveMetadata = { userMetadata[it] },
+                                                onReactionClick = { emoji -> dmVm.react(pubkey, m.id, emoji) },
+                                                modifier = Modifier.padding(top = Spacing.xxs),
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -466,6 +490,52 @@ fun DmPageScreen(
             placeholder = "Message $name",
             isSending = isSending,
             modifier = Modifier.padding(horizontal = Spacing.lg).padding(bottom = Spacing.xl, top = Spacing.xs),
+            // A DM attachment is encrypted before it reaches a media server, so the picked bytes
+            // go out as a kind:15 message instead of being uploaded and pasted as a url.
+            onFilePicked = { bytes, filename ->
+                dmVm.sendFile(
+                    recipientPubkey = pubkey,
+                    bytes = bytes,
+                    filename = filename,
+                    mimeType = mimeTypeForFilename(filename),
+                    onFailure = { uploadError = it },
+                )
+            },
         )
+
+        uploadError?.let { error ->
+            ConfirmDialog(
+                title = "Could not send the file",
+                message = error,
+                confirmLabel = "OK",
+                cancelLabel = null,
+                onConfirm = { uploadError = null },
+                onDismiss = { uploadError = null },
+            )
+        }
+
+        // Full emoji picker for a reaction, opened from a bubble's context menu. Tapping the
+        // scrim closes it, same as the group chat's.
+        if (reactingTo != null) {
+            Box(
+                modifier =
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { reactingTo = null },
+                    ),
+            ) {
+                EmojiPicker(
+                    onEmojiSelect = { emoji ->
+                        reactingTo?.let { dmVm.react(pubkey, it, emoji) }
+                        reactingTo = null
+                    },
+                    onDismiss = { reactingTo = null },
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.awaitCancellation
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.extractDmGroupInvite
 import org.nostr.nostrord.ui.navigation.DmRoute
 import org.nostr.nostrord.ui.navigation.GroupRoute
@@ -25,12 +26,14 @@ import org.nostr.nostrord.web.components.DmAttachment
 import org.nostr.nostrord.web.components.EmojiPicker
 import org.nostr.nostrord.web.components.GroupInviteCard
 import org.nostr.nostrord.web.components.Ic
+import org.nostr.nostrord.web.components.PickedFile
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.copyToClipboard
 import org.nostr.nostrord.web.components.icon
+import org.nostr.nostrord.web.components.reactionBadges
+import org.nostr.nostrord.web.components.readPickedFile
 import org.nostr.nostrord.web.components.sendStateIcon
-import org.nostr.nostrord.web.components.uploadBlob
 import org.nostr.nostrord.web.components.useEscClose
 import org.nostr.nostrord.web.modals.DmEventSourceModal
 import org.nostr.nostrord.web.modals.DmRelaysModal
@@ -118,6 +121,10 @@ val DmPage =
         val userMetadata = useStateFlow(dmVm.userMetadata)
         val dmStatus = useStateFlow(dmVm.messageStatus)
         val dmFiles = useStateFlow(dmVm.fileStates)
+        val dmReactions = useStateFlow(dmVm.reactions)
+        // Message the full emoji picker was opened for; null while it is closed.
+        val (reactingTo, setReactingTo) = useState<String?> { null }
+        val myPubkey = dmVm.getPublicKey()
         // Resolve where this peer reads before the first message is written, not after their reply.
         useEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -223,13 +230,32 @@ val DmPage =
 
         fun isMediaMime(type: String?): Boolean = type != null && (type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/"))
 
-        // Upload a pasted / dropped file and append its URL to the draft (parity with the group composer).
+        // Send a picked / pasted / dropped file as an encrypted kind:15 message. It is not appended
+        // to the draft as a url the way the group composer does: a DM attachment is encrypted
+        // before upload, so the server holds bytes nobody else can read.
+        fun sendMediaFile(picked: PickedFile) {
+            setUploadCount { it + 1 }
+            launchApp {
+                try {
+                    dmVm.sendFile(
+                        recipientPubkey = pubkey,
+                        bytes = picked.bytes,
+                        filename = picked.name,
+                        mimeType = picked.mimeType,
+                        onFailure = { setUploadError(it) },
+                    )
+                } finally {
+                    setUploadCount { it - 1 }
+                }
+            }
+        }
+
         fun handleMediaFile(file: dynamic) {
             setUploadCount { it + 1 }
             launchApp {
                 try {
-                    when (val r = uploadBlob(file)) {
-                        is Result.Success -> setText { prev -> if (prev.isBlank()) r.data.url else "$prev ${r.data.url}" }
+                    when (val r = readPickedFile(file)) {
+                        is Result.Success -> sendMediaFile(r.data)
                         is Result.Error -> setUploadError(r.error.message)
                     }
                 } finally {
@@ -463,6 +489,13 @@ val DmPage =
                                         // once a relay OKs the wrap (reuses the group chat icon).
                                         if (m.mine) sendStateIcon(dmStatus[m.id])
                                     }
+                                    // Reactions hang inside the bubble so they follow its edge,
+                                    // the way the group chat renders them under a message.
+                                    dmReactions[m.id]?.let { byEmoji ->
+                                        reactionBadges(byEmoji, emptyList(), myPubkey, userMetadata) { emoji ->
+                                            dmVm.react(pubkey, m.id, emoji)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -490,6 +523,30 @@ val DmPage =
                     onTouchStart = { it.stopPropagation() }
                     onTouchMove = { it.stopPropagation() }
                     onTouchEnd = { it.stopPropagation() }
+                    // Quick-reactions row (one tap to react) + the full picker, mirroring the
+                    // group chat menu and the native DM one.
+                    div {
+                        className = ClassName("ctx-reactions")
+                        for (emoji in QuickReactions) {
+                            button {
+                                className = ClassName("ctx-reaction")
+                                onClick = {
+                                    dmVm.react(pubkey, menuMsg.id, emoji)
+                                    setMenuFor(null)
+                                }
+                                +emoji
+                            }
+                        }
+                        button {
+                            className = ClassName("ctx-reaction ctx-reaction-more")
+                            title = "Add reaction"
+                            onClick = {
+                                setMenuFor(null)
+                                setReactingTo(menuMsg.id)
+                            }
+                            icon(Ic.EmojiEmotions)
+                        }
+                    }
                     ctxItem(Ic.Visibility, "View source") {
                         setSourceFor(menuMsg.id)
                         setMenuFor(null)
@@ -497,6 +554,19 @@ val DmPage =
                     ctxItem(Ic.ContentCopy, "Copy text") {
                         copyToClipboard(menuMsg.content)
                         setMenuFor(null)
+                    }
+                }
+            }
+
+            reactingTo?.let { targetId ->
+                div {
+                    className = ClassName("emoji-overlay")
+                    onClick = { setReactingTo(null) }
+                    EmojiPicker {
+                        onPick = { emoji ->
+                            dmVm.react(pubkey, targetId, emoji)
+                            setReactingTo(null)
+                        }
                     }
                 }
             }
@@ -529,7 +599,8 @@ val DmPage =
                         busy = uploadCount > 0
                         onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
                         onPickerClosed = { composerInputRef.current?.focus() }
-                        onUploaded = { upload -> setText { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
+                        onUploaded = {}
+                        onPicked = { picked -> sendMediaFile(picked) }
                         onError = { setUploadError(it) }
                     }
                     textarea {
