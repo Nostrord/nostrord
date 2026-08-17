@@ -40,6 +40,11 @@ val ChatImage =
         // Drives the shimmer skeleton: the reserved slot animates until the bitmap paints,
         // so a slow image reads as loading instead of as an empty box that pops.
         val (loaded, setLoaded) = useState { false }
+        // The decoded bitmap's own size, read on load. It stands in for a missing imeta hint:
+        // without either, the placeholder floor stays in force and a wide image is cropped to
+        // it (object-fit) while the bubble still stretches to the image's intrinsic width.
+        val (natural, setNatural) = useState<Pair<Int, Int>?> { null }
+        val slot = props.dimensions ?: natural
         // Settings → Media: when auto-load is off we show a "Tap to load" placeholder
         // and fetch nothing until the user reveals this image. data: URIs are already
         // embedded in the event and blob: urls are bytes this tab already holds (a DM
@@ -56,14 +61,14 @@ val ChatImage =
             className = ClassName(
                 "msg-image " + (if (loaded) "is-loaded" else "is-loading") + (backdrop?.let { " $it" } ?: ""),
             )
-            // With an imeta dim hint, reserve the exact box before load so the row keeps its
-            // height (no reflow under the reader) and drop the placeholder floor that would
-            // distort a small image. The width must be explicit: an <img> with alt="" has no
-            // intrinsic size until it decodes, and `aspect-ratio` alone then resolves against
-            // a zero width, collapsing the slot to 0x0 (nothing to reserve, nothing to
-            // shimmer). Without a hint, the CSS min-height floor stays and the list's
-            // ResizeObserver re-pins as the image grows.
-            props.dimensions?.let { (w, h) ->
+            // Known size (imeta hint, or the bitmap's own once decoded): pin the exact box so
+            // the row keeps its height (no reflow under the reader) and drop the placeholder
+            // floor, which would otherwise crop a wide image to its 120px minimum. The width
+            // must be explicit: an <img> with alt="" has no intrinsic size until it decodes,
+            // and `aspect-ratio` alone then resolves against a zero width, collapsing the slot
+            // to 0x0 (nothing to reserve, nothing to shimmer). Until either is known the floor
+            // stays and the list's ResizeObserver re-pins as the image grows.
+            slot?.let { (w, h) ->
                 val displayWidth = reservedWidthPx(w, h)
                 style = unsafeJso {
                     asDynamic().aspectRatio = "$w / $h"
@@ -79,6 +84,12 @@ val ChatImage =
             onClick = { ImageViewer.show(props.imageUrl, backdrop) }
             onLoad = { event ->
                 setLoaded(true)
+                if (props.dimensions == null) {
+                    val el = event.currentTarget.asDynamic()
+                    val w = el.naturalWidth.unsafeCast<Int>()
+                    val h = el.naturalHeight.unsafeCast<Int>()
+                    if (w > 0 && h > 0) setNatural(w to h)
+                }
                 if (!corsBlocked) setBackdrop(analyzeBackdrop(event.currentTarget))
                 // Re-pinning the feed on media load is handled by the list's ResizeObserver
                 // (and, for imeta media, by the reserved box), so nothing is needed here.
