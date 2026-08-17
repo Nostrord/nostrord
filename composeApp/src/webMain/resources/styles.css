@@ -3404,6 +3404,16 @@ body {
     }
 }
 
+/* Positioned parent for the jump-to-latest pill, which has to sit above the composer rather
+   than scroll away with the messages. */
+.dm-messages-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
 /* Anchoring on by default (same as .chat-messages-list): the browser holds the row the reader
    is on when the backlog inserts older messages above, or when media above the viewport settles
    its height. The component flips it to 'none' only while pinned at the bottom, where anchoring
@@ -3411,6 +3421,7 @@ body {
 .dm-messages {
     flex: 1;
     min-height: 0;
+    width: 100%;
     overflow-y: auto;
     overflow-anchor: auto;
     padding: var(--space-lg);
@@ -5757,6 +5768,10 @@ body {
     animation: pop-in 0.14s ease-out;
     transition: color 0.15s;
 }
+.dm-jump-count {
+    font-weight: 600;
+}
+
 .chat-jump-bottom:hover {
     color: var(--color-text-primary);
 }
