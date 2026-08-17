@@ -2797,13 +2797,21 @@ class NostrRepository(
                 add("nip4e_pair")
                 add(filter)
             }.toString()
-        pairingRelays(myPub).forEach { url ->
-            val client =
-                connectionManager.getClientForRelay(url)
-                    ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-            try {
-                client?.send(req)
-            } catch (_: Throwable) {
+        // Fan out concurrently: a cold pool pays a connect per relay, and serially that is one
+        // handshake (or dead-relay timeout) after another.
+        coroutineScope {
+            pairingRelays(myPub).forEach { url ->
+                launch {
+                    val client =
+                        connectionManager.getClientForRelay(url)
+                            ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+                    try {
+                        client?.send(req)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                    }
+                }
             }
         }
     }
@@ -2962,7 +2970,6 @@ class NostrRepository(
         dmInboxStarted = true
 
         dmArchiveManager.hydrate(SecureStorage.loadDmArchivedRumorIdsFor(myPub))
-        sendPairingReq(myPub)
 
         // Seed the follow set from its persisted cache before the DM list partitions, so
         // conversations land in Follows/Others immediately instead of all falling in Others until
@@ -2974,11 +2981,16 @@ class NostrRepository(
         }
 
         // Hydrate from the CacheStore before the inbox streams so old conversations render instantly
-        // and already-seen gift wraps are never re-decrypted.
+        // and already-seen gift wraps are never re-decrypted. Nothing that touches a relay may run
+        // ahead of this: a cold pool pays a connect (or a timeout) per relay, and the conversations
+        // are on disk the whole time.
         val hydratedCount = hydrateDmCache(myPub)
         wireDmPersistence(myPub)
         // Resume any wraps that never reached a relay before the app last closed.
         resumeDmSendQueue(myPub)
+        // NIP-4e pairing listens for our own key-share events; it is not on the read path, so it
+        // never gates the messages appearing.
+        scope.launch { sendPairingReq(myPub) }
 
         dmBacklogHoldUntilMs = org.nostr.nostrord.utils.epochMillis() + DM_BACKLOG_BOOT_HOLD_MS
         dmTrickleMutex.withLock {
@@ -3133,8 +3145,16 @@ class NostrRepository(
     private suspend fun loadCachedDms(myPub: String): List<org.nostr.nostrord.storage.cache.CachedMsg> = DM_CACHE_KINDS.flatMap { cacheStore.loadByKind(myPub, it) }
 
     private fun org.nostr.nostrord.storage.cache.CachedMsg.toDmMessage(myPubkey: String): DmMessage {
-        val tags = runCatching { Json.parseToJsonElement(tagsJson) }.getOrElse { JsonArray(emptyList()) }
-        val rumorKind = if (kind == DM_FILE_CACHE_KIND || tags.carriesFileMessageTags()) Nip17.KIND_FILE else Nip17.KIND_CHAT
+        // Rows written before file messages had their own cache kind all claim kind:14, so the
+        // decryption tag is what identifies an attachment; without this an existing one hydrates
+        // as text and renders its blob url. Matched on the raw json: hydration runs over the whole
+        // history at startup, and parsing every row's tags to answer this costs more than it saves.
+        val rumorKind =
+            if (kind == DM_FILE_CACHE_KIND || tagsJson.contains("\"${Nip17File.TAG_DECRYPTION_KEY}\"")) {
+                Nip17.KIND_FILE
+            } else {
+                Nip17.KIND_CHAT
+            }
         return DmMessage(
             id = id,
             peerPubkey = groupId,
@@ -3143,26 +3163,12 @@ class NostrRepository(
             createdAt = createdAt,
             mine = pubkey == myPubkey,
             kind = rumorKind,
+            // Assembled as text around the tags exactly as they were stored, rather than parsed
+            // into a tree and re-serialized: only the content needs escaping.
             rumorJson =
-            buildJsonObject {
-                put("id", id)
-                put("pubkey", pubkey)
-                put("created_at", createdAt)
-                put("kind", rumorKind)
-                put("tags", tags)
-                put("content", content)
-            }.toString(),
+            """{"id":"$id","pubkey":"$pubkey","created_at":$createdAt,"kind":$rumorKind,"tags":$tagsJson,"content":${JsonPrimitive(content)}}""",
         )
     }
-
-    /**
-     * Whether cached tags are a NIP-17 file message's. Rows written before file messages had their
-     * own cache kind all claim kind:14, so the decryption tags are what identifies an attachment;
-     * without this an existing one hydrates as text and renders its blob url.
-     */
-    private fun JsonElement.carriesFileMessageTags(): Boolean = runCatching {
-        jsonArray.any { tag -> tag.jsonArray.firstOrNull()?.jsonPrimitive?.content == Nip17File.TAG_DECRYPTION_KEY }
-    }.getOrDefault(false)
 
     /**
      * Load DM history from the CacheStore (migrating the legacy SecureStorage blob the first time).
