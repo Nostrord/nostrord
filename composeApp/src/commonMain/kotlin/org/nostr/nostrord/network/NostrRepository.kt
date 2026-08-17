@@ -2992,6 +2992,7 @@ class NostrRepository(
         // never gates the messages appearing.
         scope.launch { sendPairingReq(myPub) }
 
+        refreshDmSyncing()
         dmBacklogHoldUntilMs = org.nostr.nostrord.utils.epochMillis() + DM_BACKLOG_BOOT_HOLD_MS
         dmTrickleMutex.withLock {
             dmEagerDecryptCount = 0
@@ -3099,6 +3100,7 @@ class NostrRepository(
     private fun stopDmInbox() {
         if (!dmInboxStarted) return
         dmInboxStarted = false
+        _dmSyncing.value = false
         dmPersistenceWired = false
         dmPersistenceJobs.forEach { it.cancel() }
         dmPersistenceJobs.clear()
@@ -3312,6 +3314,25 @@ class NostrRepository(
     // DM relays the inbox sub is currently subscribed on, so a re-derived (but unchanged)
     // relay list doesn't re-issue the REQ and re-stream the whole backlog at the bunker.
     private var dmInboxSubscribedRelays: Set<String> = emptySet()
+
+    private val _dmSyncing = MutableStateFlow(false)
+
+    override val dmSyncing: StateFlow<Boolean> = _dmSyncing.asStateFlow()
+
+    /**
+     * Recompute whether the inbox is still catching up: a relay has not EOSEd yet, or a delivered
+     * wrap is still waiting to be decrypted. Called wherever that bookkeeping moves.
+     *
+     * The UI shows this instead of blocking the composer. "Everything has arrived" is not something
+     * a Nostr client can assert: NIP-59 backdates a gift wrap by up to two days, so a relay can
+     * hand over an old message at any moment. Saying so is honest; refusing to send would not be.
+     */
+    private fun refreshDmSyncing() {
+        val subscribed = dmInboxSubscribedRelays
+        val awaitingEose = subscribed.isEmpty() || !dmInboxEosedRelays.containsAll(subscribed)
+        val awaitingDecrypt = dmReceivedWrapIds.any { it !in dmProcessedWrapIds && it !in dmGivenUpWrapIds }
+        _dmSyncing.value = dmInboxStarted && (awaitingEose || awaitingDecrypt)
+    }
 
     private suspend fun resendDmInboxReq(myPub: String) {
         // Sync the whole inbox until it has EOSEd with every delivered wrap decrypted (dmFullSyncKey),
@@ -5944,6 +5965,7 @@ class NostrRepository(
                 if (myPub != null) {
                     dmInboxEosedRelays = dmInboxEosedRelays + url.normalizeRelayUrl()
                     maybeLatchDmFullSync(myPub)
+                    refreshDmSyncing()
                 }
             }
             // Fall through — handleMessage also needs EOSE for group pagination
@@ -6034,13 +6056,17 @@ class NostrRepository(
                 val signer = ActiveAccountManager.session.value?.signer ?: return
                 val wrapId = giftWrap.id
                 if (wrapId != null) {
-                    if (wrapId !in dmReceivedWrapIds) dmReceivedWrapIds = dmReceivedWrapIds + wrapId
+                    if (wrapId !in dmReceivedWrapIds) {
+                        dmReceivedWrapIds = dmReceivedWrapIds + wrapId
+                        refreshDmSyncing()
+                    }
                     // Before any dedup skip: the same wrap sits on several DM relays, and every
                     // delivery counts for the message's "seen on" relay list.
                     dmManager.recordWrapRelay(wrapId, client.getRelayUrl().normalizeRelayUrl())
                     // Already decrypted, or given up this session: skip the (expensive) round-trip.
                     if (wrapId in dmProcessedWrapIds || wrapId in dmGivenUpWrapIds) {
                         maybeLatchDmFullSync(myPub)
+                        refreshDmSyncing()
                         return
                     }
                     // Already being decrypted by an in-flight coroutine: don't spawn a duplicate.
@@ -6081,6 +6107,7 @@ class NostrRepository(
                             }
                             if (wrapId != null) dmInFlightWrapIds = dmInFlightWrapIds - wrapId
                             maybeLatchDmFullSync(myPub)
+                            refreshDmSyncing()
                             return@launch
                         }
                     }
@@ -6149,6 +6176,7 @@ class NostrRepository(
                             dmFailCounts = dmFailCounts - wrapId
                             scheduleSaveProcessedWrapIds(myPub)
                             maybeLatchDmFullSync(myPub)
+                            refreshDmSyncing()
                         } else if (!handled && wrapId != null) {
                             // Transient failure (signer timeout/unresponsive, or a malformed wrap).
                             // Count it; after the cap, give up for this session so the retry loop
@@ -6158,6 +6186,7 @@ class NostrRepository(
                             dmFailCounts = dmFailCounts + (wrapId to fails)
                             if (fails >= DM_MAX_DECRYPT_ATTEMPTS) {
                                 dmGivenUpWrapIds = dmGivenUpWrapIds + wrapId
+                                refreshDmSyncing()
                             }
                         }
                     } finally {

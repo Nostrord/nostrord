@@ -3492,6 +3492,17 @@ body {
     background: var(--color-primary);
 }
 
+/* Backlog still draining: sits at the top of the thread, where older messages appear. */
+.dm-syncing {
+    display: flex;
+    gap: var(--space-sm);
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-xs) var(--space-sm);
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
 /* NIP-17 kind:15 attachment: the encrypted blob is decrypted in memory and painted from an
    object url, so the slot is reserved from the sender's dim hint while that happens. */
 .dm-attachment {

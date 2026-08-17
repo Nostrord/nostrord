@@ -225,6 +225,12 @@ interface NostrRepositoryApi {
         emojiUrl: String? = null,
     ): Result<Unit>
 
+    /**
+     * The inbox is still catching up: a DM relay has not EOSEd, or a delivered gift wrap is still
+     * waiting to be decrypted. Older messages can still land above what is already on screen.
+     */
+    val dmSyncing: StateFlow<Boolean>
+
     /** Reactions on DM messages, keyed by the message they target, then by emoji. */
     val dmReactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>>
 
