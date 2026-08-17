@@ -2511,9 +2511,14 @@ class NostrRepository(
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
         val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
         return try {
+            // The previous attempt's request is dead the moment a new throwaway key exists: only
+            // this device can open its answer, and it no longer holds that key. Left on the relay
+            // it prompts every holding device again, once per launch, forever.
+            val superseded = pendingPairingRequestId
             val throwaway = dmPairingManager.beginRequest()
             val signed = signer.signEvent(Nip4e.buildClientKeyRequest(myPub, throwaway, epochSeconds()))
             pendingPairingRequestId = signed.id
+            superseded?.let { scope.launch { publishDeletion(myPub, signer, listOf(it)) } }
             // Our own request must never prompt us: the throwaway-key guard is in-memory only, so
             // after a restart the relay replays this event back to us like any other.
             signed.id?.let { dmPairingManager.markProcessed(it) }
@@ -2528,9 +2533,9 @@ class NostrRepository(
     }
 
     /** Send our encryption key to the device that asked for it (NIP-4e kind:4455). */
-    override suspend fun approveDmPairing(): Result<Unit> {
+    override suspend fun approveDmPairing(throwawayPubkey: String): Result<Unit> {
         val incoming =
-            dmPairingManager.state.value as? DmPairingManager.State.IncomingRequest
+            dmPairingManager.pendingRequest(throwawayPubkey)
                 ?: return Result.Error(AppError.Unknown("There is no pairing request to approve."))
         val signer =
             ActiveAccountManager.session.value?.signer
@@ -2559,10 +2564,28 @@ class NostrRepository(
         }
     }
 
-    override fun declineDmPairing() {
-        (dmPairingManager.state.value as? DmPairingManager.State.IncomingRequest)?.let {
-            dmPairingManager.resolveIncoming(it.throwawayPubkey)
-        }
+    override fun declineDmPairing(throwawayPubkey: String) {
+        val declined = dmPairingManager.pendingRequest(throwawayPubkey)
+        dmPairingManager.resolveIncoming(throwawayPubkey)
+        declined?.let { withdrawRequests(listOf(it.eventId)) }
+    }
+
+    override fun declineAllDmPairing() {
+        val pending = (dmPairingManager.state.value as? DmPairingManager.State.IncomingRequests)?.requests.orEmpty()
+        dmPairingManager.resolveAllIncoming()
+        withdrawRequests(pending.map { it.eventId })
+    }
+
+    /**
+     * Delete declined kind:4454s. Both devices are the same identity, so this deletion is the
+     * account withdrawing its own request: it tells the waiting device it was turned down, and it
+     * stops the request prompting every other device of the account on their next launch.
+     */
+    private fun withdrawRequests(eventIds: List<String>) {
+        if (eventIds.isEmpty()) return
+        val signer = ActiveAccountManager.session.value?.signer ?: return
+        val myPub = sessionManager.getPublicKey() ?: return
+        scope.launch { publishDeletion(myPub, signer, eventIds) }
     }
 
     override fun dismissDmPairing() {
@@ -2628,6 +2651,9 @@ class NostrRepository(
                 putJsonArray("kinds") {
                     add(Nip4e.KIND_CLIENT_KEY)
                     add(Nip4e.KIND_KEY_SHARE)
+                    // Deletions too: a declined request is withdrawn by a kind:5 from this same
+                    // identity, which is what tells the waiting device it was turned down.
+                    add(5)
                 }
                 putJsonArray("authors") { add(myPub) }
                 put("since", epochSeconds() - PAIRING_LOOKBACK_SECONDS)
@@ -5977,6 +6003,19 @@ class NostrRepository(
                     }
                 }
                 return
+            }
+            // Our own kind:5 on the request we are waiting for: another device declined it. NIP-4e
+            // has no rejection event, and the deletion is the account withdrawing its own request,
+            // so this is the only signal that ends the wait instead of leaving it hanging.
+            if (kind == 5 && pendingPairingRequestId != null) {
+                val pending = pendingPairingRequestId
+                val myPub = sessionManager.getPublicKey()
+                runCatching { parseSignedEventJson(event.toString()) }.getOrNull()?.let {
+                    if (it.pubkey == myPub && it.tags.any { tag -> tag.firstOrNull() == "e" && tag.getOrNull(1) == pending }) {
+                        pendingPairingRequestId = null
+                        dmPairingManager.failed("Your other device dismissed the request.")
+                    }
+                }
             }
             // NIP-4e device pairing, our own account only: a device asking for the encryption key
             // (4454) and a device answering with it (4455).

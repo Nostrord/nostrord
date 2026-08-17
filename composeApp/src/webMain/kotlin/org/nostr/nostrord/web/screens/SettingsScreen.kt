@@ -1304,6 +1304,7 @@ private val DmEncryptionPanel =
         val archiveConfirmOpen = useStateFlow(vm.archiveConfirmOpen)
         val archivableCount = useStateFlow(vm.archivableCount)
         val pairingState = useStateFlow(vm.pairingState)
+        val approving = useStateFlow(vm.approving)
         val resetConfirmOpen = useStateFlow(vm.resetConfirmOpen)
 
         // Nothing to offload when signing is already local.
@@ -1332,26 +1333,28 @@ private val DmEncryptionPanel =
                             alert = true,
                             ic = Ic.Key,
                         )
-                        when (pairingState) {
-                            is DmPairingManager.State.Requesting ->
-                                div {
-                                    className = ClassName("settings-status-line")
-                                    +"Waiting for your other device. Approve the request showing code ${pairingState.code} there."
-                                }
-                            is DmPairingManager.State.Failed ->
+                        if (pairingState is DmPairingManager.State.Requesting) {
+                            div {
+                                className = ClassName("settings-status-line")
+                                +"Waiting for your other device. Approve the request showing code ${pairingState.code} there."
+                            }
+                        } else {
+                            // A failed or declined attempt keeps the button: the answer to "that
+                            // device said no" is asking a different one, not a dead end.
+                            (pairingState as? DmPairingManager.State.Failed)?.let {
                                 div {
                                     className = ClassName("settings-error")
-                                    +pairingState.reason
+                                    +it.reason
                                 }
-                            else ->
-                                div {
-                                    className = ClassName("settings-form-actions")
-                                    button {
-                                        className = ClassName("btn-text btn-sm accent")
-                                        onClick = { vm.requestKeyFromOtherDevice() }
-                                        +"Ask my other device"
-                                    }
+                            }
+                            div {
+                                className = ClassName("settings-form-actions")
+                                button {
+                                    className = ClassName("btn-text btn-sm accent")
+                                    onClick = { vm.requestKeyFromOtherDevice() }
+                                    +"Ask my other device"
                                 }
+                            }
                         }
                         input {
                             className = ClassName("modal-input")
@@ -1419,24 +1422,42 @@ private val DmEncryptionPanel =
                         }
                         // Another device of this account is asking for the key. The code comes from
                         // the request itself, so matching it proves which device asked.
-                        (pairingState as? DmPairingManager.State.IncomingRequest)?.let { request ->
-                            noticeCard(
-                                title = "Another device wants this key",
-                                body = "Approve only if that device is showing code ${request.code}.",
-                                alert = true,
-                                ic = Ic.Key,
-                            )
-                            div {
-                                className = ClassName("settings-form-actions")
-                                button {
-                                    className = ClassName("btn-text btn-sm")
-                                    onClick = { vm.declinePairing() }
-                                    +"Decline"
+                        (pairingState as? DmPairingManager.State.IncomingRequests)?.requests?.let { requests ->
+                            requests.forEach { request ->
+                                noticeCard(
+                                    title = "Another device wants this key",
+                                    body = "Approve only if that device is showing code ${request.code}.",
+                                    alert = true,
+                                    ic = Ic.Key,
+                                )
+                                div {
+                                    className = ClassName("settings-form-actions")
+                                    key = request.throwawayPubkey
+                                    button {
+                                        className = ClassName("btn-text btn-sm")
+                                        disabled = approving != null
+                                        onClick = { vm.declinePairing(request.throwawayPubkey) }
+                                        +"Decline"
+                                    }
+                                    button {
+                                        className = ClassName("btn-primary btn-sm")
+                                        disabled = approving != null
+                                        onClick = { vm.approvePairing(request.throwawayPubkey) }
+                                        +(if (approving == request.throwawayPubkey) "Sending…" else "Send key")
+                                    }
                                 }
-                                button {
-                                    className = ClassName("btn-primary btn-sm")
-                                    onClick = { vm.approvePairing() }
-                                    +"Send key"
+                            }
+                            // A device that retried leaves one request per attempt, and each has to
+                            // be decided or it comes back on the next launch.
+                            if (requests.size > 1) {
+                                div {
+                                    className = ClassName("settings-form-actions")
+                                    button {
+                                        className = ClassName("btn-text btn-sm")
+                                        disabled = approving != null
+                                        onClick = { vm.declineAllPairing() }
+                                        +"Decline all ${requests.size}"
+                                    }
                                 }
                             }
                         }

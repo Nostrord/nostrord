@@ -26,13 +26,20 @@ class DmPairingManager {
         /** This device asked for the key and is waiting for another device to answer. */
         data class Requesting(val code: String) : State
 
-        /** Another device of this account is asking us for the key. */
-        data class IncomingRequest(val code: String, val throwawayPubkey: String, val eventId: String) : State
+        /**
+         * Devices of this account asking us for the key, oldest first. A list, not a slot: the
+         * relay serves every request it still holds, and a slot kept only the last one, so the
+         * others came back one per launch with no way to decide them.
+         */
+        data class IncomingRequests(val requests: List<Request>) : State
 
         data object Completed : State
 
         data class Failed(val reason: String) : State
     }
+
+    /** One device asking for the key. [code] is what the user compares against that device. */
+    data class Request(val code: String, val throwawayPubkey: String, val eventId: String)
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
@@ -74,7 +81,10 @@ class DmPairingManager {
         if (throwaway == requestKey?.publicKeyHex) return
         if (eventId in processed) return
         if (_state.value is State.Requesting) return
-        _state.value = State.IncomingRequest(Nip4e.pairingCode(throwaway), throwaway, eventId)
+        val pending = (_state.value as? State.IncomingRequests)?.requests.orEmpty()
+        // The same request arrives once per relay; both keys identify it.
+        if (pending.any { it.eventId == eventId || it.throwawayPubkey == throwaway }) return
+        _state.value = State.IncomingRequests(pending + Request(Nip4e.pairingCode(throwaway), throwaway, eventId))
     }
 
     /**
@@ -87,13 +97,23 @@ class DmPairingManager {
         onProcessedChanged?.invoke(processed)
     }
 
-    /** Mark an incoming request handled (approved and answered, or declined). */
+    /** The pending request for [throwawayPubkey], if it is still waiting on a decision. */
+    fun pendingRequest(throwawayPubkey: String): Request? = (_state.value as? State.IncomingRequests)?.requests?.firstOrNull { it.throwawayPubkey == throwawayPubkey }
+
+    /** Mark one incoming request handled (approved and answered, or declined). */
     fun resolveIncoming(throwawayPubkey: String) {
-        val incoming = _state.value as? State.IncomingRequest
-        if (incoming?.throwawayPubkey == throwawayPubkey) {
-            markProcessed(incoming.eventId)
-            _state.value = State.Idle
-        }
+        val pending = (_state.value as? State.IncomingRequests)?.requests ?: return
+        val match = pending.firstOrNull { it.throwawayPubkey == throwawayPubkey } ?: return
+        markProcessed(match.eventId)
+        val rest = pending - match
+        _state.value = if (rest.isEmpty()) State.Idle else State.IncomingRequests(rest)
+    }
+
+    /** Decline everything pending at once, for the pile a device leaves behind after retrying. */
+    fun resolveAllIncoming() {
+        val pending = (_state.value as? State.IncomingRequests)?.requests ?: return
+        pending.forEach { markProcessed(it.eventId) }
+        _state.value = State.Idle
     }
 
     /** Drop decisions older than the window the pairing subscription can still deliver. */
