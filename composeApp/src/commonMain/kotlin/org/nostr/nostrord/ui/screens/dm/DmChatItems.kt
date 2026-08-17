@@ -8,7 +8,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.nostr.nostrord.network.managers.DmMessage
-import org.nostr.nostrord.nostr.Nip17
 import org.nostr.nostrord.utils.getDateLabel
 
 /**
@@ -27,7 +26,7 @@ fun DmMessage.eventJson(): String = rumorJson ?: buildJsonObject {
     put("id", id)
     put("pubkey", senderPubkey)
     put("created_at", createdAt)
-    put("kind", Nip17.KIND_CHAT)
+    put("kind", kind)
     putJsonArray("tags") {
         if (mine) {
             addJsonArray {

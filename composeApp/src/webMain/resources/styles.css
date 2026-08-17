@@ -3492,6 +3492,35 @@ body {
     background: var(--color-primary);
 }
 
+/* NIP-17 kind:15 attachment: the encrypted blob is decrypted in memory and painted from an
+   object url, so the slot is reserved from the sender's dim hint while that happens. */
+.dm-attachment {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    align-items: flex-start;
+    max-width: 100%;
+}
+
+.dm-attachment-loading {
+    width: min(220px, 100%);
+    margin-top: 4px;
+    border-radius: 8px;
+    /* Same sweep as an inline image still decoding (.msg-image.is-loading). */
+    background-image: linear-gradient(
+        100deg,
+        var(--color-input) 32%,
+        var(--color-surface-variant) 50%,
+        var(--color-input) 68%
+    );
+    background-size: 220% 100%;
+    animation: msg-media-shimmer 1.2s linear infinite;
+}
+
+.dm-msg.mine .dm-attachment-failed {
+    color: rgba(255, 255, 255, 0.85);
+}
+
 .dm-intro {
     display: flex;
     flex-direction: column;

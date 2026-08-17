@@ -42,10 +42,12 @@ val ChatImage =
         val (loaded, setLoaded) = useState { false }
         // Settings → Media: when auto-load is off we show a "Tap to load" placeholder
         // and fetch nothing until the user reveals this image. data: URIs are already
-        // embedded in the event (no network), so they're never gated.
+        // embedded in the event and blob: urls are bytes this tab already holds (a DM
+        // attachment past its own gate), so neither costs a fetch and neither is gated.
         val autoLoad = useAutoLoadMedia()
         val (revealed, setRevealed) = useState { false }
-        if (!autoLoad && !revealed && !props.imageUrl.startsWith("data:")) {
+        val isLocal = props.imageUrl.startsWith("data:") || props.imageUrl.startsWith("blob:")
+        if (!autoLoad && !revealed && !isLocal) {
             mediaGatePlaceholder("image") { setRevealed(true) }
             return@FC
         }

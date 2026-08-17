@@ -46,6 +46,7 @@ import org.nostr.nostrord.network.managers.ConnectionStats
 import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmFileManager
 import org.nostr.nostrord.network.managers.DmHistoryFile
 import org.nostr.nostrord.network.managers.DmManager
 import org.nostr.nostrord.network.managers.DmMessage
@@ -68,6 +69,7 @@ import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17
+import org.nostr.nostrord.nostr.Nip17File
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip44
 import org.nostr.nostrord.nostr.Nip4e
@@ -2052,11 +2054,15 @@ class NostrRepository(
         // Relay-keyed, not account-keyed: left intact it holds the previous account's
         // fetched ids and the growth collector skips re-fetching kind:39000 for the new one.
         sentKnownGroupFetch.clear()
+        // Decrypted DM attachments are the previous account's private files.
+        dmFileManager.clear()
     }
 
     // ===== Direct messages (NIP-17 over NIP-59 gift wraps) =====
 
     private val dmManager = DmManager(scope, mutedPubkeys)
+
+    private val dmFileManager = DmFileManager(scope)
 
     private val dmEncryptionManager = DmEncryptionManager()
 
@@ -2111,6 +2117,12 @@ class NostrRepository(
     override val dmRelaysByPubkey: StateFlow<Map<String, List<String>>> = dmManager.dmRelaysByPubkey
 
     override val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>> = dmManager.messageStatus
+
+    override val dmFileStates: StateFlow<Map<String, DmFileManager.FileState>> = dmFileManager.states
+
+    override fun loadDmFile(rumorId: String, file: Nip17File) = dmFileManager.load(rumorId, file)
+
+    override fun retryDmFile(rumorId: String, file: Nip17File) = dmFileManager.retry(rumorId, file)
 
     override fun requestPeerDmRelays(pubkey: String) {
         scope.launch { fetchDmRelays(pubkey) }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.network.managers.DmConversation
+import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.Result
 
@@ -37,6 +38,24 @@ class DmViewModel(
 
     /** Send status of our own messages (Sending → Delivered), keyed by rumor id. */
     val messageStatus = repo.dmMessageStatus
+
+    /** Download + decryption state of kind:15 attachments, keyed by rumor id. */
+    val fileStates = repo.dmFileStates
+
+    /**
+     * Start reading the attachment on [message], if it has one. Idempotent, so both UIs can call
+     * it from the bubble as it renders and let the manager decide whether there is work to do.
+     */
+    fun loadFile(message: DmMessage) {
+        val file = message.file ?: return
+        repo.loadDmFile(message.id, file)
+    }
+
+    /** Re-attempt an attachment whose download or decryption failed. */
+    fun retryFile(message: DmMessage) {
+        val file = message.file ?: return
+        repo.retryDmFile(message.id, file)
+    }
 
     val followsConversations: StateFlow<List<DmConversation>> =
         partition(keepFollowed = true)

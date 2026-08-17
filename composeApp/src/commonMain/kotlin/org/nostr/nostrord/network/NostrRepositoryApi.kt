@@ -8,6 +8,7 @@ import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmFileManager
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.managers.GroupManager
@@ -15,6 +16,7 @@ import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.nostr.Nip11RelayInfo
+import org.nostr.nostrord.nostr.Nip17File
 import org.nostr.nostrord.nostr.Nip46Client
 import org.nostr.nostrord.utils.Result
 
@@ -201,6 +203,15 @@ interface NostrRepositoryApi {
 
     /** Send status of our own DM messages, keyed by rumor id (Sending until a relay OKs). */
     val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>>
+
+    /** Download + decryption state of kind:15 attachments, keyed by rumor id. */
+    val dmFileStates: StateFlow<Map<String, DmFileManager.FileState>>
+
+    /** Start reading a kind:15 attachment (idempotent; safe to call on every render). */
+    fun loadDmFile(rumorId: String, file: Nip17File)
+
+    /** Re-attempt a failed attachment load. */
+    fun retryDmFile(rumorId: String, file: Nip17File)
 
     /** Fetch a peer's kind:10050 so [dmRelaysByPubkey] gains its entry (fire-and-forget). */
     fun requestPeerDmRelays(pubkey: String)

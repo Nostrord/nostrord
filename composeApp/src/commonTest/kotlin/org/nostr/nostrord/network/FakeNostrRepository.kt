@@ -11,6 +11,7 @@ import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.DmArchiveManager
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmEncryptionManager
+import org.nostr.nostrord.network.managers.DmFileManager
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.managers.GroupManager
@@ -18,6 +19,7 @@ import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.nostr.Nip11RelayInfo
+import org.nostr.nostrord.nostr.Nip17File
 import org.nostr.nostrord.nostr.Nip46Client
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
@@ -151,6 +153,20 @@ class FakeNostrRepository : NostrRepositoryApi {
     val dmRelaysByPubkeyFlow = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     override val dmRelaysByPubkey: StateFlow<Map<String, List<String>>> = dmRelaysByPubkeyFlow
     override val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>> = MutableStateFlow(emptyMap())
+    val dmFileStatesFlow = MutableStateFlow<Map<String, DmFileManager.FileState>>(emptyMap())
+    override val dmFileStates: StateFlow<Map<String, DmFileManager.FileState>> = dmFileStatesFlow
+
+    /** Rumor ids the screen asked to load, in call order. */
+    val loadedDmFiles = mutableListOf<String>()
+
+    override fun loadDmFile(rumorId: String, file: Nip17File) {
+        loadedDmFiles += rumorId
+    }
+
+    override fun retryDmFile(rumorId: String, file: Nip17File) {
+        loadedDmFiles += rumorId
+    }
+
     override fun requestPeerDmRelays(pubkey: String) {}
 
     val dmEncryptionStateFlow = MutableStateFlow<DmEncryptionManager.State>(DmEncryptionManager.State.Unavailable)
