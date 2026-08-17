@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -276,15 +277,20 @@ fun DmConversationList(
             }
         } else {
             conversations.forEach { convo ->
-                ConversationRow(
-                    pubkeyHex = convo.peerPubkey,
-                    name = nameOf(convo.peerPubkey),
-                    lastMessage = convo.lastMessage,
-                    pictureUrl = userMetadata[convo.peerPubkey]?.picture,
-                    unread = unreadByPeer[convo.peerPubkey] ?: 0,
-                    selected = activePubkey == convo.peerPubkey,
-                    onClick = { onOpenConversation(DmRoute(convo.peerPubkey)) },
-                )
+                // Keyed on the peer: without it the rows are positional, so switching tab
+                // (Follows <-> Others) reuses each slot for a different person and carries that
+                // row's retained state - its avatar among it - onto the new identity.
+                key(convo.peerPubkey) {
+                    ConversationRow(
+                        pubkeyHex = convo.peerPubkey,
+                        name = nameOf(convo.peerPubkey),
+                        lastMessage = convo.lastMessage,
+                        pictureUrl = userMetadata[convo.peerPubkey]?.picture,
+                        unread = unreadByPeer[convo.peerPubkey] ?: 0,
+                        selected = activePubkey == convo.peerPubkey,
+                        onClick = { onOpenConversation(DmRoute(convo.peerPubkey)) },
+                    )
+                }
             }
         }
     }
