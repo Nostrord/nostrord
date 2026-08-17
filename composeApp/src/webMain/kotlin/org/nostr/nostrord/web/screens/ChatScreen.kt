@@ -36,6 +36,7 @@ import org.nostr.nostrord.ui.screens.group.classifyReactionError
 import org.nostr.nostrord.ui.screens.group.pluralizeSystemAction
 import org.nostr.nostrord.ui.scroll.ChatScrollPolicy
 import org.nostr.nostrord.ui.scroll.JumpPillTarget
+import org.nostr.nostrord.ui.text.BlockEmbedText
 import org.nostr.nostrord.ui.text.MarkdownEmphasis
 import org.nostr.nostrord.ui.text.MarkdownMedia
 import org.nostr.nostrord.utils.ChatSearch
@@ -3580,11 +3581,17 @@ private fun ChildrenBuilder.renderEntities(
     hostRelay: String,
 ) {
     var last = 0
+    var prevWasBlock = false
     for (match in URL_REGEX.findAll(content)) {
-        if (match.range.first > last) {
-            renderFormattedText(content.substring(last, match.range.first), emojiMap)
-        }
         val token = match.value
+        val blockToken = isBlockEmbedToken(token, content)
+        if (match.range.first > last) {
+            var text = content.substring(last, match.range.first)
+            if (prevWasBlock) text = BlockEmbedText.trimAfter(text)
+            if (blockToken) text = BlockEmbedText.trimBefore(text)
+            if (text.isNotEmpty()) renderFormattedText(text, emojiMap)
+        }
+        prevWasBlock = blockToken
         if (token.startsWith("data:image/")) {
             ChatImage {
                 imageUrl = token
@@ -3709,7 +3716,36 @@ private fun ChildrenBuilder.renderEntities(
         }
         last = match.range.last + 1
     }
-    if (last < content.length) renderFormattedText(content.substring(last), emojiMap)
+    if (last < content.length) {
+        val tail = if (prevWasBlock) BlockEmbedText.trimAfter(content.substring(last)) else content.substring(last)
+        if (tail.isNotEmpty()) renderFormattedText(tail, emojiMap)
+    }
+}
+
+/**
+ * Whether [token] renders as a block (own line, own vertical spacing) instead of inline, so the
+ * newline typed beside it is absorbed rather than painted as an empty line ([BlockEmbedText]).
+ * Mirrors the branches of [renderEntities], and native `isBlockPart`.
+ */
+private fun isBlockEmbedToken(token: String, content: String): Boolean {
+    if (token.startsWith("data:image/")) return true
+    if (token.startsWith("http")) {
+        val url = token.trimEnd('.', ',', ')', '!', '?', ';', ':')
+        return YOUTUBE_REGEX.containsMatchIn(url) ||
+            IMAGE_EXT.containsMatchIn(url) ||
+            VIDEO_EXT.containsMatchIn(url) ||
+            AUDIO_EXT.containsMatchIn(url)
+    }
+    // A group address renders as the full card only when the message IS the link; mixed with
+    // text it is an inline chip.
+    if (token.contains('\'')) return content.trim() == token
+    if (token.startsWith("wss://") || token.startsWith("ws://")) return false
+    val standalone = content.split('\n').any { it.trim() == token }
+    return when (val entity = Nip19.decode(token.removePrefix("nostr:"))) {
+        is Nip19.Entity.Nevent, is Nip19.Entity.Note -> true
+        is Nip19.Entity.Naddr -> entity.kind == 39000 && standalone
+        else -> false
+    }
 }
 
 // Inline formatting tokens: * and ** bold (additive), _ italic, ~~ strike, || spoiler. Shared
