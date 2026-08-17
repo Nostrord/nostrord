@@ -352,6 +352,28 @@ class ThreadsViewModelTest {
         )
         // Threads already on screen keep rendering even if a restriction marker lands late.
         assertNull(threadsPlaceholder(hasThreads = true, isLoading = false, isPendingApproval = false, isRestricted = true))
+        // Inside the hydration grace the pane stays blank: the skeleton has not earned its place
+        // yet, and "No threads yet" would be a wrong answer rather than an early one.
+        assertNull(
+            threadsPlaceholder(
+                hasThreads = false,
+                isLoading = true,
+                isPendingApproval = false,
+                isRestricted = false,
+                skeletonDue = false,
+            ),
+        )
+        // A gate the user must act on is never withheld for the grace.
+        assertEquals(
+            ThreadsPlaceholder.PRIVATE,
+            threadsPlaceholder(
+                hasThreads = false,
+                isLoading = true,
+                isPendingApproval = false,
+                isRestricted = true,
+                skeletonDue = false,
+            ),
+        )
     }
 
     @Test

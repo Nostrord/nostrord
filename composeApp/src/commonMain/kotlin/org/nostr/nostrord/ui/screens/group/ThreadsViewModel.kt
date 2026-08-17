@@ -179,11 +179,17 @@ fun threadsPlaceholder(
     isLoading: Boolean,
     isPendingApproval: Boolean,
     isRestricted: Boolean,
+    /**
+     * False during the grace window that the disk hydration is expected to answer within: a pane
+     * whose threads are already cached must open on them, not flash a spinner first. Blank for
+     * those few frames, because "No threads yet" would be a wrong answer, not an early one.
+     */
+    skeletonDue: Boolean = true,
 ): ThreadsPlaceholder? = when {
     hasThreads -> null
     isPendingApproval -> ThreadsPlaceholder.PENDING_APPROVAL
     isRestricted -> ThreadsPlaceholder.PRIVATE
-    isLoading -> ThreadsPlaceholder.LOADING
+    isLoading -> if (skeletonDue) ThreadsPlaceholder.LOADING else null
     else -> ThreadsPlaceholder.EMPTY
 }
 
@@ -272,6 +278,13 @@ class ThreadsViewModel(
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    /**
+     * Whether the skeleton has earned the right to show. The disk hydration answers in
+     * milliseconds, so a pane whose threads are cached opens straight on them instead of flashing
+     * "Loading threads..." first. Flipped once, [SKELETON_GRACE_MS] after the pane opens.
+     */
+    private val skeletonDue = MutableStateFlow(false)
+
     val threads: StateFlow<List<ThreadSummary>> =
         combine(repo.threadRoots, repo.threadReplies) { rootsMap, repliesMap ->
             buildThreadSummaries(scoped(rootsMap[groupId] ?: emptyList()), scoped(repliesMap[groupId] ?: emptyList()))
@@ -289,6 +302,10 @@ class ThreadsViewModel(
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     init {
+        viewModelScope.launch {
+            delay(SKELETON_GRACE_MS)
+            skeletonDue.value = true
+        }
         // Subscribe to the group's threads, retrying until the group client is ready: a cold-start
         // deep link races the relay connection, and a one-shot request would silently no-op
         // (leaving the list stuck empty / "No threads yet").
@@ -476,6 +493,16 @@ class ThreadsViewModel(
             .map { pendingHere(it) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), pendingHere(repo.pendingApprovalSince.value))
 
+    /**
+     * What the list area shows instead of cards, or null to render the (possibly empty) list.
+     * Derived here so both UIs gate identically, skeleton grace included.
+     */
+    val placeholder: StateFlow<ThreadsPlaceholder?> =
+        combine(threads, isLoading, skeletonDue, isPendingApproval, isRestricted) { list, loading, due, pending, restricted ->
+            threadsPlaceholder(list.isNotEmpty(), loading, pending, restricted, skeletonDue = due)
+            // Starts blank, not LOADING: the grace window is the point.
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     private val membershipModel = GroupMembershipModel(repo, groupId, hostRelay, viewModelScope)
 
     /** Admin of this group (host-relay scoped): drives the moderation delete affordances. */
@@ -559,6 +586,10 @@ class ThreadsViewModel(
     companion object {
         // Fallback only: the list normally settles on the roots-sub EOSE, not this timer.
         const val THREAD_LOAD_SETTLE_MS = 12_000L
+
+        // Long enough for a disk read (SQLite / IndexedDB), short enough that a genuinely cold
+        // pane still explains itself before the user wonders whether anything is happening.
+        const val SKELETON_GRACE_MS = 400L
         const val THREAD_REQUEST_ATTEMPTS = 12
         const val THREAD_REQUEST_RETRY_MS = 600L
     }

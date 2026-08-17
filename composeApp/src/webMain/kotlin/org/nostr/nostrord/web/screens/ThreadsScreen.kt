@@ -25,7 +25,6 @@ import org.nostr.nostrord.ui.screens.group.threadComposerSubmits
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadTitle
-import org.nostr.nostrord.ui.screens.group.threadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.formatDateTime
@@ -432,7 +431,7 @@ val ThreadsScreen =
         // depending on which affordance the user reached the join from.
         val (showJoinConfirm, setShowJoinConfirm) = useState { false }
         val threads = useStateFlow(vm.threads)
-        val isLoading = useStateFlow(vm.isLoading)
+        val placeholder = useStateFlow(vm.placeholder)
         val openThread = useStateFlow(vm.openThread)
         val userMetadata = useStateFlow(vm.userMetadata)
         val messageStatus = useStateFlow(vm.messageStatus)
@@ -442,7 +441,6 @@ val ThreadsScreen =
         val deleteError = useStateFlow(vm.deleteError)
         val isAdmin = useStateFlow(vm.isAdmin)
         val isRestricted = useStateFlow(vm.isRestricted)
-        val isPendingApproval = useStateFlow(vm.isPendingApproval)
         val membership = useStateFlow(vm.membershipState)
         val groupAccess = useStateFlow(vm.groupAccess)
         val joinError = useStateFlow(vm.joinError)
@@ -598,7 +596,7 @@ val ThreadsScreen =
                         }
                     }
 
-                    when (threadsPlaceholder(threads.isNotEmpty(), isLoading, isPendingApproval, isRestricted)) {
+                    when (placeholder) {
                         ThreadsPlaceholder.LOADING ->
                             div {
                                 className = ClassName("threads-empty")
