@@ -190,18 +190,34 @@ class DmEncryptionViewModel(
         }
     }
 
-    fun approvePairing() {
+    /** Which request is being answered, so only that card says so while the signer works. */
+    private val _approving = MutableStateFlow<String?>(null)
+    val approving: StateFlow<String?> = _approving.asStateFlow()
+
+    /**
+     * Sending the key is a signer round trip, which on a remote signer is seconds at best. Without
+     * [approving] the click has no visible effect at all and reads as a dead button.
+     */
+    fun approvePairing(throwawayPubkey: String) {
+        if (_approving.value != null) return
+        _approving.value = throwawayPubkey
         _error.value = null
         viewModelScope.launch {
-            when (val result = repo.approveDmPairing()) {
+            when (val result = repo.approveDmPairing(throwawayPubkey)) {
                 is Result.Error -> _error.value = result.error.message
                 else -> {}
             }
+            _approving.value = null
         }
     }
 
-    fun declinePairing() {
-        repo.declineDmPairing()
+    fun declinePairing(throwawayPubkey: String) {
+        repo.declineDmPairing(throwawayPubkey)
+    }
+
+    /** One action for the pile an earlier device left behind after retrying its request. */
+    fun declineAllPairing() {
+        repo.declineAllDmPairing()
     }
 
     fun dismissPairing() {

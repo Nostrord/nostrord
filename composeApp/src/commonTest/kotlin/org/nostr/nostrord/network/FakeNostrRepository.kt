@@ -225,13 +225,17 @@ class FakeNostrRepository : NostrRepositoryApi {
         return requestDmEncryptionKeyResult
     }
 
-    override suspend fun approveDmPairing(): Result<Unit> {
-        calls += "approveDmPairing"
+    override suspend fun approveDmPairing(throwawayPubkey: String): Result<Unit> {
+        calls += "approveDmPairing:$throwawayPubkey"
         return approveDmPairingResult
     }
 
-    override fun declineDmPairing() {
-        calls += "declineDmPairing"
+    override fun declineDmPairing(throwawayPubkey: String) {
+        calls += "declineDmPairing:$throwawayPubkey"
+    }
+
+    override fun declineAllDmPairing() {
+        calls += "declineAllDmPairing"
     }
 
     override fun dismissDmPairing() {

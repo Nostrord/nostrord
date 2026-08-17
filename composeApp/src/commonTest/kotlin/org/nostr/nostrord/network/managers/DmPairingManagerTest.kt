@@ -45,10 +45,51 @@ class DmPairingManagerTest {
         manager.onRequestSeen(request(other.publicKeyHex))
 
         val state = manager.state.value
-        assertIs<DmPairingManager.State.IncomingRequest>(state)
-        assertEquals(other.publicKeyHex, state.throwawayPubkey)
+        assertIs<DmPairingManager.State.IncomingRequests>(state)
+        assertEquals(other.publicKeyHex, state.requests.single().throwawayPubkey)
         // Both devices derive the code from the same value, so comparing them is meaningful.
-        assertEquals(Nip4e.pairingCode(other.publicKeyHex), state.code)
+        assertEquals(Nip4e.pairingCode(other.publicKeyHex), state.requests.single().code)
+    }
+
+    @Test
+    fun `every pending request is offered, and deciding one keeps the rest`() {
+        val manager = DmPairingManager()
+        val first = KeyPair.generate()
+        val second = KeyPair.generate()
+
+        // A device that retried published one request per attempt, and the relay still serves both.
+        manager.onRequestSeen(request(first.publicKeyHex))
+        manager.onRequestSeen(request(second.publicKeyHex))
+        assertEquals(
+            listOf(first.publicKeyHex, second.publicKeyHex),
+            assertIs<DmPairingManager.State.IncomingRequests>(manager.state.value).requests.map { it.throwawayPubkey },
+        )
+
+        manager.resolveIncoming(first.publicKeyHex)
+        assertEquals(
+            listOf(second.publicKeyHex),
+            assertIs<DmPairingManager.State.IncomingRequests>(manager.state.value).requests.map { it.throwawayPubkey },
+        )
+    }
+
+    @Test
+    fun `declining all decides every pending request at once`() {
+        val manager = DmPairingManager()
+        val first = KeyPair.generate()
+        val second = KeyPair.generate()
+        var persisted: Map<String, Long> = emptyMap()
+        manager.onProcessedChanged = { persisted = it }
+
+        manager.onRequestSeen(request(first.publicKeyHex))
+        manager.onRequestSeen(request(second.publicKeyHex))
+        manager.resolveAllIncoming()
+
+        assertIs<DmPairingManager.State.Idle>(manager.state.value)
+        // Each one is recorded, or the relay serving it again re-prompts on the next launch.
+        assertEquals(2, persisted.size)
+        manager.onRequestSeen(request(first.publicKeyHex))
+        manager.onRequestSeen(request(second.publicKeyHex))
+        assertIs<DmPairingManager.State.Idle>(manager.state.value)
     }
 
     @Test
@@ -62,6 +103,24 @@ class DmPairingManagerTest {
 
         // Same event arriving from a second relay must stay silent.
         manager.onRequestSeen(request(other.publicKeyHex))
+        assertIs<DmPairingManager.State.Idle>(manager.state.value)
+    }
+
+    @Test
+    fun `a share published by another holder drops our prompt for the same request`() {
+        val manager = DmPairingManager()
+        val requester = KeyPair.generate()
+        val holder = KeyPair.generate()
+        manager.onRequestSeen(request(requester.publicKeyHex))
+
+        // A third device answered first. Its kind:4455 reaches every device of the account, and the
+        // recipient tag says which request it settles.
+        val share = Nip4e.buildKeyShare(identity, holder.publicKeyHex, requester.publicKeyHex, "ciphertext", createdAt = 2L)
+        manager.resolveIncoming(Nip4e.keyShareRecipientFrom(share)!!)
+
+        assertIs<DmPairingManager.State.Idle>(manager.state.value)
+        // And it stays gone: the relay keeps serving the request until it is deleted or expires.
+        manager.onRequestSeen(request(requester.publicKeyHex))
         assertIs<DmPairingManager.State.Idle>(manager.state.value)
     }
 
@@ -97,7 +156,7 @@ class DmPairingManagerTest {
 
         // Past the window the relay no longer serves it either; a request this old arriving now is
         // a new one worth showing.
-        assertIs<DmPairingManager.State.IncomingRequest>(manager.state.value)
+        assertIs<DmPairingManager.State.IncomingRequests>(manager.state.value)
     }
 
     @Test

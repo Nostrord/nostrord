@@ -1492,6 +1492,7 @@ private fun DmEncryptionPanelContent() {
     val revealedKey by vm.revealedKey.collectAsState()
     val importInput by vm.importInput.collectAsState()
     val pairingState by vm.pairingState.collectAsState()
+    val approving by vm.approving.collectAsState()
     val resetConfirmOpen by vm.resetConfirmOpen.collectAsState()
 
     // Nothing to offload when signing is already local.
@@ -1529,22 +1530,25 @@ private fun DmEncryptionPanelContent() {
                             "messages sent to the old key will not be readable.",
                         isCompact = false,
                     )
-                    when (val pairing = pairingState) {
-                        is DmPairingManager.State.Requesting ->
-                            Text(
-                                text = "Waiting for your other device. Approve the request showing code " +
-                                    "${pairing.code} there.",
-                                style = NostrordTypography.Caption,
-                                color = NostrordColors.TextSecondary,
-                            )
-                        is DmPairingManager.State.Failed ->
-                            Text(text = pairing.reason, style = NostrordTypography.Caption, color = NostrordColors.Error)
-                        else ->
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                TextButton(onClick = { vm.requestKeyFromOtherDevice() }) {
-                                    Text("Ask my other device", color = NostrordColors.Primary, style = NostrordTypography.Button)
-                                }
+                    val pairing = pairingState
+                    if (pairing is DmPairingManager.State.Requesting) {
+                        Text(
+                            text = "Waiting for your other device. Approve the request showing code " +
+                                "${pairing.code} there.",
+                            style = NostrordTypography.Caption,
+                            color = NostrordColors.TextSecondary,
+                        )
+                    } else {
+                        // A failed or declined attempt keeps the button: the answer to "that device
+                        // said no" is asking a different one, not a dead end.
+                        (pairing as? DmPairingManager.State.Failed)?.let {
+                            Text(text = it.reason, style = NostrordTypography.Caption, color = NostrordColors.Error)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { vm.requestKeyFromOtherDevice() }) {
+                                Text("Ask my other device", color = NostrordColors.Primary, style = NostrordTypography.Button)
                             }
+                        }
                     }
                     OutlinedTextField(
                         value = importInput,
@@ -1604,20 +1608,45 @@ private fun DmEncryptionPanelContent() {
                     )
                     // Another device of this account is asking for the key. The code comes from the
                     // request itself, so matching it against the other screen proves which one asked.
-                    (pairingState as? DmPairingManager.State.IncomingRequest)?.let { request ->
-                        InfoCard(
-                            title = "Another device wants this key",
-                            titleColor = NostrordColors.Warning,
-                            icon = Icons.Default.Key,
-                            content = "Approve only if that device is showing code ${request.code}.",
-                            isCompact = false,
-                        )
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = { vm.declinePairing() }) {
-                                Text("Decline", color = NostrordColors.TextSecondary, style = NostrordTypography.Button)
+                    (pairingState as? DmPairingManager.State.IncomingRequests)?.requests?.let { requests ->
+                        requests.forEach { request ->
+                            InfoCard(
+                                title = "Another device wants this key",
+                                titleColor = NostrordColors.Warning,
+                                icon = Icons.Default.Key,
+                                content = "Approve only if that device is showing code ${request.code}.",
+                                isCompact = false,
+                            )
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(
+                                    onClick = { vm.declinePairing(request.throwawayPubkey) },
+                                    enabled = approving == null,
+                                ) {
+                                    Text("Decline", color = NostrordColors.TextSecondary, style = NostrordTypography.Button)
+                                }
+                                TextButton(
+                                    onClick = { vm.approvePairing(request.throwawayPubkey) },
+                                    enabled = approving == null,
+                                ) {
+                                    Text(
+                                        if (approving == request.throwawayPubkey) "Sending…" else "Send key",
+                                        color = NostrordColors.Primary,
+                                        style = NostrordTypography.Button,
+                                    )
+                                }
                             }
-                            TextButton(onClick = { vm.approvePairing() }) {
-                                Text("Send key", color = NostrordColors.Primary, style = NostrordTypography.Button)
+                        }
+                        // A device that retried leaves one request per attempt, and each has to be
+                        // decided or it comes back on the next launch.
+                        if (requests.size > 1) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { vm.declineAllPairing() }, enabled = approving == null) {
+                                    Text(
+                                        "Decline all ${requests.size}",
+                                        color = NostrordColors.TextSecondary,
+                                        style = NostrordTypography.Button,
+                                    )
+                                }
                             }
                         }
                     }

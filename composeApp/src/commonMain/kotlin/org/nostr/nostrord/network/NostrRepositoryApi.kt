@@ -263,11 +263,14 @@ interface NostrRepositoryApi {
     /** Ask another device of this account for the encryption key (kind:4454). */
     suspend fun requestDmEncryptionKey(): Result<Unit>
 
-    /** Send our encryption key to the device that asked (kind:4455). */
-    suspend fun approveDmPairing(): Result<Unit>
+    /** Send our encryption key to the device waiting on [throwawayPubkey] (kind:4455). */
+    suspend fun approveDmPairing(throwawayPubkey: String): Result<Unit>
 
-    /** Refuse the pending request; the asking device keeps waiting. */
-    fun declineDmPairing()
+    /** Refuse one pending request; the asking device keeps waiting. */
+    fun declineDmPairing(throwawayPubkey: String)
+
+    /** Refuse every pending request at once. */
+    fun declineAllDmPairing()
 
     /** Clear a finished or failed pairing back to idle. */
     fun dismissDmPairing()
