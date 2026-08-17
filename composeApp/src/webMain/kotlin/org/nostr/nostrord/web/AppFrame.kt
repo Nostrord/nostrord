@@ -339,6 +339,10 @@ val AppFrame =
             } else {
                 repo.setActiveGroup(r.relayUrl, r.groupId)
                 repo.markGroupAsRead(r.relayUrl, r.groupId)
+                // Re-pin routing (sends, joins, member reads) to the relay on screen: the
+                // ViewModel registers the hint at construction only, so with the same id on
+                // two relays whichever twin mounted LAST kept routing both.
+                repo.setGroupRelayHint(r.groupId, r.relayUrl)
                 val code = r.inviteCode
                 if (code != null) {
                     consumeInviteInHash(r)
@@ -355,7 +359,7 @@ val AppFrame =
                         // No ViewModel on the deep-link path, so the rejection reason goes to the
                         // system snackbar; swallowing it made a bad invite code look like nothing
                         // happened at all.
-                        val join = repo.joinGroup(r.groupId, code)
+                        val join = repo.joinGroup(r.groupId, code, relayUrl = r.relayUrl)
                         if (join is org.nostr.nostrord.utils.Result.Error) {
                             val reason = (join.error as? AppError.Group.JoinFailed)?.cause?.message
                             AppModule.postSystemMessage(

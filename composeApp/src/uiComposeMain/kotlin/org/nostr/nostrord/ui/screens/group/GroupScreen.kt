@@ -44,6 +44,7 @@ import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
 import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeRelayUrl
+import org.nostr.nostrord.utils.resolveGroupRef
 import org.nostr.nostrord.utils.shortNpub
 
 // Unit separator — safe field delimiter for encoding GroupInfo into the platform-agnostic
@@ -152,15 +153,22 @@ fun GroupScreen(
         (relayMetadata[screenRelay] ?: relayMetadata[screenRelay.normalizeRelayUrl()])?.supportsSubgroups == true
     val currentUserPubkey = vm.getPublicKey()
 
-    // This relay's kind:39000 first: a same-id group on another relay must not paint this
-    // screen's name/about. The flat list stays the fallback while the route has no relay.
+    // Only this relay's kind:39000 may paint this screen. With a route relay there is no flat
+    // fallback: the twin group on another relay would lend its name, about and avatar to a
+    // group whose metadata simply has not arrived yet (a non-member of a private group, or a
+    // preview still in flight). The flat list stays the fallback while the route has no relay.
     val currentGroupMetadata =
         remember(groups, allGroupsByRelay, groupId, relayUrl) {
-            relayUrl?.let { r ->
-                (allGroupsByRelay[r] ?: allGroupsByRelay.entries.firstOrNull { it.key.normalizeRelayUrl() == r.normalizeRelayUrl() }?.value)
-                    ?.firstOrNull { it.id == groupId }
-            } ?: groups.find { it.id == groupId }
+            resolveGroupRef(allGroupsByRelay, groupId, relayUrl, fallback = groups)
         }
+
+    // Nothing from this relay yet (a group the account has not joined never enters the
+    // per-relay list): ask for its kind:39000 so the header stops showing the raw id.
+    LaunchedEffect(groupId, relayUrl, currentGroupMetadata?.name) {
+        if (relayUrl != null && currentGroupMetadata?.name == null) {
+            vm.fetchGroupPreview(groupId, relayUrl)
+        }
+    }
 
     // %group mention candidates: only joined + friends' groups (the new discovery),
     // not every group the relay served.

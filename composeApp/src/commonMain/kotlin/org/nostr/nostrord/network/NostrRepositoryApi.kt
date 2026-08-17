@@ -502,6 +502,9 @@ interface NostrRepositoryApi {
         groupId: String,
         inviteCode: String? = null,
         listPrivately: Boolean = false,
+        /** Relay hosting the group being joined. Null routes by hint / focused relay, which
+         *  picks the wrong twin when the same id exists on two relays. */
+        relayUrl: String? = null,
     ): Result<Unit>
 
     /**

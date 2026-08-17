@@ -4190,17 +4190,21 @@ class NostrRepository(
     override suspend fun ensureBunkerConnected(): Boolean = sessionManager.ensureBunkerConnected()
 
     // Group operations
-    override suspend fun joinGroup(groupId: String, inviteCode: String?, listPrivately: Boolean): Result<Unit> {
+    override suspend fun joinGroup(groupId: String, inviteCode: String?, listPrivately: Boolean, relayUrl: String?): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
-        val joinRelay = connectionManager.currentRelayUrl.value
+        // The caller's relay decides: with the same id on two relays, the focused relay is a
+        // coin flip and the 9021 lands on the group the user is not looking at.
+        val joinRelay = relayUrl?.normalizeRelayUrl()
+            ?: groupManager.getRelayForGroup(groupId)
+            ?: connectionManager.currentRelayUrl.value
         // Before the join publishes the list, not after: a group marked private afterwards would
         // already have gone out in the clear once, and relays keep that version.
         if (listPrivately) outboxManager.setGroupPrivate(joinRelay, groupId, true)
         val result = groupManager.joinGroup(
             groupId = groupId,
             pubKey = pubKey,
-            currentRelayUrl = connectionManager.currentRelayUrl.value,
+            currentRelayUrl = joinRelay,
             signEvent = { sessionManager.signEvent(it) },
             publishJoinedGroups = { publishJoinedGroupsList() },
             inviteCode = inviteCode,
@@ -4209,7 +4213,7 @@ class NostrRepository(
             // Joining a group may have introduced a new joined relay — ensure it's
             // connected with a chat sub so notifications fire even when the user is
             // browsing a different focused.
-            scope.launch { ensureJoinedRelaysConnected(connectionManager.currentRelayUrl.value) }
+            scope.launch { ensureJoinedRelaysConnected(joinRelay) }
         } else if (listPrivately) {
             outboxManager.setGroupPrivate(joinRelay, groupId, false)
         }
