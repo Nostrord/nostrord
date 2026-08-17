@@ -20,6 +20,7 @@ import org.nostr.nostrord.ui.screens.group.deleteThreadConfirmBody
 import org.nostr.nostrord.ui.screens.group.filterMutedReactions
 import org.nostr.nostrord.ui.screens.group.friendlyRelayError
 import org.nostr.nostrord.ui.screens.group.threadAnnouncementsFor
+import org.nostr.nostrord.ui.screens.group.threadComposerSubmits
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadsPlaceholder
@@ -318,6 +319,15 @@ class ThreadsViewModelTest {
         // A plain member gets no delete on someone else's thread, and logged out none at all.
         assertFalse(canDeleteThreadMessage(other, me, isAdmin = false))
         assertFalse(canDeleteThreadMessage(other, null, isAdmin = true))
+    }
+
+    @Test
+    fun `threadComposerSubmits posts only on Ctrl or Cmd Enter`() {
+        assertTrue(threadComposerSubmits(isEnter = true, ctrlOrMeta = true, shift = false))
+        // Bare Enter writes a newline: a forum reply is expected to run to more than one line.
+        assertFalse(threadComposerSubmits(isEnter = true, ctrlOrMeta = false, shift = false))
+        assertFalse(threadComposerSubmits(isEnter = true, ctrlOrMeta = true, shift = true))
+        assertFalse(threadComposerSubmits(isEnter = false, ctrlOrMeta = true, shift = false))
     }
 
     @Test

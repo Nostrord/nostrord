@@ -2448,14 +2448,22 @@ body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    /* Posts are separated cards, not adjacent chat rows. */
+    gap: var(--space-md);
     padding: var(--space-md) var(--space-lg);
 }
 
+/* A post is a card with its own surface, not a hovering chat row: the OP reads as the subject
+   of the page and each reply as a deliberate contribution to it (issue #267). */
 .thread-msg {
     display: flex;
     gap: var(--space-md);
-    padding: var(--space-sm) 0;
-    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    background: var(--color-surface);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-lg);
 }
 
 .thread-msg:hover {
@@ -2468,7 +2476,7 @@ body {
 }
 
 .thread-msg-root {
-    padding-bottom: var(--space-md);
+    background: var(--color-surface-variant);
 }
 
 .thread-msg-main {
@@ -2494,18 +2502,51 @@ body {
 }
 
 .thread-msg-title {
-    margin: var(--space-xs) 0;
-    font-size: 18px;
+    margin: var(--space-xs) 0 var(--space-sm);
+    font-size: 20px;
     font-weight: 700;
     color: var(--color-text-primary);
 }
 
 .thread-msg-content {
-    font-size: 14px;
-    line-height: 1.5;
+    font-size: 15px;
+    line-height: 1.65;
     color: var(--color-text-content);
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+/* Post footer: answering is the primary action on a forum post, so it is visible here and not
+   only in the context menu the way a chat reply is. */
+.thread-post-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    margin-top: var(--space-sm);
+}
+
+.thread-post-action {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xxs);
+    padding: 2px var(--space-xs);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.thread-post-action:hover {
+    background: var(--color-hover);
+    color: var(--color-text-primary);
+}
+
+.thread-post-action svg {
+    width: 14px;
+    height: 14px;
 }
 
 /* Quoted kind:11 thread card (Share to chat announcement / pasted thread nevent). */
@@ -2613,7 +2654,7 @@ body {
 }
 
 .thread-replies-divider {
-    margin: var(--space-md) 0;
+    /* .thread-detail-body's gap already spaces it from the posts. */
     padding-bottom: var(--space-xs);
     border-bottom: 1px solid var(--color-divider);
     font-size: 12px;
@@ -3576,6 +3617,40 @@ body {
 .dm-composer-btn .ico {
     width: 20px;
     height: 20px;
+}
+
+/* Thread reply box: the chat pill restacked as a post box (issue #267) - opens several lines
+   tall, controls on their own row, posted from a labeled button instead of a paper plane. */
+.thread-composer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-lg);
+}
+
+/* Three lines of 15px/1.4 text, the same opening height as the native composer's minLines = 3. */
+.thread-composer .thread-composer-input,
+.thread-composer .composer-highlight {
+    min-height: 63px;
+    max-height: 320px;
+}
+
+.thread-composer-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.thread-composer-bar .dm-composer-btn {
+    padding: 0;
+}
+
+.thread-composer-post {
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: var(--space-xs) var(--space-md);
+    font-size: 13px;
 }
 
 /* Inline unread pill (sidebar rows). */

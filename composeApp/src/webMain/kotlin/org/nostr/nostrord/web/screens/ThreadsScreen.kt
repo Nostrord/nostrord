@@ -10,6 +10,7 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
+import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.mentions.MentionAutocomplete
 import org.nostr.nostrord.ui.mentions.MentionCtx
 import org.nostr.nostrord.ui.navigation.GroupRoute
@@ -20,12 +21,14 @@ import org.nostr.nostrord.ui.screens.group.ThreadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.ThreadsViewModel
 import org.nostr.nostrord.ui.screens.group.canDeleteThreadMessage
 import org.nostr.nostrord.ui.screens.group.deleteThreadConfirmBody
+import org.nostr.nostrord.ui.screens.group.threadComposerSubmits
 import org.nostr.nostrord.ui.screens.group.threadParentIdTag
 import org.nostr.nostrord.ui.screens.group.threadRootIdTag
 import org.nostr.nostrord.ui.screens.group.threadTitle
 import org.nostr.nostrord.ui.screens.group.threadsPlaceholder
 import org.nostr.nostrord.ui.screens.group.topReactionChips
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.formatDateTime
 import org.nostr.nostrord.utils.getDateLabel
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.web.bridge.VirtualKeyboard
@@ -69,7 +72,6 @@ import web.cssom.ClassName
 import web.dom.ElementId
 import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
-import kotlin.js.Date
 
 /** Lock panel for a group the relay withholds; same chrome as the chat gate. */
 private fun ChildrenBuilder.threadsLockedState(title: String, body: String) {
@@ -88,18 +90,6 @@ private fun ChildrenBuilder.threadsLockedState(title: String, body: String) {
 }
 
 private fun threadDisplayName(pubkey: String, meta: UserMetadata?): String = mentionDisplayName(pubkey, meta)
-
-private fun relativeTime(createdAtSeconds: Long): String {
-    val nowSec = (Date.now() / 1000).toLong()
-    val diff = (nowSec - createdAtSeconds).coerceAtLeast(0)
-    return when {
-        diff < 60 -> "now"
-        diff < 3600 -> "${diff / 60}m"
-        diff < 86_400 -> "${diff / 3600}h"
-        diff < 604_800 -> "${diff / 86_400}d"
-        else -> "${diff / 604_800}w"
-    }
-}
 
 // Deep-link flash duration; mirrors the .thread-msg.highlight animation (2.4s msg-flash).
 private const val HIGHLIGHT_FLASH_MS = 2_400
@@ -281,18 +271,13 @@ private val ThreadComposer =
                     }
                 }
             }
+            // Post box, not a chat pill: it opens several lines tall and posts from a labeled
+            // button, so a reply reads as something you compose (issue #267).
             div {
                 key = "composer-pill"
-                className = ClassName("dm-composer")
-                UploadButton {
-                    cls = "dm-composer-btn"
-                    icon = Ic.AttachFile
-                    busy = uploadCount > 0
-                    onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
-                    onPickerClosed = { composerInputRef.current?.focus() }
-                    onUploaded = { upload -> setReply { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
-                    onError = { props.onUploadError(it) }
-                }
+                // Keeps .dm-composer for the shared box rules (transparent textarea over the
+                // mention mirror, focus ring); .thread-composer restacks it as a post box.
+                className = ClassName("dm-composer thread-composer")
                 div {
                     className = ClassName("composer-input-wrap")
                     // Colored mirror painted behind the transparent textarea: same text, with the
@@ -304,8 +289,8 @@ private val ThreadComposer =
                     }
                     textarea {
                         ref = composerInputRef
-                        className = ClassName("composer-input")
-                        rows = 1
+                        className = ClassName("composer-input thread-composer-input")
+                        rows = 3
                         value = reply
                         placeholder = "Write a reply..."
                         onScroll = {
@@ -337,7 +322,8 @@ private val ThreadComposer =
                                     e.preventDefault()
                                     setMention(null)
                                 }
-                                e.key == "Enter" && !e.shiftKey -> {
+                                // Enter writes a newline here; only Ctrl/Cmd+Enter posts.
+                                threadComposerSubmits(e.key == "Enter", e.ctrlKey || e.metaKey, e.shiftKey) -> {
                                     e.preventDefault()
                                     sendReply()
                                 }
@@ -371,19 +357,38 @@ private val ThreadComposer =
                         }
                     }
                 }
-                button {
-                    className = ClassName(if (emojiOpen) "dm-composer-btn active" else "dm-composer-btn")
-                    title = "Emoji"
-                    onClick = { setEmojiOpen(!emojiOpen) }
-                    icon(Ic.EmojiEmotions)
-                }
-                button {
-                    className = ClassName("dm-composer-btn send")
-                    title = "Send"
-                    disabled = (reply.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
-                    onMouseDown = { e -> e.preventDefault() }
-                    onClick = { sendReply() }
-                    if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
+                div {
+                    className = ClassName("thread-composer-bar")
+                    UploadButton {
+                        cls = "dm-composer-btn"
+                        icon = Ic.AttachFile
+                        busy = uploadCount > 0
+                        onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
+                        onPickerClosed = { composerInputRef.current?.focus() }
+                        onUploaded = { upload -> setReply { prev -> if (prev.isBlank()) upload.url else "$prev ${upload.url}" } }
+                        onError = { props.onUploadError(it) }
+                    }
+                    button {
+                        className = ClassName(if (emojiOpen) "dm-composer-btn active" else "dm-composer-btn")
+                        title = "Emoji"
+                        onClick = { setEmojiOpen(!emojiOpen) }
+                        icon(Ic.EmojiEmotions)
+                    }
+                    button {
+                        className = ClassName("btn-primary thread-composer-post")
+                        disabled = (reply.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
+                        // Keyboard-neutral tap: keep textarea focus (so the keyboard stays up)
+                        // only when it is already up; rules in VirtualKeyboardPolicy.
+                        onMouseDown = { e ->
+                            val keep = VirtualKeyboardPolicy.keepComposerFocusOnTap(
+                                keyboardOpen = VirtualKeyboard.isOpen,
+                                touchDevice = window.navigator.maxTouchPoints > 0,
+                            )
+                            if (keep) e.preventDefault()
+                        }
+                        onClick = { sendReply() }
+                        if (sending) span { className = ClassName("btn-spinner") } else +"Post reply"
+                    }
                 }
                 if (emojiOpen) {
                     div {
@@ -759,6 +764,11 @@ val ThreadsScreen =
                                 highlighted = msg.id == highlightId,
                                 menuOpen = ctxMenu?.msg?.id == msg.id,
                                 onReact = { emoji -> vm.sendReaction(msg.id, msg.pubkey, emoji) },
+                                onReply = {
+                                    setReplyingTo(msg)
+                                    setReplyFocusNonce { it + 1 }
+                                },
+                                onAddReaction = { setReactingTo(msg.id to msg.pubkey) },
                                 onOpenMenu = { x, y -> setCtxMenu(ThreadCtxMenu(msg, x, y)) },
                                 onCloseMenu = { setCtxMenu(null) },
                                 onUser = { setProfilePubkey(it) },
@@ -1001,6 +1011,8 @@ private fun ChildrenBuilder.threadMessage(
     // unambiguous (chat parity: .msg.menu-open).
     menuOpen: Boolean,
     onReact: (String) -> Unit,
+    onReply: () -> Unit,
+    onAddReaction: () -> Unit,
     onOpenMenu: (Double, Double) -> Unit,
     onCloseMenu: () -> Unit,
     onUser: (String) -> Unit,
@@ -1057,9 +1069,10 @@ private fun ChildrenBuilder.threadMessage(
                     onClick = { onUser(msg.pubkey) }
                     +threadDisplayName(msg.pubkey, userMetadata[msg.pubkey])
                 }
+                // Absolute date, not "2h": a post is a dated record.
                 span {
                     className = ClassName("thread-msg-time")
-                    +relativeTime(msg.createdAt)
+                    +formatDateTime(msg.createdAt)
                 }
             }
             if (isRoot) {
@@ -1115,9 +1128,24 @@ private fun ChildrenBuilder.threadMessage(
             if (myPubkey != null && myPubkey == msg.pubkey) {
                 messageSendStatus(status, onRetry, onDismiss)
             }
-            // Reaction badges; adding a reaction goes through the context menu (quick row
-            // or the full picker), so there is no always-visible add button.
             reactionBadges(reactions, pendingEmojis, myPubkey, userMetadata, onReact)
+            // Answering a forum post is the primary action, so it is a visible footer button and
+            // not only a context-menu item the way a chat reply is.
+            div {
+                className = ClassName("thread-post-actions")
+                button {
+                    className = ClassName("thread-post-action")
+                    onClick = { onReply() }
+                    icon(Ic.Reply)
+                    span { +"Reply" }
+                }
+                button {
+                    className = ClassName("thread-post-action")
+                    onClick = { onAddReaction() }
+                    icon(Ic.EmojiEmotions)
+                    span { +"React" }
+                }
+            }
         }
     }
 }
