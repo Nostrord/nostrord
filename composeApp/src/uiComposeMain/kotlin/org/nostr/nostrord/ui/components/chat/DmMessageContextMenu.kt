@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.runtime.Composable
@@ -49,6 +50,7 @@ fun DmMessageContextMenu(
     onCopyText: () -> Unit,
     onReact: (String) -> Unit,
     onOpenReactionPicker: () -> Unit,
+    onReply: () -> Unit,
 ) {
     if (!visible) return
     val marginPx = with(LocalDensity.current) { 8.dp.roundToPx() }
@@ -110,6 +112,14 @@ fun DmMessageContextMenu(
                         },
                         onOpenPicker = {
                             onOpenReactionPicker()
+                            onDismiss()
+                        },
+                    )
+                    ContextMenuItem(
+                        icon = Icons.AutoMirrored.Outlined.Reply,
+                        label = "Reply",
+                        onClick = {
+                            onReply()
                             onDismiss()
                         },
                     )

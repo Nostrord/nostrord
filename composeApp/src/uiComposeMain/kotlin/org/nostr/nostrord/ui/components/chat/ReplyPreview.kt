@@ -189,9 +189,30 @@ fun ReplyPreview(
                 .replace('\n', ' ')
         }
 
-    ReplyPreviewContainer(
+    ReplyQuote(
+        authorName = authorName,
+        snippet = processedContent,
         onClick = onReplyClick,
         onLongClick = onReplyLongClick,
+        modifier = modifier,
+    )
+}
+
+/**
+ * The quote box itself, over already-resolved strings. Callers that hold something other than a
+ * group message (a DM being replied to, say) render through this rather than restating the box.
+ */
+@Composable
+fun ReplyQuote(
+    authorName: String,
+    snippet: String,
+    onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    ReplyPreviewContainer(
+        onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier,
     ) {
         Text(
@@ -206,7 +227,7 @@ fun ReplyPreview(
         Spacer(modifier = Modifier.height(2.dp))
 
         Text(
-            text = processedContent.take(100),
+            text = snippet.take(100),
             color = NostrordColors.TextSecondary,
             style = NostrordTypography.Caption,
             maxLines = 1,

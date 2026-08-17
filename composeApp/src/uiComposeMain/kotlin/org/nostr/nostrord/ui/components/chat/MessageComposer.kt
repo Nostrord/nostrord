@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -116,6 +117,10 @@ fun MessageComposer(
     // Set by callers that own the upload themselves (DMs encrypt the bytes first). Picked and
     // pasted files are handed over raw instead of being uploaded and appended as a url.
     onFilePicked: ((ByteArray, String) -> Unit)? = null,
+    // Message being replied to. Non-null shows its quote above the input with a way out.
+    replyAuthorName: String? = null,
+    replySnippet: String? = null,
+    onCancelReply: (() -> Unit)? = null,
 ) {
     var showEmojiPicker by remember { mutableStateOf(false) }
     var isUploadingPaste by remember { mutableStateOf(false) }
@@ -222,6 +227,28 @@ fun MessageComposer(
                     onGroupSelect = { selectGroup(it) },
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        }
+        if (replyAuthorName != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ReplyQuote(
+                    authorName = replyAuthorName,
+                    snippet = replySnippet.orEmpty(),
+                    modifier = Modifier.weight(1f),
+                )
+                onCancelReply?.let { cancel ->
+                    IconButton(onClick = cancel, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancel reply",
+                            tint = NostrordColors.TextMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
             }
         }
         Box(modifier = Modifier.fillMaxWidth()) {

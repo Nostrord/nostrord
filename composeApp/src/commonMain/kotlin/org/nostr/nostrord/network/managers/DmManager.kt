@@ -41,6 +41,18 @@ data class DmMessage(
     val file: Nip17File? by lazy {
         if (kind != Nip17.KIND_FILE) null else rumorJson?.let { Nip17.parseRumor(it) }?.let { Nip17File.fromRumor(it) }
     }
+
+    /**
+     * Id of the message this one replies to, from the rumor's `e` tag. Null for a message that
+     * starts its own exchange.
+     */
+    val replyToId: String? by lazy {
+        rumorJson
+            ?.let { Nip17.parseAnyRumor(it) }
+            ?.getTag("e")
+            ?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+    }
 }
 
 /**

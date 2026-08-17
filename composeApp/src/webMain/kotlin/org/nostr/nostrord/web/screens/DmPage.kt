@@ -4,6 +4,9 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.awaitCancellation
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.UserMetadata
+import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.network.managers.previewText
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.extractDmGroupInvite
 import org.nostr.nostrord.ui.navigation.DmRoute
@@ -125,6 +128,8 @@ val DmPage =
         // Message the full emoji picker was opened for; null while it is closed.
         val (reactingTo, setReactingTo) = useState<String?> { null }
         val myPubkey = dmVm.getPublicKey()
+        // Message being replied to; the composer keeps its chip until the reply is sent.
+        val (replyingTo, setReplyingTo) = useState<String?> { null }
         // Resolve where this peer reads before the first message is written, not after their reply.
         useEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -165,8 +170,10 @@ val DmPage =
                 dmVm.send(
                     pubkey,
                     text,
+                    replyToId = replyingTo,
                     onSuccess = {
                         setText("")
+                        setReplyingTo(null)
                         setSending(false)
                     },
                     onFailure = { setSending(false) },
@@ -447,6 +454,27 @@ val DmPage =
                                     title = formatDateTime(m.createdAt)
                                     // A group naddr on its own line renders as the prototype
                                     // invite card (text above, card + View group button below).
+                                    // Quote of the message this one answers, above its body.
+                                    m.replyToId?.let { parentId ->
+                                        val parent = messages.firstOrNull { it.id == parentId }
+                                        div {
+                                            className = ClassName("msg-reply")
+                                            div { className = ClassName("msg-reply-bar") }
+                                            div {
+                                                className = ClassName("msg-reply-content")
+                                                div {
+                                                    className = ClassName("msg-reply-author")
+                                                    +dmReplyAuthorName(parent, userMetadata, name, myPubkey)
+                                                }
+                                                parent?.let { p ->
+                                                    div {
+                                                        className = ClassName("msg-reply-text")
+                                                        +p.previewText()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                     val attachment = m.file
                                     val invite = extractDmGroupInvite(m.content)
                                     val body = if (attachment != null) "" else invite?.remainingText ?: m.content
@@ -547,6 +575,10 @@ val DmPage =
                             icon(Ic.EmojiEmotions)
                         }
                     }
+                    ctxItem(Ic.Reply, "Reply") {
+                        setReplyingTo(menuMsg.id)
+                        setMenuFor(null)
+                    }
                     ctxItem(Ic.Visibility, "View source") {
                         setSourceFor(menuMsg.id)
                         setMenuFor(null)
@@ -591,6 +623,33 @@ val DmPage =
 
             div {
                 className = ClassName("dm-composer-wrap")
+                // Reply chip above the input, same markup as the group composer's.
+                replyingTo?.let { targetId ->
+                    val parent = messages.firstOrNull { it.id == targetId }
+                    div {
+                        className = ClassName("composer-reply")
+                        icon(Ic.Reply)
+                        span {
+                            className = ClassName("composer-reply-label")
+                            +"Replying to"
+                        }
+                        span {
+                            className = ClassName("composer-reply-name")
+                            +dmReplyAuthorName(parent, userMetadata, name, myPubkey)
+                        }
+                        parent?.previewText()?.takeIf { it.isNotBlank() }?.let { preview ->
+                            span {
+                                className = ClassName("composer-reply-text")
+                                +preview
+                            }
+                        }
+                        button {
+                            className = ClassName("composer-reply-close")
+                            onClick = { setReplyingTo(null) }
+                            icon(Ic.Close)
+                        }
+                    }
+                }
                 div {
                     className = ClassName("dm-composer")
                     UploadButton {
@@ -702,4 +761,22 @@ private fun ChildrenBuilder.uploadErrorDialog(message: String, onDismiss: () -> 
             }
         }
     }
+}
+
+/**
+ * Name to show on a reply quote. The peer's own name is already in the header, so an unknown
+ * parent falls back to it rather than to a raw npub.
+ */
+private fun dmReplyAuthorName(
+    parent: DmMessage?,
+    metadata: Map<String, UserMetadata>,
+    peerName: String,
+    myPubkey: String?,
+): String = when {
+    parent == null -> peerName
+    parent.senderPubkey == myPubkey -> "You"
+    else ->
+        metadata[parent.senderPubkey]?.displayName
+            ?: metadata[parent.senderPubkey]?.name
+            ?: peerName
 }

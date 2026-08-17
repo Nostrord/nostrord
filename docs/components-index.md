@@ -84,6 +84,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `ReactionBadges` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ReactionBadges.kt | Displays reaction badges for a message. |
 | `RelayGradientAvatar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/avatars/GradientAvatar.kt | Deterministic gradient fallback for relay avatars (prototype gradientRelayAvatar): a |
 | `ReplyPreview` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ReplyPreview.kt | Compact reply preview shown above a message that is replying to another message. |
+| `ReplyQuote` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ReplyPreview.kt | The quote box itself, over already-resolved strings. Callers that hold something other than a |
 | `ReportUserModal` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/ReportUserModal.kt | NIP-56 report modal (prototype ReportModal): reason radio cards, optional note, |
 | `RichAboutText` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/RichAboutText.kt | Renders an "about" text with clickable links and resolved nostr mentions. |
 | `SendStateIcon` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/MessageStatusIndicator.kt | Inline send-state icon for the author's own message: a muted clock while Sending, a check |
