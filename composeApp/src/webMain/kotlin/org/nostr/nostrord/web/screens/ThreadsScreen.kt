@@ -9,6 +9,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.mentions.MentionAutocomplete
@@ -869,8 +870,13 @@ val ThreadsScreen =
                         copyToClipboard(threadShareLink(route.relayUrl, route.groupId, m.msg.threadRootIdTag() ?: m.msg.id, messageId = m.msg.id))
                         setCtxMenu(null)
                     }
+                    // Prefixed (NIP-21) so a paste into a message reads as a reference.
                     ctxItem(Ic.Code, "Copy nevent") {
-                        copyToClipboard(Nip19.encodeNevent(m.msg.id, relays = listOf(route.relayUrl), authorHex = m.msg.pubkey, kind = m.msg.kind))
+                        copyToClipboard(
+                            Nip27.createUri(
+                                Nip19.encodeNevent(m.msg.id, relays = listOf(route.relayUrl), authorHex = m.msg.pubkey, kind = m.msg.kind),
+                            ),
+                        )
                         setCtxMenu(null)
                     }
                     ctxItem(Ic.Code, "Copy event JSON") {

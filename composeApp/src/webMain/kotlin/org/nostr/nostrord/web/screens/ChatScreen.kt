@@ -19,6 +19,7 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.network.upload.UploadResult
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.nostr.Nip68
 import org.nostr.nostrord.nostr.Nip84
@@ -3204,9 +3205,11 @@ private val MessageRow =
                         copyToClipboard(props.messageLink)
                         setMenuOpen(false)
                     }
-                    // Prototype: shareable NIP-19 event reference.
+                    // Shareable event reference, carrying the NIP-21 prefix: pasted into a
+                    // message it has to read as a reference, and clients that follow the spec
+                    // (Jumble among them) render nothing without it.
                     ctxItem(Ic.Code, "Copy nevent") {
-                        copyToClipboard(props.nevent)
+                        copyToClipboard(Nip27.createUri(props.nevent))
                         setMenuOpen(false)
                     }
                     ctxItem(Ic.Code, "Copy event JSON") {
