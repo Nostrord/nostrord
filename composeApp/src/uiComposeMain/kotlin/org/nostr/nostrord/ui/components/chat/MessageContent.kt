@@ -79,6 +79,7 @@ import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.navigation.LocalFrameNavigator
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
+import org.nostr.nostrord.ui.text.BlockEmbedText
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.NostrordTypography
@@ -201,6 +202,24 @@ private fun isBlockPart(part: ContentPart): Boolean = when (part) {
 }
 
 /**
+ * Absorb the newline the author typed on either side of a block embed: the block already breaks
+ * the line and carries its own spacing, so that newline would render as an empty line under the
+ * media (rules in [BlockEmbedText]). Text parts left empty are dropped so they add no line of
+ * their own.
+ */
+private fun trimAroundBlocks(parts: List<ContentPart>): List<ContentPart> = parts
+    .mapIndexed { index, part ->
+        if (part !is TextPart) {
+            part
+        } else {
+            var text = part.content
+            if (parts.getOrNull(index - 1)?.let { isBlockPart(it) } == true) text = BlockEmbedText.trimAfter(text)
+            if (parts.getOrNull(index + 1)?.let { isBlockPart(it) } == true) text = BlockEmbedText.trimBefore(text)
+            if (text == part.content) part else part.copy(content = text)
+        }
+    }.filter { it !is TextPart || it.content.isNotEmpty() }
+
+/**
  * # MessageContent - Robust Inline Text Rendering
  *
  * This component uses a single AnnotatedString with InlineContent to render
@@ -268,7 +287,7 @@ fun MessageContent(
             val result = mutableListOf<List<ContentPart>>()
             var currentInlineGroup = mutableListOf<ContentPart>()
 
-            parts.forEach { part ->
+            trimAroundBlocks(parts).forEach { part ->
                 if (isBlockPart(part)) {
                     // Flush current inline group if not empty
                     if (currentInlineGroup.isNotEmpty()) {
@@ -2289,7 +2308,7 @@ private fun QuotedEventContent(
             val result = mutableListOf<List<ContentPart>>()
             var currentInlineGroup = mutableListOf<ContentPart>()
 
-            parts.forEach { part ->
+            trimAroundBlocks(parts).forEach { part ->
                 if (isBlockPart(part)) {
                     if (currentInlineGroup.isNotEmpty()) {
                         result.add(currentInlineGroup.toList())
