@@ -50,6 +50,7 @@ import react.dom.html.ReactHTML.p
 import react.dom.html.ReactHTML.span
 import react.dom.html.ReactHTML.textarea
 import react.useEffect
+import react.useLayoutEffect
 import react.useRef
 import react.useState
 import web.cssom.ClassName
@@ -125,6 +126,7 @@ val DmPage =
         val dmStatus = useStateFlow(dmVm.messageStatus)
         val dmFiles = useStateFlow(dmVm.fileStates)
         val dmReactions = useStateFlow(dmVm.reactions)
+        val syncing = useStateFlow(dmVm.syncing)
         // Message the full emoji picker was opened for; null while it is closed.
         val (reactingTo, setReactingTo) = useState<String?> { null }
         val myPubkey = dmVm.getPublicKey()
@@ -141,9 +143,36 @@ val DmPage =
         // True while the user is at (or near) the bottom; drives whether async media growth keeps
         // the view pinned. Updated on scroll; seeded true so a fresh conversation stays pinned.
         val pinnedToBottom = useRef(true)
-        useEffect(pubkey, messages.size) {
-            messagesRef.current?.let { el -> el.scrollTop = el.scrollHeight.toDouble() }
+        // Opening a conversation lands on the newest message; after that the position is the
+        // reader's, not the stream's.
+        useLayoutEffect(pubkey) {
+            messagesRef.current?.let { el ->
+                el.asDynamic().style.overflowAnchor = "none"
+                el.scrollTop = el.scrollHeight.toDouble()
+            }
             pinnedToBottom.current = true
+        }
+        // Following the feed: pinned to the bottom, anchoring off. Reading further up: anchoring
+        // on and scrollTop untouched, so the browser holds the reading position when the backlog
+        // inserts an older message above (same trick the group list uses). Dragging the reader to
+        // the bottom for a message they did not send is what makes a backfill feel like a bug.
+        useLayoutEffect(messages.size) {
+            val el = messagesRef.current ?: return@useLayoutEffect
+            if (pinnedToBottom.current == true) {
+                el.asDynamic().style.overflowAnchor = "none"
+                el.scrollTop = el.scrollHeight.toDouble()
+            } else {
+                el.asDynamic().style.overflowAnchor = "auto"
+            }
+        }
+        // Our own send always returns to the bottom: the reader caused this one.
+        val newestOwnId = messages.lastOrNull()?.takeIf { it.mine }?.id
+        useLayoutEffect(newestOwnId) {
+            if (newestOwnId == null) return@useLayoutEffect
+            val el = messagesRef.current ?: return@useLayoutEffect
+            pinnedToBottom.current = true
+            el.asDynamic().style.overflowAnchor = "none"
+            el.scrollTop = el.scrollHeight.toDouble()
         }
         // Inline media (images/video/audio) loads after render and grows the list; if the user was
         // at the bottom, follow the growth so the newest message stays in view. A capturing listener
@@ -351,6 +380,15 @@ val DmPage =
                     val el = messagesRef.current
                     if (el != null) {
                         pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80.0
+                    }
+                }
+                // Sitting above the thread, so older messages landing in are expected rather than
+                // startling. Sending stays available: no client can promise it holds every message.
+                if (syncing) {
+                    div {
+                        className = ClassName("dm-syncing")
+                        span { className = ClassName("upload-spinner") }
+                        +"Catching up on older messages"
                     }
                 }
                 div {

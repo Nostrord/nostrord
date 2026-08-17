@@ -153,6 +153,8 @@ class FakeNostrRepository : NostrRepositoryApi {
     val dmRelaysByPubkeyFlow = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     override val dmRelaysByPubkey: StateFlow<Map<String, List<String>>> = dmRelaysByPubkeyFlow
     override val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>> = MutableStateFlow(emptyMap())
+    val dmSyncingFlow = MutableStateFlow(false)
+    override val dmSyncing: StateFlow<Boolean> = dmSyncingFlow
     val dmReactionsFlow = MutableStateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>>(emptyMap())
     override val dmReactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> = dmReactionsFlow
 

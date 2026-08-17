@@ -42,6 +42,9 @@ class DmViewModel(
     /** Download + decryption state of kind:15 attachments, keyed by rumor id. */
     val fileStates = repo.dmFileStates
 
+    /** True while the inbox is still catching up, so older messages may still land above. */
+    val syncing = repo.dmSyncing
+
     /** Reactions keyed by the message they target, then by emoji. */
     val reactions = repo.dmReactions
 

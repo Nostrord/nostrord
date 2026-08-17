@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -165,6 +166,7 @@ fun DmPageScreen(
         val dmStatus by dmVm.messageStatus.collectAsState()
         val dmFiles by dmVm.fileStates.collectAsState()
         val dmReactions by dmVm.reactions.collectAsState()
+        val syncing by dmVm.syncing.collectAsState()
         val userMetadata by dmVm.userMetadata.collectAsState()
         val myPubkey = remember { dmVm.getPublicKey() }
         // Message the emoji picker was opened for; null while it is closed.
@@ -188,7 +190,9 @@ fun DmPageScreen(
         // pinned. Recomputed only when a scroll gesture settles, so programmatic follow-scrolls (and
         // the moment media grows maxValue) don't flip it off.
         val pinnedToBottom = remember { mutableStateOf(true) }
-        LaunchedEffect(pubkey, messages.size) {
+        // Opening a conversation lands on the newest message; after that the position is the
+        // reader's, not the stream's.
+        LaunchedEffect(pubkey) {
             messagesScroll.scrollTo(messagesScroll.maxValue)
             pinnedToBottom.value = true
         }
@@ -197,10 +201,32 @@ fun DmPageScreen(
                 pinnedToBottom.value = messagesScroll.value >= messagesScroll.maxValue - 40
             }
         }
-        // Inline media (images/video) loads after render and raises maxValue; follow it to the
-        // bottom when the user was pinned, so the newest message stays in view.
+        // Our own send always returns to the bottom: the reader caused this one.
+        val newestOwnId = messages.lastOrNull()?.takeIf { it.mine }?.id
+        LaunchedEffect(newestOwnId) {
+            if (newestOwnId != null) {
+                pinnedToBottom.value = true
+                messagesScroll.scrollTo(messagesScroll.maxValue)
+            }
+        }
+        // The oldest message on screen: it changes exactly when the backlog inserts something
+        // ABOVE what is rendered, which is the case the reader must not be dragged through.
+        val oldestId = messages.firstOrNull()?.id
+        val prependPending = remember { mutableStateOf(false) }
+        LaunchedEffect(oldestId) { prependPending.value = true }
+        // Growth from inline media loading, a new message, or the backlog filling in. Pinned to
+        // the bottom means follow it. Reading further up means hold the reading position: when
+        // the growth was above (a decrypted older message), the content the reader was on has
+        // moved down by exactly that much, so compensating puts it back under their eyes.
+        var lastMax by remember { mutableStateOf(0) }
         LaunchedEffect(messagesScroll.maxValue) {
-            if (pinnedToBottom.value) messagesScroll.scrollTo(messagesScroll.maxValue)
+            val delta = messagesScroll.maxValue - lastMax
+            lastMax = messagesScroll.maxValue
+            when {
+                pinnedToBottom.value -> messagesScroll.scrollTo(messagesScroll.maxValue)
+                delta > 0 && prependPending.value -> messagesScroll.scrollTo(messagesScroll.value + delta)
+            }
+            prependPending.value = false
         }
 
         // The message the composer is answering, if it is still in the thread.
@@ -369,6 +395,26 @@ fun DmPageScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.widthIn(max = 320.dp),
             )
+            // Sitting above the thread, so older messages landing in are expected rather than
+            // startling. Sending stays available: no client can promise it holds every message.
+            if (syncing) {
+                Row(
+                    modifier = Modifier.padding(vertical = Spacing.xs),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = NostrordColors.TextMuted,
+                        strokeWidth = 1.5.dp,
+                    )
+                    Text(
+                        "Catching up on older messages",
+                        color = NostrordColors.TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
             val chatItems = remember(messages) { buildDmChatItems(messages) }
             var menuForId by remember { mutableStateOf<String?>(null) }
             var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
