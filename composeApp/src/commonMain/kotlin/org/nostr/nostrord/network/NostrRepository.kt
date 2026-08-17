@@ -78,6 +78,8 @@ import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.cache.DM_CACHE_KIND
+import org.nostr.nostrord.storage.cache.DM_CACHE_KINDS
+import org.nostr.nostrord.storage.cache.DM_FILE_CACHE_KIND
 import org.nostr.nostrord.storage.clearCurrentRelayUrlFor
 import org.nostr.nostrord.storage.clearDmMessages
 import org.nostr.nostrord.storage.getLastActiveAt
@@ -2414,7 +2416,7 @@ class NostrRepository(
     private suspend fun pendingArchiveRumors(myPub: String): List<Event> {
         val cached =
             try {
-                cacheStore.loadByKind(myPub, DM_CACHE_KIND)
+                loadCachedDms(myPub)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -2480,7 +2482,7 @@ class NostrRepository(
         val myPub = sessionManager.getPublicKey() ?: return ""
         val cached =
             try {
-                cacheStore.loadByKind(myPub, DM_CACHE_KIND)
+                loadCachedDms(myPub)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -2886,6 +2888,17 @@ class NostrRepository(
             SecureStorage.saveBooleanPref(dmFullSyncKey(myPub), false)
         }
 
+        // One-shot rescan: kind:15 file messages used to be decrypted, discarded and then marked
+        // processed, so every attachment already received is invisible AND permanently skipped by
+        // the dedup. Drop the progress once so the REQ streams from 0 and the backlog is decrypted
+        // again, this time keeping the file messages.
+        if (!SecureStorage.getBooleanPref(dmFileRescanKey(myPub), false)) {
+            dmProcessedWrapIds = emptySet()
+            SecureStorage.saveDmProcessedWrapIds(myPub, emptySet())
+            SecureStorage.saveBooleanPref(dmFullSyncKey(myPub), false)
+            SecureStorage.saveBooleanPref(dmFileRescanKey(myPub), true)
+        }
+
         _myDmRelays.value = dmRelaysFor(myPub)
         fetchDmRelays(myPub)
         resendDmInboxReq(myPub)
@@ -2986,14 +2999,19 @@ class NostrRepository(
         groupId = peerPubkey,
         pubkey = senderPubkey,
         createdAt = createdAt,
-        kind = DM_CACHE_KIND,
+        // A file message keeps its own kind so the hydrated row still renders as an attachment
+        // instead of falling back to its blob url as text.
+        kind = if (kind == Nip17.KIND_FILE) DM_FILE_CACHE_KIND else DM_CACHE_KIND,
         content = content,
-        // The rumor's real tags: with them the row IS the kind:14 rumor (DM_CACHE_KIND = 14),
-        // so toDmMessage can rebuild the exact event JSON across restarts.
+        // The rumor's real tags: with them the row IS the rumor, so toDmMessage can rebuild the
+        // exact event JSON across restarts.
         tagsJson = rumorJson?.let { rj ->
             runCatching { Json.parseToJsonElement(rj).jsonObject["tags"]?.toString() }.getOrNull()
         } ?: "[]",
     )
+
+    /** Every cached DM row for [myPub]: text and file messages live under different kinds. */
+    private suspend fun loadCachedDms(myPub: String): List<org.nostr.nostrord.storage.cache.CachedMsg> = DM_CACHE_KINDS.flatMap { cacheStore.loadByKind(myPub, it) }
 
     private fun org.nostr.nostrord.storage.cache.CachedMsg.toDmMessage(myPubkey: String): DmMessage = DmMessage(
         id = id,
@@ -3002,6 +3020,7 @@ class NostrRepository(
         content = content,
         createdAt = createdAt,
         mine = pubkey == myPubkey,
+        kind = kind,
         rumorJson =
         buildJsonObject {
             put("id", id)
@@ -3042,7 +3061,7 @@ class NostrRepository(
         }
         val cached =
             try {
-                cacheStore.loadByKind(myPub, DM_CACHE_KIND)
+                loadCachedDms(myPub)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -3111,6 +3130,9 @@ class NostrRepository(
     // v2: the v1 flag was latched on bare EOSE (before decryption finished), so it could be stuck
     // true with an incomplete backlog. v2 latches only when every delivered wrap is processed.
     private fun dmFullSyncKey(pubkey: String) = "dm_full_synced_v2_$pubkey"
+
+    /** Marks the one-shot backlog rescan that recovers kind:15 file messages. */
+    private fun dmFileRescanKey(pubkey: String) = "dm_file_rescan_$pubkey"
 
     // Persist decrypt progress, debounced so a streaming backlog doesn't hammer storage.
     private fun scheduleSaveProcessedWrapIds(myPub: String) {

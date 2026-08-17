@@ -7,6 +7,16 @@ package org.nostr.nostrord.storage.cache
 const val DM_CACHE_KIND = 14
 
 /**
+ * NIP-17 file message kind. Cached in the same table as [DM_CACHE_KIND] and treated as a DM
+ * everywhere (never evicted by the group-message budget); the kind is kept so a hydrated row
+ * still knows it carries an attachment rather than text.
+ */
+const val DM_FILE_CACHE_KIND = 15
+
+/** Every kind the message table holds as a direct message. */
+val DM_CACHE_KINDS = listOf(DM_CACHE_KIND, DM_FILE_CACHE_KIND)
+
+/**
  * Bulk, queryable, bounded cache for chat messages and generic events — the persistence
  * seam for "never wait on the relay for something you've seen". Separate from [SecureStorage]
  * (which stays for small KV slots and credentials): message/event history is large and needs

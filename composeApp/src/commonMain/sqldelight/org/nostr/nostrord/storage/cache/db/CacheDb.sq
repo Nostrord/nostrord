@@ -60,15 +60,15 @@ FROM message
 WHERE account = ? AND kind = ?
 ORDER BY created_at ASC;
 
--- Byte budget + eviction cover group history only; DMs (kind 14) are excluded so the
--- group-message budget never evicts a conversation.
+-- Byte budget + eviction cover group history only; DMs (kinds 14 and 15) are excluded so
+-- the group-message budget never evicts a conversation.
 totalMessageBytes:
-SELECT COALESCE(SUM(length(content) + length(tags_json) + 120), 0) FROM message WHERE account = ? AND kind != 14;
+SELECT COALESCE(SUM(length(content) + length(tags_json) + 120), 0) FROM message WHERE account = ? AND kind NOT IN (14, 15);
 
 messageSizesOldestFirst:
 SELECT id, created_at, CAST(length(content) + length(tags_json) + 120 AS INTEGER) AS bytes
 FROM message
-WHERE account = ? AND kind != 14
+WHERE account = ? AND kind NOT IN (14, 15)
 ORDER BY created_at ASC;
 
 deleteMessageById:
