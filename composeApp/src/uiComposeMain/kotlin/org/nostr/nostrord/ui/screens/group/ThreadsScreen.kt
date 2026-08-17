@@ -108,6 +108,7 @@ import org.nostr.nostrord.ui.theme.rememberEmojiFontFamily
 import org.nostr.nostrord.utils.formatTimestamp
 import org.nostr.nostrord.utils.getDateLabel
 import org.nostr.nostrord.utils.rememberClipboardWriter
+import org.nostr.nostrord.utils.resolveGroupRef
 import org.nostr.nostrord.utils.shortNpub
 
 /**
@@ -268,8 +269,7 @@ fun ThreadsScreen(
         // Desktop skips it - the sidebar already names the group.
         if (onOpenDrawer != null) {
             val groupsByRelay by AppModule.nostrRepository.groupsByRelay.collectAsState()
-            val groupMeta = groupsByRelay[route.relayUrl]?.firstOrNull { it.id == route.groupId }
-                ?: groupsByRelay.values.flatten().firstOrNull { it.id == route.groupId }
+            val groupMeta = resolveGroupRef(groupsByRelay, route.groupId, route.relayUrl)
             val groupName = groupMeta?.name?.takeIf { it.isNotBlank() } ?: "#${route.groupId.take(8)}"
             Row(
                 modifier = Modifier.fillMaxWidth().height(Spacing.headerHeight).padding(horizontal = Spacing.sm),

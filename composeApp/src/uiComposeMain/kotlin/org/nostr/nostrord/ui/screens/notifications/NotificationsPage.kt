@@ -50,6 +50,7 @@ import org.nostr.nostrord.ui.navigation.notificationRoute
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.utils.formatTimestamp
+import org.nostr.nostrord.utils.resolveGroupRef
 import org.nostr.nostrord.utils.shortNpub
 
 /**
@@ -130,9 +131,9 @@ fun NotificationsPage(
                             meta?.displayName?.takeIf { it.isNotBlank() }
                                 ?: meta?.name?.takeIf { it.isNotBlank() }
                                 ?: shortNpub(entry.actorPubkey)
-                        val groupMeta =
-                            groupsByRelay[entry.relayUrl]?.firstOrNull { it.id == entry.groupId }
-                                ?: groupsByRelay.values.firstNotNullOfOrNull { list -> list.firstOrNull { it.id == entry.groupId } }
+                        // The entry's own relay decides: NIP-29 group ids are relay-local, so a
+                        // same-id group elsewhere must not name or paint this row.
+                        val groupMeta = resolveGroupRef(groupsByRelay, entry.groupId, entry.relayUrl)
                         // Live metadata first: the snapshot taken at notification time can be
                         // the truncated id (metadata hadn't landed yet, e.g. a private group
                         // pre-AUTH) and would otherwise shadow the real name forever.
