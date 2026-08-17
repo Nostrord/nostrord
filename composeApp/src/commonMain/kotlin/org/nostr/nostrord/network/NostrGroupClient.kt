@@ -13,6 +13,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.livekit.isHexPubkey
 import org.nostr.nostrord.utils.epochMillis
+import org.nostr.nostrord.utils.normalizeRelayUrl
 
 @Serializable
 @Immutable
@@ -128,6 +129,12 @@ data class CachedEvent(
     val content: String,
     val createdAt: Long,
     val tags: List<List<String>>,
+    /**
+     * Relay this copy arrived from, normalized. Null when unknown (restored from the disk cache,
+     * which does not carry it): readers scoping to a relay treat null as "unknown" and accept it,
+     * the same convention as [NostrMessage.relayUrl].
+     */
+    val relayUrl: String? = null,
 )
 
 /**
@@ -141,6 +148,7 @@ fun NostrGroupClient.NostrMessage.toCachedEvent(): CachedEvent = CachedEvent(
     content = content,
     createdAt = createdAt,
     tags = tags,
+    relayUrl = relayUrl?.normalizeRelayUrl(),
 )
 
 /**
