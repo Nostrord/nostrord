@@ -42,6 +42,9 @@ data class Nip17File(
     companion object {
         const val ALGORITHM_AES_GCM = "aes-gcm"
 
+        /** Tag holding the AES key; its presence is what marks a rumor as a file message. */
+        const val TAG_DECRYPTION_KEY = "decryption-key"
+
         /** Parse a kind:15 rumor. Null for any other kind, or when the content is not a url. */
         fun fromRumor(rumor: Event): Nip17File? {
             if (rumor.kind != Nip17.KIND_FILE) return null
@@ -53,7 +56,7 @@ data class Nip17File(
                 // `m` is the NIP-94 spelling; some clients send that instead of `file-type`.
                 mimeType = rumor.tagValue("file-type") ?: rumor.tagValue("m"),
                 algorithm = rumor.tagValue("encryption-algorithm")?.lowercase(),
-                decryptionKeyHex = rumor.tagValue("decryption-key"),
+                decryptionKeyHex = rumor.tagValue(TAG_DECRYPTION_KEY),
                 decryptionNonceHex = rumor.tagValue("decryption-nonce"),
                 originalHashHex = rumor.tagValue("ox"),
                 encryptedHashHex = rumor.tagValue("x"),

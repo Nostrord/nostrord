@@ -3013,24 +3013,37 @@ class NostrRepository(
     /** Every cached DM row for [myPub]: text and file messages live under different kinds. */
     private suspend fun loadCachedDms(myPub: String): List<org.nostr.nostrord.storage.cache.CachedMsg> = DM_CACHE_KINDS.flatMap { cacheStore.loadByKind(myPub, it) }
 
-    private fun org.nostr.nostrord.storage.cache.CachedMsg.toDmMessage(myPubkey: String): DmMessage = DmMessage(
-        id = id,
-        peerPubkey = groupId,
-        senderPubkey = pubkey,
-        content = content,
-        createdAt = createdAt,
-        mine = pubkey == myPubkey,
-        kind = kind,
-        rumorJson =
-        buildJsonObject {
-            put("id", id)
-            put("pubkey", pubkey)
-            put("created_at", createdAt)
-            put("kind", kind)
-            put("tags", runCatching { Json.parseToJsonElement(tagsJson) }.getOrElse { JsonArray(emptyList()) })
-            put("content", content)
-        }.toString(),
-    )
+    private fun org.nostr.nostrord.storage.cache.CachedMsg.toDmMessage(myPubkey: String): DmMessage {
+        val tags = runCatching { Json.parseToJsonElement(tagsJson) }.getOrElse { JsonArray(emptyList()) }
+        val rumorKind = if (kind == DM_FILE_CACHE_KIND || tags.carriesFileMessageTags()) Nip17.KIND_FILE else Nip17.KIND_CHAT
+        return DmMessage(
+            id = id,
+            peerPubkey = groupId,
+            senderPubkey = pubkey,
+            content = content,
+            createdAt = createdAt,
+            mine = pubkey == myPubkey,
+            kind = rumorKind,
+            rumorJson =
+            buildJsonObject {
+                put("id", id)
+                put("pubkey", pubkey)
+                put("created_at", createdAt)
+                put("kind", rumorKind)
+                put("tags", tags)
+                put("content", content)
+            }.toString(),
+        )
+    }
+
+    /**
+     * Whether cached tags are a NIP-17 file message's. Rows written before file messages had their
+     * own cache kind all claim kind:14, so the decryption tags are what identifies an attachment;
+     * without this an existing one hydrates as text and renders its blob url.
+     */
+    private fun JsonElement.carriesFileMessageTags(): Boolean = runCatching {
+        jsonArray.any { tag -> tag.jsonArray.firstOrNull()?.jsonPrimitive?.content == Nip17File.TAG_DECRYPTION_KEY }
+    }.getOrDefault(false)
 
     /**
      * Load DM history from the CacheStore (migrating the legacy SecureStorage blob the first time).
