@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.chat.DateSeparator
+import org.nostr.nostrord.ui.components.chat.DmAttachment
 import org.nostr.nostrord.ui.components.chat.DmEventSourceDialog
 import org.nostr.nostrord.ui.components.chat.DmMessageContextMenu
 import org.nostr.nostrord.ui.components.chat.DmRelaysDialog
@@ -153,6 +154,7 @@ fun DmPageScreen(
         val messagesByPeer by dmVm.messagesByPeer.collectAsState()
         val messages = messagesByPeer[pubkey].orEmpty()
         val dmStatus by dmVm.messageStatus.collectAsState()
+        val dmFiles by dmVm.fileStates.collectAsState()
         // Resolve where this peer reads before the first message is written, not after their reply.
         LaunchedEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -401,8 +403,18 @@ fun DmPageScreen(
                                     Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
                                         // A group naddr on its own line renders as the prototype
                                         // invite card (text above, card + View group button below).
+                                        val attachment = m.file
                                         val invite = remember(m.content) { extractDmGroupInvite(m.content) }
-                                        val body = invite?.remainingText ?: m.content
+                                        val body = if (attachment != null) "" else invite?.remainingText ?: m.content
+                                        if (attachment != null) {
+                                            DmAttachment(
+                                                file = attachment,
+                                                state = dmFiles[m.id],
+                                                onLoad = { dmVm.loadFile(m) },
+                                                onRetry = { dmVm.retryFile(m) },
+                                                onImage = m.mine,
+                                            )
+                                        }
                                         if (body.isNotBlank()) {
                                             // Rich body: inline images/video/audio/links/mentions/markdown,
                                             // reusing the group chat renderer. White text on the "mine" bubble.

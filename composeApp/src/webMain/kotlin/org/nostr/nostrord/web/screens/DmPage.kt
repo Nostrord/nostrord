@@ -21,6 +21,7 @@ import org.nostr.nostrord.web.DmConversationList
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
+import org.nostr.nostrord.web.components.DmAttachment
 import org.nostr.nostrord.web.components.EmojiPicker
 import org.nostr.nostrord.web.components.GroupInviteCard
 import org.nostr.nostrord.web.components.Ic
@@ -116,6 +117,7 @@ val DmPage =
         // Metadata map for resolving @-mention names inside rich message bodies.
         val userMetadata = useStateFlow(dmVm.userMetadata)
         val dmStatus = useStateFlow(dmVm.messageStatus)
+        val dmFiles = useStateFlow(dmVm.fileStates)
         // Resolve where this peer reads before the first message is written, not after their reply.
         useEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -419,8 +421,17 @@ val DmPage =
                                     title = formatDateTime(m.createdAt)
                                     // A group naddr on its own line renders as the prototype
                                     // invite card (text above, card + View group button below).
+                                    val attachment = m.file
                                     val invite = extractDmGroupInvite(m.content)
-                                    val body = invite?.remainingText ?: m.content
+                                    val body = if (attachment != null) "" else invite?.remainingText ?: m.content
+                                    if (attachment != null) {
+                                        DmAttachment {
+                                            file = attachment
+                                            state = dmFiles[m.id]
+                                            onLoad = { dmVm.loadFile(m) }
+                                            onRetry = { dmVm.retryFile(m) }
+                                        }
+                                    }
                                     if (body.isNotBlank()) {
                                         // Rich body: inline images/video/audio/links/mentions/markdown,
                                         // reusing the group chat renderer (same package).

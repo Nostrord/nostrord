@@ -25,6 +25,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `BunkerStatusBanner` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/BunkerStatusBanner.kt | Floating warning shown when the active account signs through a NIP-46 bunker |
 | `ConfirmDialog` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/ConfirmDialog.kt | The single confirm dialog for the native UI (Compose counterpart of the web `confirmDialog` |
 | `DateSeparator` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/DateSeparator.kt | — |
+| `DmAttachment` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/DmAttachment.kt | The body of a NIP-17 kind:15 message: an attachment whose bytes live encrypted on a media |
 | `DmConversationList` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/layout/DmSidebar.kt | The DM conversation list plus its empty state, shared by [DmSidebar] (desktop column) and the |
 | `DmEventSourceDialog` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/DmEventSourceDialog.kt | "View source" for a DM: the decrypted kind:14 rumor as pretty JSON plus the relays |
 | `DmMessageContextMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/DmMessageContextMenu.kt | Context menu for a DM bubble: the group chat's [MessageContextMenu] shell (same popup, |
@@ -121,6 +122,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `ChatVideo` | webMain/kotlin/org/nostr/nostrord/web/components/ChatVideo.kt | A chat inline video. |
 | `CreateGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/CreateGroupModal.kt | Create-group modal — layout-first React port of the Compose [CreateGroupModal]: name, |
 | `CreateThreadModal` | webMain/kotlin/org/nostr/nostrord/web/modals/CreateThreadModal.kt | Compose-a-new-thread modal (kind:11 root): an optional title plus the body, over the threads |
+| `DmAttachment` | webMain/kotlin/org/nostr/nostrord/web/components/DmAttachment.kt | The body of a NIP-17 kind:15 message: an attachment the media server only holds encrypted. |
 | `DmEventSourceModal` | webMain/kotlin/org/nostr/nostrord/web/modals/DmEventSourceModal.kt | "View source" for a DM: the decrypted kind:14 rumor as pretty JSON plus the relays its |
 | `DmRelaysModal` | webMain/kotlin/org/nostr/nostrord/web/modals/DmRelaysModal.kt | Where a peer's DMs route: their published kind:10050 relay list. Empty until the fetch lands, |
 | `EmojiPicker` | webMain/kotlin/org/nostr/nostrord/web/components/EmojiPicker.kt | Emoji picker popover — mirrors the native EmojiPicker: search, category tabs, a recents row, |

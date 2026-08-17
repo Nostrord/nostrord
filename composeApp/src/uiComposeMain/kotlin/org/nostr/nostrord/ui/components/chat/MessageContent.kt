@@ -1165,9 +1165,10 @@ private fun SafeEmojiImage(
  * Wraps inline chat media with the Settings > Media "auto-load" gate. When
  * [autoLoad] is true (default) [content] renders immediately; when off, a
  * tap-to-load placeholder is shown until the user reveals this single item.
+ * [content] is not composed until then, so a gated item fetches nothing.
  */
 @Composable
-private fun GatedMedia(
+internal fun GatedMedia(
     autoLoad: Boolean,
     label: String,
     content: @Composable () -> Unit,

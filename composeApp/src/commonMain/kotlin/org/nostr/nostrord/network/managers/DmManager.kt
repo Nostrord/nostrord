@@ -13,9 +13,10 @@ import kotlinx.serialization.Serializable
 import org.nostr.nostrord.auth.NostrSigner
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip17
+import org.nostr.nostrord.nostr.Nip17File
 import org.nostr.nostrord.nostr.Nip4e
 
-/** One decrypted NIP-17 chat message, scoped to a conversation with [peerPubkey]. */
+/** One decrypted NIP-17 message, scoped to a conversation with [peerPubkey]. */
 @Serializable
 data class DmMessage(
     val id: String,
@@ -24,13 +25,35 @@ data class DmMessage(
     val content: String,
     val createdAt: Long,
     val mine: Boolean,
-    /** Full decrypted kind:14 rumor as NIP-01 JSON (unsigned). Null on messages cached
+    /** Full decrypted rumor as NIP-01 JSON (unsigned). Null on messages cached
      *  before this field existed; DmMessage.eventJson() reconstructs a fallback. */
     val rumorJson: String? = null,
     /** Normalized relay urls this message's gift wrap was seen on. In-memory only
      *  (session-accumulated); empty for messages hydrated from cache. */
     val relays: List<String> = emptyList(),
-)
+    /** Rumor kind: [Nip17.KIND_CHAT] text, or [Nip17.KIND_FILE] for an encrypted attachment. */
+    val kind: Int = Nip17.KIND_CHAT,
+) {
+    /**
+     * Attachment payload for a kind:15 message, null for plain chat. Lazy because the render
+     * loops touch it per frame and parsing means re-reading the rumor JSON.
+     */
+    val file: Nip17File? by lazy {
+        if (kind != Nip17.KIND_FILE) null else rumorJson?.let { Nip17.parseRumor(it) }?.let { Nip17File.fromRumor(it) }
+    }
+}
+
+/**
+ * The conversation-list line for a message. A file message carries the blob url as its content,
+ * which is unreadable without the key and says nothing to the reader, so it names the attachment.
+ */
+fun DmMessage.previewText(): String = when {
+    kind != Nip17.KIND_FILE -> content
+    file?.isImage == true -> "Photo"
+    file?.isVideo == true -> "Video"
+    file?.isAudio == true -> "Audio"
+    else -> "File"
+}
 
 /**
  * A signed gift wrap awaiting relay acceptance, persisted per account so a send survives an app
@@ -95,7 +118,7 @@ class DmManager(
                     val last = msgs.maxByOrNull { it.createdAt } ?: return@mapNotNull null
                     val lastRead = reads[peer] ?: 0L
                     val unread = msgs.count { !it.mine && it.createdAt > lastRead }
-                    DmConversation(peer, last.content, last.createdAt, unread)
+                    DmConversation(peer, last.previewText(), last.createdAt, unread)
                 }
                 .sortedByDescending { it.lastAt }
         }
@@ -213,7 +236,7 @@ class DmManager(
             return false
         }
         val rumor = unwrapped.rumor
-        if (rumor.kind != Nip17.KIND_CHAT) return true
+        if (!isConversationRumor(rumor)) return true
         val rumorId = rumor.id ?: return true
         val sender = unwrapped.senderPubkey
         // The conversation peer is the other party: for my own (self-copy) messages that's the
@@ -242,6 +265,7 @@ class DmManager(
                 createdAt = rumor.createdAt,
                 mine = sender == myPubkey,
                 rumorJson = rumor.toJsonString(),
+                kind = rumor.kind,
             )
         addMessage(peer, message)
         linkWrapToRumor(giftWrap.id, rumorId, peer)
@@ -251,10 +275,10 @@ class DmManager(
     /**
      * File a rumor restored from a backup file. Same shape as an unwrapped one, minus everything
      * that only a relay delivery can mean: no delivery status, no wrap link, no seen-on relay.
-     * Returns false when the rumor is not a chat message for this account, or is already known.
+     * Returns false when the rumor is not a conversation message for this account, or is known.
      */
     fun importRumor(rumor: Event, myPubkey: String): Boolean {
-        if (rumor.kind != Nip17.KIND_CHAT) return false
+        if (!isConversationRumor(rumor)) return false
         val rumorId = rumor.id ?: return false
         val recipient = rumor.getTag("p")?.getOrNull(1)
         // The peer is the other party, and one side of the pair must be us, or the file is
@@ -276,6 +300,7 @@ class DmManager(
                 createdAt = rumor.createdAt,
                 mine = rumor.pubkey == myPubkey,
                 rumorJson = rumor.toJsonString(),
+                kind = rumor.kind,
             ),
         )
         return true
@@ -296,9 +321,17 @@ class DmManager(
                 createdAt = rumor.createdAt,
                 mine = true,
                 rumorJson = rumor.toJsonString(),
+                kind = rumor.kind,
             ),
         )
     }
+
+    /**
+     * Kinds that belong in a conversation thread. Everything else inside a gift wrap (reactions,
+     * receipts, protocol rumors) is filed elsewhere or ignored; a kind:15 file message is a
+     * message like any other, so dropping it would silently lose the sender's attachment.
+     */
+    private fun isConversationRumor(rumor: Event): Boolean = rumor.kind == Nip17.KIND_CHAT || rumor.kind == Nip17.KIND_FILE
 
     private fun addMessage(peer: String, message: DmMessage) {
         peerByRumor.update { it + (message.id to peer) }

@@ -27,6 +27,9 @@ import kotlin.random.Random
  */
 object Nip17 {
     const val KIND_CHAT = 14
+
+    /** File message: content is the url of an encrypted blob, tags hold the key. See [Nip17File]. */
+    const val KIND_FILE = 15
     const val KIND_SEAL = 13
     const val KIND_GIFT_WRAP = 1059
     const val KIND_DM_RELAYS = 10050
@@ -249,8 +252,8 @@ object Nip17 {
         return null
     }
 
-    /** Parse a stored kind:14 rumor back into an [Event]; null when the JSON is unusable. */
-    fun parseRumor(json: String): Event? = runCatching { parseEvent(json) }.getOrNull()?.takeIf { it.kind == KIND_CHAT }
+    /** Parse a stored kind:14 / kind:15 rumor back into an [Event]; null when the JSON is unusable. */
+    fun parseRumor(json: String): Event? = runCatching { parseEvent(json) }.getOrNull()?.takeIf { it.kind == KIND_CHAT || it.kind == KIND_FILE }
 
     private val lenientJson = Json { ignoreUnknownKeys = true }
 
