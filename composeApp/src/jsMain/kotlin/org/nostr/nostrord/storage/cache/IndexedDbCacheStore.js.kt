@@ -31,12 +31,23 @@ class IndexedDbCacheStore : CacheStore {
         val existing = cachedDb
         if (existing != null) return existing
         val idb = window.asDynamic().indexedDB
-        val req = idb.open(DB_NAME, 1)
+        val req = idb.open(DB_NAME, DB_VERSION)
         req.onupgradeneeded = { _: dynamic ->
             val database = req.result
-            if (!database.objectStoreNames.contains(MESSAGE).unsafeCast<Boolean>()) {
-                val store = database.createObjectStore(MESSAGE, json("keyPath" to arrayOf("account", "id")))
-                store.createIndex(MSG_GROUP_TIME, arrayOf("account", "group_id", "created_at"), json("unique" to false))
+            val store =
+                if (!database.objectStoreNames.contains(MESSAGE).unsafeCast<Boolean>()) {
+                    val created = database.createObjectStore(MESSAGE, json("keyPath" to arrayOf("account", "id")))
+                    created.createIndex(MSG_GROUP_TIME, arrayOf("account", "group_id", "created_at"), json("unique" to false))
+                    created
+                } else {
+                    // Existing database: the store is only reachable through the upgrade transaction.
+                    req.transaction.objectStore(MESSAGE)
+                }
+            // Without this, reading one kind means stepping a cursor over every message the account
+            // has cached, group history included: a DM inbox that should hydrate instantly instead
+            // waits on tens of thousands of cursor hops.
+            if (!store.indexNames.contains(MSG_KIND_TIME).unsafeCast<Boolean>()) {
+                store.createIndex(MSG_KIND_TIME, arrayOf("account", "kind", "created_at"), json("unique" to false))
             }
             if (!database.objectStoreNames.contains(EVENT).unsafeCast<Boolean>()) {
                 database.createObjectStore(EVENT, json("keyPath" to arrayOf("account", "id")))
@@ -112,12 +123,13 @@ class IndexedDbCacheStore : CacheStore {
         val database = db()
         val store = database.transaction(MESSAGE, "readonly").objectStore(MESSAGE)
         val out = ArrayList<CachedMsg>()
-        drainCursor(store.openCursor(boundAccount(account), "next")) { cursor ->
-            val v = cursor.value
-            if (v.kind.unsafeCast<Int>() == kind) out.add(toCachedMsg(v))
+        // The index is already ordered by created_at within the kind, so the cursor visits only
+        // this kind's rows and they come out sorted.
+        drainCursor(store.index(MSG_KIND_TIME).openCursor(boundKind(account, kind), "next")) { cursor ->
+            out.add(toCachedMsg(cursor.value))
             true
         }
-        return out.sortedBy { it.createdAt }
+        return out
     }
 
     override suspend fun upsertEvents(
@@ -303,6 +315,16 @@ class IndexedDbCacheStore : CacheStore {
         return keyRange.bound(lower, upper, false, upperExclusive)
     }
 
+    private fun boundKind(account: String, kind: Int): dynamic {
+        val keyRange = window.asDynamic().IDBKeyRange
+        return keyRange.bound(
+            arrayOf<dynamic>(account, kind, MIN_TIME),
+            arrayOf<dynamic>(account, kind, MAX_TIME),
+            false,
+            false,
+        )
+    }
+
     private fun boundAccount(account: String): dynamic {
         val keyRange = window.asDynamic().IDBKeyRange
         // Compound-key prefix range: [account] .. [account, "￿"].
@@ -341,9 +363,13 @@ class IndexedDbCacheStore : CacheStore {
 
     private companion object {
         const val DB_NAME = "nostrord_cache_db"
+
+        /** 2 added the (account, kind, created_at) index the DM hydration reads. */
+        const val DB_VERSION = 2
         const val MESSAGE = "message"
         const val EVENT = "event"
         const val MSG_GROUP_TIME = "group_time"
+        const val MSG_KIND_TIME = "kind_time"
 
         // created_at bounds for compound-key ranges (nostr seconds sit well inside).
         const val MIN_TIME = 0.0
