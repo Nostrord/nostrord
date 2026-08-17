@@ -3352,6 +3352,14 @@ private fun ChildrenBuilder.systemEventRow(
     }
 }
 
+/**
+ * Every embeddable token in a message body, in ONE regex whose alternatives are ordered on
+ * purpose. A single left-to-right scan takes the alternative that matches earliest, so the url
+ * branches must stay ahead of the bare-bech32 one: `https://njump.me/nevent1…` is a valid nevent
+ * sitting inside a link, and with the order reversed the link would be shredded into a quote card.
+ * The native parser blocks that case with a negative lookbehind instead, which is not an option
+ * here (older Safari throws on lookbehind, taking all rendering with it). Reorder with care.
+ */
 private val URL_REGEX =
     Regex(
         "(data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)" +
@@ -3359,6 +3367,8 @@ private val URL_REGEX =
             // ws(s):// relay urls, incl. the NIP-29 group address `wss://relay'groupId`
             // (mirrors native MessageContentParser so the apostrophe form renders a group card).
             "|(wss?://[^\\s<>\"]+)" +
+            // Prefixed references (NIP-21) ahead of bare ones, so `nostr:` is consumed with the
+            // identifier rather than left behind as stray text.
             "|(nostr:(?:npub1|nprofile1|nevent1|note1|naddr1)[0-9a-z]+)" +
             "|\\b((?:npub1|nprofile1|nevent1|note1|naddr1)[0-9a-z]{20,})" +
             // Bare NIP-29 group address without the scheme, `relay.host'groupId` (the share field's
