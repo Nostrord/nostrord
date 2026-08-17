@@ -59,12 +59,23 @@ import org.nostr.nostrord.utils.supportsImageDownload
 fun ImageViewerModal(
     imageUrl: String,
     onDismiss: () -> Unit,
+    /**
+     * Plaintext of an image with no fetchable url: a NIP-17 attachment is ciphertext on the media
+     * server, so the viewer is handed the decrypted bytes and [imageUrl] serves only as identity.
+     * [fileName] and [mimeType] then describe what a download would save.
+     */
+    imageBytes: ByteArray? = null,
+    fileName: String? = null,
+    mimeType: String? = null,
 ) {
     val uriHandler = LocalUriHandler.current
     val context = LocalPlatformContext.current
-    val isAnimated = isAnimatedImageUrl(imageUrl)
-    // Inline base64 image: decode to bytes for Coil; remote URLs use the optimized URL.
-    val imageModel: Any = remember(imageUrl) { decodeDataImageUri(imageUrl) ?: getImageUrl(imageUrl) }
+    // Bytes go through Coil, which animates a GIF on Android but not on desktop/iOS; the
+    // frame-by-frame AnimatedImage path fetches by url and has nothing to fetch here.
+    val isAnimated = imageBytes == null && isAnimatedImageUrl(imageUrl)
+    // Decrypted bytes win; then an inline base64 image decoded for Coil; else the optimized URL.
+    val imageModel: Any =
+        remember(imageUrl, imageBytes) { imageBytes ?: decodeDataImageUri(imageUrl) ?: getImageUrl(imageUrl) }
 
     val scope = rememberCoroutineScope()
     val downloadImage = rememberImageDownloader()
@@ -204,8 +215,16 @@ fun ImageViewerModal(
                             isDownloading = true
                             scope.launch {
                                 try {
-                                    resolveDownloadableImage(imageUrl)?.let { (bytes, fileName, mimeType) ->
-                                        downloadImage(bytes, fileName, mimeType)
+                                    if (imageBytes != null) {
+                                        downloadImage(
+                                            imageBytes,
+                                            fileName ?: "attachment",
+                                            mimeType ?: "application/octet-stream",
+                                        )
+                                    } else {
+                                        resolveDownloadableImage(imageUrl)?.let { (bytes, name, mime) ->
+                                            downloadImage(bytes, name, mime)
+                                        }
                                     }
                                 } finally {
                                     isDownloading = false
@@ -236,8 +255,9 @@ fun ImageViewerModal(
                     }
                 }
 
-                // Inline base64 images have no external URL to open.
-                if (!isDataImageUri(imageUrl)) {
+                // Inline base64 images have no external URL to open, and an encrypted attachment's
+                // url serves ciphertext a browser cannot render.
+                if (!isDataImageUri(imageUrl) && imageBytes == null) {
                     IconButton(
                         onClick = {
                             try {

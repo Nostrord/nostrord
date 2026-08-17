@@ -1,5 +1,6 @@
 package org.nostr.nostrord.ui.components.chat
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -88,6 +92,8 @@ private fun Attachment(
     dimensions: Pair<Int, Int>?,
     modifier: Modifier,
 ) {
+    var fullscreen by remember(file.url) { mutableStateOf(false) }
+
     when (state) {
         is DmFileManager.FileState.Ready ->
             if (file.isImage) {
@@ -95,8 +101,22 @@ private fun Attachment(
                     model = state.bytes,
                     contentDescription = null,
                     contentScale = if (dimensions != null) ContentScale.FillWidth else ContentScale.Fit,
-                    modifier = modifier.then(slot).clip(NostrordShapes.imageShape),
+                    modifier =
+                    modifier
+                        .then(slot)
+                        .clip(NostrordShapes.imageShape)
+                        .clickable { fullscreen = true },
                 )
+                if (fullscreen) {
+                    // The viewer takes the plaintext: the url on the media server is ciphertext.
+                    ImageViewerModal(
+                        imageUrl = file.url,
+                        imageBytes = state.bytes,
+                        fileName = "attachment" + extensionFor(state.mimeType ?: file.mimeType),
+                        mimeType = state.mimeType ?: file.mimeType,
+                        onDismiss = { fullscreen = false },
+                    )
+                }
             } else {
                 AttachmentNote(label(file) + " (" + readableSize(state.bytes.size.toLong()) + ")", textColor, modifier)
             }
@@ -151,4 +171,14 @@ private fun readableSize(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
     bytes >= 1024 -> "${bytes / 1024} KB"
     else -> "$bytes B"
+}
+
+/** File extension for a saved attachment, from its mime type. Empty when it is not an image. */
+private fun extensionFor(mimeType: String?): String = when (mimeType) {
+    "image/png" -> ".png"
+    "image/gif" -> ".gif"
+    "image/webp" -> ".webp"
+    "image/avif" -> ".avif"
+    "image/jpeg", "image/jpg" -> ".jpg"
+    else -> ""
 }
