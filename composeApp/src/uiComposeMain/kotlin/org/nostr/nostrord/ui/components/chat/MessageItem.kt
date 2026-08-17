@@ -53,6 +53,7 @@ import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.ui.components.ReportUserModal
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
@@ -518,14 +519,18 @@ fun MessageItem(
                         MessageContextAction.CopyMessageLink -> currentOnCopyLink()
                         MessageContextAction.ShareMessageLink -> currentOnShareLink()
                         // The message carries id + author + kind; the group relay rides as the
-                        // relay hint so the nevent is fetchable.
+                        // relay hint so the nevent is fetchable. Copied with the NIP-21 prefix:
+                        // pasted into a message it has to read as a reference, and clients that
+                        // follow the spec (Jumble among them) render nothing without it.
                         MessageContextAction.CopyNevent ->
                             copyToClipboard(
-                                Nip19.encodeNevent(
-                                    message.id,
-                                    relays = listOfNotNull(neventRelayHint ?: currentRelayUrl),
-                                    authorHex = message.pubkey,
-                                    kind = message.kind,
+                                Nip27.createUri(
+                                    Nip19.encodeNevent(
+                                        message.id,
+                                        relays = listOfNotNull(neventRelayHint ?: currentRelayUrl),
+                                        authorHex = message.pubkey,
+                                        kind = message.kind,
+                                    ),
                                 ),
                             )
                         MessageContextAction.CopyEventJson -> currentOnCopyJson()

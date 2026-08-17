@@ -78,6 +78,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.nostr.Nip19
+import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.buttons.AppButton
@@ -938,9 +939,12 @@ private fun ThreadMessage(
                         writeClipboard(
                             threadShareLink(route.relayUrl, route.groupId, msg.threadRootIdTag() ?: msg.id, messageId = msg.id),
                         )
+                    // Prefixed (NIP-21) so a paste into a message reads as a reference.
                     MessageContextAction.CopyNevent ->
                         writeClipboard(
-                            Nip19.encodeNevent(msg.id, relays = listOf(route.relayUrl), authorHex = msg.pubkey, kind = msg.kind),
+                            Nip27.createUri(
+                                Nip19.encodeNevent(msg.id, relays = listOf(route.relayUrl), authorHex = msg.pubkey, kind = msg.kind),
+                            ),
                         )
                     MessageContextAction.CopyEventJson -> writeClipboard(msg.toEventJson())
                     MessageContextAction.DeleteMessage -> onDelete()
