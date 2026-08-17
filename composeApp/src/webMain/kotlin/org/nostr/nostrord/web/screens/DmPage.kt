@@ -491,7 +491,9 @@ val DmPage =
                                         // reusing the group chat renderer (same package).
                                         renderMessageContent(
                                             body,
-                                            emptyList(),
+                                            // The rumor's own tags: custom emoji and the imeta
+                                            // hints that pre-size an inline image, same as chat.
+                                            m.tags,
                                             userMetadata,
                                             emptyMap(),
                                             { props.onOpenProfile(UserRoute(it)) },

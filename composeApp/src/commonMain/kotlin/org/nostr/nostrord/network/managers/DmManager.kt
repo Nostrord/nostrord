@@ -43,15 +43,19 @@ data class DmMessage(
     }
 
     /**
+     * The rumor's tags, for the renderers: NIP-30 custom emoji and the NIP-68 `imeta` hints that
+     * pre-size an inline image. Empty on messages cached before rumorJson existed.
+     */
+    val tags: List<List<String>> by lazy {
+        rumorJson?.let { Nip17.parseAnyRumor(it) }?.tags ?: emptyList()
+    }
+
+    /**
      * Id of the message this one replies to, from the rumor's `e` tag. Null for a message that
      * starts its own exchange.
      */
     val replyToId: String? by lazy {
-        rumorJson
-            ?.let { Nip17.parseAnyRumor(it) }
-            ?.getTag("e")
-            ?.getOrNull(1)
-            ?.takeIf { it.isNotBlank() }
+        tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)?.takeIf { it.isNotBlank() }
     }
 }
 

@@ -157,6 +157,28 @@ class DmFileMessageTest {
         assertNull(dm.messagesByPeer.value[alice.pubkey]?.single()?.replyToId)
     }
 
+    @Test
+    fun `a message keeps its custom emoji tags for the renderer`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val alice = signer()
+        val bob = signer()
+        val rumor =
+            Nip17.buildRumor(
+                senderPubkey = alice.pubkey,
+                recipientPubkey = bob.pubkey,
+                content = "nice :party:",
+                createdAt = 3000L,
+                extraTags = listOf(listOf("emoji", "party", "https://cdn.example/party.png")),
+            )
+        dm.ingestGiftWrap(Nip17.wrap(rumor, bob.pubkey, alice), bob.pubkey, bob)
+
+        val tags = dm.messagesByPeer.value[alice.pubkey]?.single()?.tags.orEmpty()
+        assertEquals(
+            listOf("emoji", "party", "https://cdn.example/party.png"),
+            tags.firstOrNull { it.firstOrNull() == "emoji" },
+        )
+    }
+
     private companion object {
         val FILE_TAGS =
             listOf(
