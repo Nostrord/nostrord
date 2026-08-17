@@ -34,7 +34,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.Spacing
-import org.nostr.nostrord.utils.normalizeRelayUrl
+import org.nostr.nostrord.utils.resolveGroupRef
 
 /**
  * DM group-invite card (prototype InviteCard): "GROUP INVITE" eyebrow + group avatar/name,
@@ -54,12 +54,9 @@ fun GroupInviteCard(
     val groups by repo.groups.collectAsState()
     val groupsByRelay by repo.groupsByRelay.collectAsState()
 
-    // The card's own relay first: NIP-29 ids are relay-local, and a flattened scan could
-    // resolve a same-id group from another relay.
-    val groupMeta =
-        relayUrl?.let { url -> groupsByRelay[url.normalizeRelayUrl()]?.find { it.id == groupId } }
-            ?: groups.find { it.id == groupId }
-            ?: groupsByRelay.values.flatten().find { it.id == groupId }
+    // The invite's own relay decides: NIP-29 ids are relay-local, so a same-id group from
+    // another relay must not paint this card.
+    val groupMeta = resolveGroupRef(groupsByRelay, groupId, relayUrl, fallback = groups)
 
     LaunchedEffect(groupId, relayUrl) {
         if (relayUrl != null && groupMeta?.name == null) {

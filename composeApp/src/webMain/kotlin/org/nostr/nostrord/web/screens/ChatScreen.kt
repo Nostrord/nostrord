@@ -47,6 +47,7 @@ import org.nostr.nostrord.utils.formatTimestamp
 import org.nostr.nostrord.utils.groupKey
 import org.nostr.nostrord.utils.normalizeForSearch
 import org.nostr.nostrord.utils.normalizeRelayUrl
+import org.nostr.nostrord.utils.resolveGroupRef
 import org.nostr.nostrord.utils.shortNpub
 import org.nostr.nostrord.web.bridge.VirtualKeyboard
 import org.nostr.nostrord.web.bridge.launchApp
@@ -3869,11 +3870,7 @@ private val QuotedEvent =
             refGroupId != null && (local == null || (fwdRelay != null && fwdRelay != props.relayUrl.normalizeRelayUrl()))
         // The source relay's own kind:39000 names the card; a same-id group elsewhere is a
         // different group and must not paint it.
-        val fwdGroupMeta =
-            refGroupId?.let { gid ->
-                val onSource = fwdRelay?.let { r -> groupsByRelay.entries.firstOrNull { it.key.normalizeRelayUrl() == r }?.value }
-                onSource?.firstOrNull { it.id == gid } ?: groupsByRelay.values.flatten().firstOrNull { it.id == gid }
-            }
+        val fwdGroupMeta = refGroupId?.let { gid -> resolveGroupRef(groupsByRelay, gid, fwdRelay) }
         val fwdGroupName = fwdGroupMeta?.name?.takeIf { it.isNotBlank() } ?: refGroupId.orEmpty()
         useEffect(refGroupId, fwdRelay, fwdGroupMeta?.name) {
             if (isForwarded && refGroupId != null && fwdRelay != null && fwdGroupMeta?.name == null) {
@@ -4233,7 +4230,9 @@ private val GroupLinkCard =
     FC<GroupLinkCardProps> { props ->
         val repo = AppModule.nostrRepository
         val groupsByRelay = useStateFlow(repo.groupsByRelay)
-        val meta = groupsByRelay.values.flatten().firstOrNull { it.id == props.groupId }
+        // The naddr's own relay names and paints the card; a same-id group elsewhere is a
+        // different group.
+        val meta = resolveGroupRef(groupsByRelay, props.groupId, props.relayUrl)
         val name = meta?.name?.takeIf { it.isNotBlank() } ?: props.groupId
         val relayDisplay = props.relayUrl?.removePrefix("wss://")?.removePrefix("ws://")?.trimEnd('/')
 
@@ -4307,7 +4306,9 @@ private val GroupMentionChip =
     FC<GroupLinkCardProps> { props ->
         val repo = AppModule.nostrRepository
         val groupsByRelay = useStateFlow(repo.groupsByRelay)
-        val meta = groupsByRelay.values.flatten().firstOrNull { it.id == props.groupId }
+        // Same relay-scoped resolution as the full card: the chip's avatar must come from the
+        // relay the naddr points at.
+        val meta = resolveGroupRef(groupsByRelay, props.groupId, props.relayUrl)
         val name = meta?.name?.takeIf { it.isNotBlank() } ?: props.groupId
 
         useEffect(props.groupId, props.relayUrl, meta?.name) {

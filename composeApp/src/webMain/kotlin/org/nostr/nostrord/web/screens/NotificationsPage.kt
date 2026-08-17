@@ -9,6 +9,7 @@ import org.nostr.nostrord.ui.screens.notifications.NotificationsViewModel
 import org.nostr.nostrord.ui.screens.notifications.notificationActionLabel
 import org.nostr.nostrord.utils.formatTimestamp
 import org.nostr.nostrord.utils.normalizeRelayUrl
+import org.nostr.nostrord.utils.resolveGroupRef
 import org.nostr.nostrord.utils.shortNpub
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.components.AvatarKind
@@ -91,14 +92,10 @@ val NotificationsPage =
                             val meta = userMetadata[entry.actorPubkey]
                             // Live metadata first: the snapshot taken at notification time can
                             // be the truncated id (metadata hadn't landed yet) and would
-                            // otherwise shadow the real name forever. The entry's own relay is
-                            // checked first — NIP-29 group ids are relay-local, and an any-relay
-                            // scan could name a same-id group from another relay.
-                            val groupMeta =
-                                groupsByRelay[entry.relayUrl]?.firstOrNull { it.id == entry.groupId }
-                                    ?: groupsByRelay.values.firstNotNullOfOrNull { list ->
-                                        list.firstOrNull { it.id == entry.groupId }
-                                    }
+                            // otherwise shadow the real name forever. The entry's own relay
+                            // decides: NIP-29 group ids are relay-local, so a same-id group
+                            // elsewhere must not name or paint this row.
+                            val groupMeta = resolveGroupRef(groupsByRelay, entry.groupId, entry.relayUrl)
                             val groupName =
                                 groupMeta?.name?.takeIf { it.isNotBlank() }
                                     ?: entry.groupName?.takeIf { it.isNotBlank() }

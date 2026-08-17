@@ -92,6 +92,7 @@ import org.nostr.nostrord.utils.isBlockedImageHost
 import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.proxyViaWeserv
 import org.nostr.nostrord.utils.rememberClipboardWriter
+import org.nostr.nostrord.utils.resolveGroupRef
 import org.nostr.nostrord.utils.shortNpub
 
 // Type alias to bridge new parser to existing rendering code
@@ -1372,12 +1373,7 @@ private fun ThreadQuoteCard(
     // group. Keyed so the scan runs when the lists change, not on every recomposition (this card
     // sits in a scrolling list).
     val groupName = remember(groupsByRelay, groupId, relayHint) {
-        groupId?.let { gid ->
-            val onHint = relayHint?.let { r ->
-                groupsByRelay.entries.firstOrNull { e -> e.key.normalizeRelayUrl() == r.normalizeRelayUrl() }?.value
-            }
-            (onHint?.firstOrNull { it.id == gid } ?: groupsByRelay.values.flatten().firstOrNull { it.id == gid })?.name
-        }?.takeIf { it.isNotBlank() }
+        groupId?.let { gid -> resolveGroupRef(groupsByRelay, gid, relayHint)?.name }?.takeIf { it.isNotBlank() }
     }
 
     val title = event.tags.firstOrNull { it.size >= 2 && (it[0] == "subject" || it[0] == "title") }
@@ -1881,12 +1877,7 @@ private fun QuotedEvent(
                 // preview from the hint when that relay's copy isn't cached yet.
                 val sourceGroup =
                     remember(groupsByRelay, groups, sourceGroupId, sourceRelayUrl) {
-                        val onSource = sourceRelayUrl
-                            ?.let { r -> groupsByRelay.entries.firstOrNull { e -> e.key.normalizeRelayUrl() == r } }
-                            ?.value
-                        onSource?.find { it.id == sourceGroupId }
-                            ?: groupsByRelay.values.flatten().find { it.id == sourceGroupId }
-                            ?: groups.find { it.id == sourceGroupId }
+                        resolveGroupRef(groupsByRelay, sourceGroupId, sourceRelayUrl, fallback = groups)
                     }
                 LaunchedEffect(sourceGroupId, sourceRelayUrl, sourceGroup?.name) {
                     if (sourceGroup?.name == null && sourceRelayUrl != null) {
@@ -2861,9 +2852,9 @@ private fun GroupLinkCard(
     val groups by repo.groups.collectAsState()
     val groupsByRelay by repo.groupsByRelay.collectAsState()
 
-    val groupMeta =
-        groups.find { it.id == groupId }
-            ?: groupsByRelay.values.flatten().find { it.id == groupId }
+    // The naddr's own relay names and paints the card; a same-id group elsewhere is a
+    // different group.
+    val groupMeta = resolveGroupRef(groupsByRelay, groupId, relayUrl, fallback = groups)
 
     LaunchedEffect(groupId, relayUrl) {
         if (relayUrl != null && groupMeta?.name == null) {
@@ -2943,9 +2934,9 @@ private fun GroupMentionChip(
     val repo = AppModule.nostrRepository
     val groups by repo.groups.collectAsState()
     val groupsByRelay by repo.groupsByRelay.collectAsState()
-    val groupMeta =
-        groups.find { it.id == groupId }
-            ?: groupsByRelay.values.flatten().find { it.id == groupId }
+    // Same relay-scoped resolution as the full card: the chip's avatar must come from the
+    // relay the naddr points at.
+    val groupMeta = resolveGroupRef(groupsByRelay, groupId, relayUrl, fallback = groups)
 
     LaunchedEffect(groupId, relayUrl) {
         if (relayUrl != null && groupMeta?.name == null) {
