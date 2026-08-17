@@ -4277,8 +4277,8 @@ private val GroupLinkCard =
 
 /**
  * Inline group mention chip (prototype): a decoded naddr (kind 39000) shown compactly with the
- * group's square avatar + name when resolved, or `#name` when it has no picture. Clicking opens
- * the group. Standalone group references still render as the full GroupLinkCard.
+ * group's square avatar + name. Clicking opens the group. Standalone group references still
+ * render as the full GroupLinkCard.
  */
 /** A group reference in message text: the full card when the message is only the link, else the chip. */
 private fun ChildrenBuilder.groupRef(
@@ -4321,19 +4321,16 @@ private val GroupMentionChip =
         span {
             className = ClassName("msg-mention-chip")
             onClick = { props.onNavigate(props.groupId, props.relayUrl) }
-            val picture = meta?.picture
-            if (!picture.isNullOrBlank()) {
-                WebAvatar {
-                    url = picture
-                    seed = props.groupId
-                    this.name = name
-                    kind = AvatarKind.GROUP
-                    cls = "msg-mention-chip-avatar group"
-                }
-                +name
-            } else {
-                +"#$name"
+            // Always an avatar: WebAvatar paints the seeded gradient when the group has no
+            // picture, matching the forwarded-from chip and the native GroupHeaderIcon.
+            WebAvatar {
+                url = meta?.picture
+                seed = props.groupId
+                this.name = name
+                kind = AvatarKind.GROUP
+                cls = "msg-mention-chip-avatar group"
             }
+            +name
         }
     }
 
