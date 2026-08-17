@@ -360,7 +360,20 @@ fun AppFrame() {
                 AppModule.nostrRepository.switchRelay(r.relayUrl)
             }
             AppModule.nostrRepository.setActiveGroup(r?.relayUrl, r?.groupId)
-            if (r != null) AppModule.nostrRepository.markGroupAsRead(r.relayUrl, r.groupId)
+            if (r != null) {
+                AppModule.nostrRepository.markGroupAsRead(r.relayUrl, r.groupId)
+                // Re-pin routing (sends, joins, member reads) to the relay on screen. The
+                // ViewModel registers this at construction only, so with the same id on two
+                // relays whichever twin was opened LAST kept routing both.
+                AppModule.nostrRepository.setGroupRelayHint(r.groupId, r.relayUrl)
+                // A group this account has not joined never enters the relay's list, so its
+                // kind:39000 is never fetched and the screen has no name, about or avatar to
+                // show. Same on-demand preview the web frame does.
+                val known = AppModule.nostrRepository.groupsByRelay.value
+                    .entries.firstOrNull { it.key.normalizeRelayUrl() == r.relayUrl.normalizeRelayUrl() }
+                    ?.value?.any { it.id == r.groupId } == true
+                if (!known) AppModule.nostrRepository.fetchGroupPreview(r.groupId, r.relayUrl)
+            }
         }
     }
 

@@ -71,6 +71,7 @@ import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.screens.avspace.LiveSpaceBarViewModel
 import org.nostr.nostrord.ui.screens.group.GroupViewModel
+import org.nostr.nostrord.ui.screens.group.atRelay
 import org.nostr.nostrord.ui.screens.group.channelTree
 import org.nostr.nostrord.ui.screens.group.components.CreateGroupModal
 import org.nostr.nostrord.ui.screens.group.components.ManageGroupModal
@@ -119,7 +120,9 @@ fun GroupSidebar(
     val kind10009Relays by AppModule.nostrRepository.kind10009Relays.collectAsState()
     val relayMetadata by vm.relayMetadata.collectAsState()
 
-    val relayGroups = groupsByRelay[route.relayUrl].orEmpty()
+    // Tolerate a route relay that is not byte-identical to the map key ("wss://Relay/" vs the
+    // connected "wss://relay"); a raw-key miss would empty the whole sidebar.
+    val relayGroups = groupsByRelay.atRelay(route.relayUrl.normalizeRelayUrl()).orEmpty()
     val metaById = relayGroups.associateBy { it.id }
     val currentUserPubkey = remember { vm.getPublicKey() }
     // Discord-style channel model: the sidebar anchors on the ROOT of the open channel's

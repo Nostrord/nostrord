@@ -489,7 +489,7 @@ class GroupViewModel(
     ) {
         _joinError.value = null
         viewModelScope.launch {
-            val result = repo.joinGroup(groupId, inviteCode, listPrivately)
+            val result = repo.joinGroup(groupId, inviteCode, listPrivately, hostRelay)
             if (result is Result.Error) {
                 val reason = (result.error as? AppError.Group.JoinFailed)?.cause?.message
                 _joinError.value =

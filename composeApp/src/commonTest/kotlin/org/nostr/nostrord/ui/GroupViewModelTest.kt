@@ -170,6 +170,17 @@ class GroupViewModelTest {
     }
 
     @Test
+    fun `join goes to the screen's own relay, not the focused one`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._currentRelayUrl.value = "wss://a"
+
+        GroupViewModel(fake, "dev", "wss://b").joinGroup()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf<Pair<String, String?>>("dev" to "wss://b"), fake.joinRelays.toList())
+    }
+
+    @Test
     fun `a join request on one relay leaves the same id on another relay joinable`() = runTest {
         val fake = FakeNostrRepository()
         fake.fakePublicKey = "me"

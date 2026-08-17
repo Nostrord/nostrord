@@ -378,10 +378,15 @@ class FakeNostrRepository : NostrRepositoryApi {
         groupId: String,
         inviteCode: String?,
         listPrivately: Boolean,
+        relayUrl: String?,
     ): Result<Unit> {
         calls += "joinGroup:$groupId:$listPrivately"
+        joinRelays += groupId to relayUrl
         return Result.Success(Unit)
     }
+
+    /** (groupId, relayUrl) of every joinGroup call, so tests can assert the routing relay. */
+    val joinRelays = mutableListOf<Pair<String, String?>>()
 
     override suspend fun requestGroupThreads(groupId: String): Boolean {
         calls += "requestGroupThreads:$groupId"

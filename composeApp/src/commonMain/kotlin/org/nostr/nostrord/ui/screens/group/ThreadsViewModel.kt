@@ -487,7 +487,7 @@ class ThreadsViewModel(
     fun joinGroup(inviteCode: String? = null) {
         _joinError.value = null
         viewModelScope.launch {
-            val result = repo.joinGroup(groupId, inviteCode)
+            val result = repo.joinGroup(groupId, inviteCode, relayUrl = hostRelay)
             if (result is Result.Error) {
                 val reason = (result.error as? AppError.Group.JoinFailed)?.cause?.message
                 _joinError.value =
