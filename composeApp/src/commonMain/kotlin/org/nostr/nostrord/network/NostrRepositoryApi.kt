@@ -204,6 +204,30 @@ interface NostrRepositoryApi {
     /** Send status of our own DM messages, keyed by rumor id (Sending until a relay OKs). */
     val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>>
 
+    /**
+     * Send a file as an encrypted kind:15 message: the bytes are encrypted before upload, so the
+     * media server holds ciphertext and only the recipient can read the file.
+     */
+    suspend fun sendDmFile(
+        recipientPubkey: String,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int? = null,
+        height: Int? = null,
+    ): Result<Unit>
+
+    /** React to a DM message with [emoji] (NIP-25 rumor); [emojiUrl] for a custom emoji. */
+    suspend fun sendDmReaction(
+        recipientPubkey: String,
+        messageId: String,
+        emoji: String,
+        emojiUrl: String? = null,
+    ): Result<Unit>
+
+    /** Reactions on DM messages, keyed by the message they target, then by emoji. */
+    val dmReactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>>
+
     /** Download + decryption state of kind:15 attachments, keyed by rumor id. */
     val dmFileStates: StateFlow<Map<String, DmFileManager.FileState>>
 

@@ -153,6 +153,37 @@ class FakeNostrRepository : NostrRepositoryApi {
     val dmRelaysByPubkeyFlow = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     override val dmRelaysByPubkey: StateFlow<Map<String, List<String>>> = dmRelaysByPubkeyFlow
     override val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>> = MutableStateFlow(emptyMap())
+    val dmReactionsFlow = MutableStateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>>(emptyMap())
+    override val dmReactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> = dmReactionsFlow
+
+    /** Files sent through [sendDmFile], as (recipient, mimeType, size). */
+    val sentDmFiles = mutableListOf<Triple<String, String, Int>>()
+
+    override suspend fun sendDmFile(
+        recipientPubkey: String,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int?,
+        height: Int?,
+    ): Result<Unit> {
+        sentDmFiles += Triple(recipientPubkey, mimeType, bytes.size)
+        return Result.Success(Unit)
+    }
+
+    /** Reactions sent through [sendDmReaction], as (messageId, emoji). */
+    val sentDmReactions = mutableListOf<Pair<String, String>>()
+
+    override suspend fun sendDmReaction(
+        recipientPubkey: String,
+        messageId: String,
+        emoji: String,
+        emojiUrl: String?,
+    ): Result<Unit> {
+        sentDmReactions += messageId to emoji
+        return Result.Success(Unit)
+    }
+
     val dmFileStatesFlow = MutableStateFlow<Map<String, DmFileManager.FileState>>(emptyMap())
     override val dmFileStates: StateFlow<Map<String, DmFileManager.FileState>> = dmFileStatesFlow
 

@@ -1185,6 +1185,33 @@ fun SecureStorage.saveDmWrapRumor(
     }
 }
 
+// DM reactions (kind:7 rumors). Kept here rather than in the message cache because that table
+// buckets rows by kind, and kind:7 there already means a group reaction. Newest-first capped:
+// the inbox never re-decrypts a wrap it has processed, so an unpersisted reaction is lost for good.
+private fun dmReactionsKey(pubkey: String): String = "dm_reactions_${pubkeyDigest(pubkey)}"
+
+const val DM_REACTIONS_KEPT = 2000
+
+fun SecureStorage.loadDmReactions(pubkey: String): List<org.nostr.nostrord.network.managers.DmMessage> {
+    if (pubkey.isBlank()) return emptyList()
+    val raw = getStringPref(dmReactionsKey(pubkey), "") ?: ""
+    if (raw.isBlank()) return emptyList()
+    return runCatching {
+        Json.decodeFromString<List<org.nostr.nostrord.network.managers.DmMessage>>(raw)
+    }.getOrDefault(emptyList())
+}
+
+fun SecureStorage.saveDmReactions(
+    pubkey: String,
+    reactions: List<org.nostr.nostrord.network.managers.DmMessage>,
+) {
+    if (pubkey.isBlank()) return
+    try {
+        saveStringPref(dmReactionsKey(pubkey), Json.encodeToString(reactions.takeLast(DM_REACTIONS_KEPT)))
+    } catch (_: Exception) {
+    }
+}
+
 // Peer NIP-4e encryption keys (kind:10044), so the first send after a cold start addresses a
 // peer's encryption key instead of racing the announcement fetch and falling back to identity.
 private fun dmEncKeysKey(pubkey: String): String = "dm_enc_keys_${pubkeyDigest(pubkey)}"

@@ -47,6 +47,8 @@ fun DmMessageContextMenu(
     onDismiss: () -> Unit,
     onViewSource: () -> Unit,
     onCopyText: () -> Unit,
+    onReact: (String) -> Unit,
+    onOpenReactionPicker: () -> Unit,
 ) {
     if (!visible) return
     val marginPx = with(LocalDensity.current) { 8.dp.roundToPx() }
@@ -101,6 +103,16 @@ fun DmMessageContextMenu(
                             detectTapGestures { /* consume */ }
                         },
                 ) {
+                    QuickReactionsRow(
+                        onQuickReact = {
+                            onReact(it)
+                            onDismiss()
+                        },
+                        onOpenPicker = {
+                            onOpenReactionPicker()
+                            onDismiss()
+                        },
+                    )
                     ContextMenuItem(
                         icon = Icons.Outlined.Visibility,
                         label = "View source",

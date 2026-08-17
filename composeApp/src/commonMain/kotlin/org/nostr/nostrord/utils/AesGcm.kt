@@ -7,11 +7,15 @@ package org.nostr.nostrord.utils
  * Common code rather than four platform actuals so JVM, Android, JS and iOS behave identically
  * and the NIST vectors in `AesGcmTest` cover every target at once.
  *
- * Only GCM's confidentiality layer (CTR) is implemented; see [decryptUnauthenticated].
+ * Reading skips the authentication tag (see [decryptUnauthenticated]); writing produces one,
+ * because the browsers on the other end verify it before handing the file to their user.
  */
 object AesGcm {
     /** Web Crypto appends the 16-byte GCM tag to the ciphertext. */
     const val TAG_SIZE = 16
+
+    /** GCM's standard 96-bit IV, the only length these helpers accept. */
+    const val NONCE_SIZE = 12
 
     /**
      * Decrypt a GCM blob WITHOUT verifying its authentication tag: the trailing tag is stripped
@@ -25,12 +29,138 @@ object AesGcm {
      * the blob held the key. See `DmFileManager`.
      */
     fun decryptUnauthenticated(key: ByteArray, nonce: ByteArray, data: ByteArray): ByteArray? {
-        if (nonce.size != 12) return null
+        if (nonce.size != NONCE_SIZE) return null
         if (data.size < TAG_SIZE) return null
         val schedule = expandKey(key) ?: return null
         val body = data.copyOfRange(0, data.size - TAG_SIZE)
         // For a 96-bit IV, J0 = IV || 1 and the payload counter starts at J0 + 1.
         return ctr(schedule, nonce, startCounter = 2, data = body)
+    }
+
+    /**
+     * Encrypt [data] into `ciphertext || tag`, the layout Web Crypto produces and expects.
+     * [key] is 16/24/32 bytes, [nonce] the 12-byte IV, which MUST never repeat for a given key
+     * (callers draw both fresh per file). No additional authenticated data, matching NIP-17.
+     * Null when the sizes are wrong.
+     */
+    fun encrypt(key: ByteArray, nonce: ByteArray, data: ByteArray): ByteArray? {
+        if (nonce.size != NONCE_SIZE) return null
+        val schedule = expandKey(key) ?: return null
+        val ciphertext = ctr(schedule, nonce, startCounter = 2, data = data)
+        val out = ByteArray(ciphertext.size + TAG_SIZE)
+        ciphertext.copyInto(out)
+        tag(schedule, nonce, ciphertext).copyInto(out, ciphertext.size)
+        return out
+    }
+
+    /**
+     * GCM tag over [ciphertext] with no AAD: `GHASH(H, C || pad || len(A) || len(C))` masked with
+     * the keystream block of J0 (the counter value before the payload's).
+     */
+    private fun tag(schedule: KeySchedule, nonce: ByteArray, ciphertext: ByteArray): ByteArray {
+        val h = ByteArray(16)
+        encryptBlock(schedule, ByteArray(16), h)
+        val ghash = GHash(h)
+        ghash.update(ciphertext)
+        val lengths = ByteArray(16)
+        // len(A) = 0; len(C) in bits, big-endian across the second half.
+        val bits = ciphertext.size.toLong() * 8
+        for (i in 0 until 8) lengths[15 - i] = (bits ushr (8 * i)).toByte()
+        ghash.updateBlock(lengths, 0, 16)
+        val mask = ByteArray(16)
+        val j0 = ByteArray(16)
+        nonce.copyInto(j0, 0, 0, 12)
+        j0[15] = 1
+        encryptBlock(schedule, j0, mask)
+        val out = ghash.digest()
+        for (i in 0 until 16) out[i] = (out[i].toInt() xor mask[i].toInt()).toByte()
+        return out
+    }
+
+    /**
+     * GHASH: the accumulator is multiplied by H in GF(2^128) once per 16-byte block. Held as four
+     * Ints rather than two Longs because Kotlin/JS emulates Long, and this runs over whole images.
+     */
+    private class GHash(hBytes: ByteArray) {
+        private val h0 = beInt(hBytes, 0)
+        private val h1 = beInt(hBytes, 4)
+        private val h2 = beInt(hBytes, 8)
+        private val h3 = beInt(hBytes, 12)
+        private var y0 = 0
+        private var y1 = 0
+        private var y2 = 0
+        private var y3 = 0
+
+        /** Absorb [data], zero-padding a trailing partial block as GCM specifies. */
+        fun update(data: ByteArray) {
+            var offset = 0
+            while (offset + 16 <= data.size) {
+                updateBlock(data, offset, 16)
+                offset += 16
+            }
+            if (offset < data.size) updateBlock(data, offset, data.size - offset)
+        }
+
+        fun updateBlock(data: ByteArray, offset: Int, length: Int) {
+            val block = if (length == 16) data else ByteArray(16).also { data.copyInto(it, 0, offset, offset + length) }
+            val base = if (length == 16) offset else 0
+            y0 = y0 xor beInt(block, base)
+            y1 = y1 xor beInt(block, base + 4)
+            y2 = y2 xor beInt(block, base + 8)
+            y3 = y3 xor beInt(block, base + 12)
+            multiplyByH()
+        }
+
+        fun digest(): ByteArray {
+            val out = ByteArray(16)
+            putInt(out, 0, y0)
+            putInt(out, 4, y1)
+            putInt(out, 8, y2)
+            putInt(out, 12, y3)
+            return out
+        }
+
+        /** Y = Y * H, the shift-and-add square-free multiplication with the GCM reduction poly. */
+        private fun multiplyByH() {
+            var z0 = 0
+            var z1 = 0
+            var z2 = 0
+            var z3 = 0
+            var v0 = h0
+            var v1 = h1
+            var v2 = h2
+            var v3 = h3
+            for (i in 0 until 128) {
+                val word = when (i shr 5) {
+                    0 -> y0
+                    1 -> y1
+                    2 -> y2
+                    else -> y3
+                }
+                // Bit 0 of GHASH is the most significant bit of the first byte.
+                if ((word ushr (31 - (i and 31))) and 1 == 1) {
+                    z0 = z0 xor v0
+                    z1 = z1 xor v1
+                    z2 = z2 xor v2
+                    z3 = z3 xor v3
+                }
+                val lsb = v3 and 1
+                v3 = (v3 ushr 1) or (v2 shl 31)
+                v2 = (v2 ushr 1) or (v1 shl 31)
+                v1 = (v1 ushr 1) or (v0 shl 31)
+                v0 = v0 ushr 1
+                if (lsb == 1) v0 = v0 xor R
+            }
+            y0 = z0
+            y1 = z1
+            y2 = z2
+            y3 = z3
+        }
+
+        private companion object {
+            /** x^128 + x^7 + x^2 + x + 1, as the top word of the reduction constant. */
+            const val R = -0x1F000000
+        }
     }
 
     /** AES-CTR over [data] in place of a fresh copy of it; counter block is [nonce] || 32-bit BE. */

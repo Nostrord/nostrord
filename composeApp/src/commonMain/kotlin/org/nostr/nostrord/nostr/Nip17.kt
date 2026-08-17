@@ -30,6 +30,9 @@ object Nip17 {
 
     /** File message: content is the url of an encrypted blob, tags hold the key. See [Nip17File]. */
     const val KIND_FILE = 15
+
+    /** NIP-25 reaction, gift-wrapped like any other rumor: content is the emoji, `e` its target. */
+    const val KIND_REACTION = 7
     const val KIND_SEAL = 13
     const val KIND_GIFT_WRAP = 1059
     const val KIND_DM_RELAYS = 10050
@@ -40,8 +43,9 @@ object Nip17 {
     fun randomizedWrapTime(now: Long = epochSeconds()): Long = now - Random.nextLong(0, TWO_DAYS_SECONDS)
 
     /**
-     * Unsigned kind:14 chat rumor (id computed, no signature) from [senderPubkey] to
-     * [recipientPubkey]. [extraTags] can carry a reply `["e", id, relay]` etc.
+     * Unsigned rumor (id computed, no signature) from [senderPubkey] to [recipientPubkey]:
+     * chat by default, or [KIND_FILE] / [KIND_REACTION] via [kind]. [extraTags] can carry a reply
+     * `["e", id, relay]`, a file message's decryption material, etc.
      */
     fun buildRumor(
         senderPubkey: String,
@@ -49,12 +53,13 @@ object Nip17 {
         content: String,
         createdAt: Long = epochSeconds(),
         extraTags: List<List<String>> = emptyList(),
+        kind: Int = KIND_CHAT,
     ): Event {
         val rumor =
             Event(
                 pubkey = senderPubkey,
                 createdAt = createdAt,
-                kind = KIND_CHAT,
+                kind = kind,
                 tags = listOf(listOf("p", recipientPubkey)) + extraTags,
                 content = content,
             )
@@ -251,6 +256,12 @@ object Nip17 {
         }
         return null
     }
+
+    /**
+     * Parse any stored rumor JSON back into an [Event], whatever its kind. [parseRumor] is the
+     * conversation-message variant; a reaction has to come through here.
+     */
+    fun parseAnyRumor(json: String): Event? = runCatching { parseEvent(json) }.getOrNull()
 
     /** Parse a stored kind:14 / kind:15 rumor back into an [Event]; null when the JSON is unusable. */
     fun parseRumor(json: String): Event? = runCatching { parseEvent(json) }.getOrNull()?.takeIf { it.kind == KIND_CHAT || it.kind == KIND_FILE }

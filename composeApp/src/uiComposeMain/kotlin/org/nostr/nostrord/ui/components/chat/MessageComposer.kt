@@ -113,6 +113,9 @@ fun MessageComposer(
     // groupName -> the mentioned group, resolved to nostr:naddr in the content by the caller.
     groupMentions: Map<String, GroupInfo> = emptyMap(),
     onGroupMentionsChange: (Map<String, GroupInfo>) -> Unit = {},
+    // Set by callers that own the upload themselves (DMs encrypt the bytes first). Picked and
+    // pasted files are handed over raw instead of being uploaded and appended as a url.
+    onFilePicked: ((ByteArray, String) -> Unit)? = null,
 ) {
     var showEmojiPicker by remember { mutableStateOf(false) }
     var isUploadingPaste by remember { mutableStateOf(false) }
@@ -183,6 +186,11 @@ fun MessageComposer(
             pasteError = "This file is too large. The maximum upload size is 20 MB."
             return
         }
+        if (onFilePicked != null) {
+            isUploadingPaste = false
+            onFilePicked(bytes, filename)
+            return
+        }
         try {
             val mime = mimeTypeForFilename(filename)
             when (val result = uploadMedia(bytes, filename, mime)) {
@@ -228,6 +236,7 @@ fun MessageComposer(
                 MessageUploadButton(
                     externalBusy = isUploadingPaste,
                     onUploadComplete = { uploadResult -> appendUploadedUrl(uploadResult.url) },
+                    onFilePicked = onFilePicked,
                 )
             }
             val emojiButton: @Composable () -> Unit = {

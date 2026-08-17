@@ -65,6 +65,9 @@ import org.nostr.nostrord.network.managers.SessionManager
 import org.nostr.nostrord.network.managers.UnreadManager
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
+import org.nostr.nostrord.network.upload.decodeImageDimensions
+import org.nostr.nostrord.network.upload.uploadMedia
+import org.nostr.nostrord.nostr.Crypto
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip11RelayInfo
@@ -74,6 +77,7 @@ import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip44
 import org.nostr.nostrord.nostr.Nip4e
 import org.nostr.nostrord.nostr.Nip78
+import org.nostr.nostrord.nostr.toHexString
 import org.nostr.nostrord.settings.NotificationLevel
 import org.nostr.nostrord.startup.StartupResolver
 import org.nostr.nostrord.storage.SecureStorage
@@ -92,6 +96,7 @@ import org.nostr.nostrord.storage.loadDmLastRead
 import org.nostr.nostrord.storage.loadDmMessages
 import org.nostr.nostrord.storage.loadDmPairingProcessedFor
 import org.nostr.nostrord.storage.loadDmProcessedWrapIds
+import org.nostr.nostrord.storage.loadDmReactions
 import org.nostr.nostrord.storage.loadDmSeenRelays
 import org.nostr.nostrord.storage.loadDmSendQueue
 import org.nostr.nostrord.storage.loadDmSyncCursor
@@ -107,6 +112,7 @@ import org.nostr.nostrord.storage.saveDmEncKeys
 import org.nostr.nostrord.storage.saveDmLastRead
 import org.nostr.nostrord.storage.saveDmPairingProcessedFor
 import org.nostr.nostrord.storage.saveDmProcessedWrapIds
+import org.nostr.nostrord.storage.saveDmReactions
 import org.nostr.nostrord.storage.saveDmSeenRelays
 import org.nostr.nostrord.storage.saveDmSendQueue
 import org.nostr.nostrord.storage.saveDmSyncCursor
@@ -119,6 +125,7 @@ import org.nostr.nostrord.storage.saveMuteListSnapshotFor
 import org.nostr.nostrord.storage.saveRelayListFor
 import org.nostr.nostrord.storage.setDmCacheMigratedFor
 import org.nostr.nostrord.ui.screens.dm.eventJson
+import org.nostr.nostrord.utils.AesGcm
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
@@ -2122,6 +2129,8 @@ class NostrRepository(
 
     override val dmFileStates: StateFlow<Map<String, DmFileManager.FileState>> = dmFileManager.states
 
+    override val dmReactions: StateFlow<Map<String, Map<String, GroupManager.ReactionInfo>>> = dmManager.reactions
+
     override fun loadDmFile(rumorId: String, file: Nip17File) = dmFileManager.load(rumorId, file)
 
     override fun retryDmFile(rumorId: String, file: Nip17File) = dmFileManager.retry(rumorId, file)
@@ -2184,8 +2193,110 @@ class NostrRepository(
         // defaults only, which for a first contact means it is published where they never look and
         // is lost silently. Their kind:10044 rides the same REQ, so addressing improves too.
         awaitPeerDmRelays(recipientPubkey)
+        return publishDmRumor(Nip17.buildRumor(myPub, recipientPubkey, content), recipientPubkey, myPub, signer)
+    }
+
+    /**
+     * Send an image or other file as a NIP-17 kind:15 message: encrypt it, upload the ciphertext,
+     * and put the url plus the decryption material in the rumor. The media server only ever holds
+     * bytes it cannot read, unlike a plain url in a text message, which anyone who learns it can
+     * fetch. [width] and [height] let the reader reserve the right slot before the bytes land.
+     */
+    override suspend fun sendDmFile(
+        recipientPubkey: String,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int?,
+        height: Int?,
+    ): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        if (bytes.isEmpty()) return Result.Error(AppError.Unknown("The file is empty"))
+        // A private key is 32 bytes off the platform CSPRNG, which is exactly what the cipher
+        // wants; drawing from it keeps randomness on one primitive instead of a fifth expect/actual.
+        val key = Crypto.generatePrivateKey()
+        val nonce = Crypto.generatePrivateKey().copyOf(AesGcm.NONCE_SIZE)
+        val encrypted =
+            AesGcm.encrypt(key, nonce, bytes)
+                ?: return Result.Error(AppError.Unknown("Could not encrypt the file"))
+        val uploaded = uploadMedia(encrypted, "$filename.bin", "application/octet-stream")
+        val upload = uploaded.getOrNull() ?: return Result.Error(uploaded.errorOrNull() ?: AppError.Unknown("Upload failed"))
+        awaitPeerDmRelays(recipientPubkey)
+        // Without a `dim` the reader cannot reserve the image's box and the thread jumps when the
+        // bytes land. The server cannot supply one here (it only sees ciphertext), so decode it.
+        val (dimWidth, dimHeight) =
+            if (width != null && height != null) {
+                width to height
+            } else {
+                decodeImageDimensions(bytes, mimeType) ?: (null to null)
+            }
+        val tags =
+            buildList {
+                add(listOf("file-type", mimeType))
+                add(listOf("encryption-algorithm", Nip17File.ALGORITHM_AES_GCM))
+                add(listOf(Nip17File.TAG_DECRYPTION_KEY, key.toHexString()))
+                add(listOf("decryption-nonce", nonce.toHexString()))
+                // Hash of the plaintext: what the reader checks the decrypted bytes against.
+                add(listOf("ox", Crypto.sha256(bytes).toHexString()))
+                add(listOf("x", Crypto.sha256(encrypted).toHexString()))
+                add(listOf("size", bytes.size.toString()))
+                if (dimWidth != null && dimHeight != null && dimWidth > 0 && dimHeight > 0) {
+                    add(listOf("dim", "${dimWidth}x$dimHeight"))
+                }
+            }
+        return publishDmRumor(
+            Nip17.buildRumor(myPub, recipientPubkey, upload.url, extraTags = tags, kind = Nip17.KIND_FILE),
+            recipientPubkey,
+            myPub,
+            signer,
+        )
+    }
+
+    /**
+     * React to a DM with [emoji] (NIP-25 inside the gift wrap). [emojiUrl] carries a custom emoji's
+     * image (NIP-30). The reaction is not a message, so it never enters the thread or the unread
+     * count; it shows under the bubble it targets.
+     */
+    override suspend fun sendDmReaction(
+        recipientPubkey: String,
+        messageId: String,
+        emoji: String,
+        emojiUrl: String?,
+    ): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        awaitPeerDmRelays(recipientPubkey)
+        val tags =
+            buildList {
+                add(listOf("e", messageId, dmRelaysFor(recipientPubkey).firstOrNull() ?: ""))
+                if (emojiUrl != null) add(listOf("emoji", emoji.trim(':'), emojiUrl))
+            }
+        val rumor = Nip17.buildRumor(myPub, recipientPubkey, emoji, extraTags = tags, kind = Nip17.KIND_REACTION)
+        dmManager.addOptimisticReaction(rumor, recipientPubkey, myPub)
+        return publishDmRumor(rumor, recipientPubkey, myPub, signer, optimistic = false)
+    }
+
+    /**
+     * Seal and gift-wrap [rumor] for the recipient plus a self-copy, and publish each to its side's
+     * DM relays. Shared by text, file messages and reactions: only the rumor differs, so the NIP-4e
+     * addressing, the send queue and the delivery tracking are written once.
+     *
+     * [optimistic] shows the message in the thread before any relay answers. A reaction turns it
+     * off: it is not a bubble, and it reaches the thread through the reaction map instead.
+     */
+    private suspend fun publishDmRumor(
+        rumor: Event,
+        recipientPubkey: String,
+        myPub: String,
+        signer: NostrSigner,
+        optimistic: Boolean = true,
+    ): Result<Unit> {
         return try {
-            val rumor = Nip17.buildRumor(myPub, recipientPubkey, content)
             // NIP-4e: a recipient who announced an encryption key gets both NIP-44 layers addressed
             // to it, tagged with the key they must ECDH the seal against. Until we hold an
             // encryption key of our own that key is our identity pubkey, which is what makes this
@@ -2227,7 +2338,7 @@ class NostrRepository(
                 } else {
                     Nip17.wrap(rumor, myPub, signer)
                 }
-            dmManager.addOptimistic(rumor, recipientPubkey, myPub)
+            if (optimistic) dmManager.addOptimistic(rumor, recipientPubkey, myPub)
             val rumorId = rumor.id ?: return Result.Error(AppError.Unknown("Failed to build the message"))
             // Enqueue both wraps (recipient + self-copy) in the persisted send queue, then publish.
             // The message shows as Sending and flips to Delivered on the first relay OK (or when the
@@ -3081,6 +3192,7 @@ class NostrRepository(
                 emptyList()
             }
         dmPersistedIds = cached.mapTo(HashSet()) { it.id }
+        dmManager.hydrateReactions(SecureStorage.loadDmReactions(myPub))
         dmManager.hydrate(
             cached.map { it.toDmMessage(myPub) },
             SecureStorage.loadDmLastRead(myPub),
@@ -3121,6 +3233,15 @@ class NostrRepository(
             scope.launch {
                 dmManager.lastReadByPeer.drop(1).collect { reads ->
                     SecureStorage.saveDmLastRead(myPub, reads)
+                }
+            }
+        // Reactions are small and rarely change, so the whole set is rewritten rather than
+        // diffed. They must be persisted at all: the inbox never re-decrypts a wrap it has
+        // already processed, so a reaction only in memory is gone after a restart.
+        dmPersistenceJobs +=
+            scope.launch {
+                dmManager.reactionRumorsByPeer.drop(1).collect { byPeer ->
+                    SecureStorage.saveDmReactions(myPub, byPeer.values.flatten().sortedBy { it.createdAt })
                 }
             }
         // Persist the "seen on" relay map (debounced) so View source keeps it across restarts.
