@@ -653,8 +653,20 @@ class GroupManager(
     // from this LOCAL truth (set on our 9021, cleared on our 9022/leave/approval) instead of the
     // kind:9021 echo in the message feed, which leaveGroup clears and a re-fetch races, leaving a
     // left group stuck on "Request pending" until a reload.
+    /** [groupKey] -> seconds of our outstanding kind:9021 on that relay. */
     private val _pendingApprovalSince = MutableStateFlow<Map<String, Long>>(emptyMap())
     val pendingApprovalSince: StateFlow<Map<String, Long>> = _pendingApprovalSince.asStateFlow()
+
+    /** Drops the pending marker for [groupId] on [relayUrl], or on every relay when it is unknown. */
+    private fun clearPendingApproval(relayUrl: String?, groupId: String) {
+        _pendingApprovalSince.update { pending ->
+            if (relayUrl != null) {
+                pending - groupKey(relayUrl, groupId)
+            } else {
+                pending.filterKeys { groupKeyId(it) != groupId }
+            }
+        }
+    }
 
     // Drops the relay's kind:9022 echo and updated kind:39002 that arrive in
     // the milliseconds after a leave, otherwise they re-populate the lists we
@@ -1706,7 +1718,9 @@ class GroupManager(
 
             clearGroupRestricted(normalizedGroupRelay, groupId)
             // Seconds, to match GroupMembershipState.requestedAtSeconds (the "Requested ..." label).
-            _pendingApprovalSince.update { it + (groupId to epochSeconds()) }
+            // Keyed per relay: a request to this relay says nothing about the same-id group
+            // elsewhere, which otherwise opened already showing "Request pending".
+            _pendingApprovalSince.update { it + (groupKey(normalizedGroupRelay, groupId) to epochSeconds()) }
             refreshMuxSubscriptionsForRelay(groupRelayUrl)
 
             kotlinx.coroutines.delay(500)
@@ -2562,7 +2576,7 @@ class GroupManager(
             memberEventTimestamps.remove(groupId)
             adminEventTimestamps.remove(groupId)
             roleEventTimestamps.remove(groupId)
-            _pendingApprovalSince.update { it - groupId }
+            clearPendingApproval(groupRelayUrl, groupId)
             messageIdIndex.remove(groupId)
             _latestMessageRelayByGroup.update { it - groupId }
             observedGroupsMutex.withLock { observedGroups.remove(groupId) }
@@ -4183,7 +4197,7 @@ class GroupManager(
         if (selfNowMember &&
             selfWasAbsent &&
             (
-                members.groupId in _pendingApprovalSince.value ||
+                (hostRelay != null && groupKey(hostRelay, members.groupId) in _pendingApprovalSince.value) ||
                     (relayUrl != null && groupKey(relayUrl, members.groupId) in _restrictedGroups.value)
                 )
         ) {
@@ -4533,7 +4547,7 @@ class GroupManager(
     // through requestGroupMessages (the state-machine path), NOT a raw _messages fetch /
     // dedup eviction, which is what broke pagination before.
     private fun onApprovalDetected(relayUrl: String?, groupId: String) {
-        _pendingApprovalSince.update { it - groupId }
+        clearPendingApproval(relayUrl ?: getRelayForGroup(groupId), groupId)
         clearGroupRestricted(relayUrl, groupId)
         scope.launch {
             try {

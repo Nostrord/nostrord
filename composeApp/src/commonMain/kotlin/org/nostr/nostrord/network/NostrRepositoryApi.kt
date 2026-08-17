@@ -135,7 +135,7 @@ interface NostrRepositoryApi {
      */
     val groupMembersByRelay: StateFlow<Map<String, Map<String, List<String>>>>
 
-    /** groupId -> epochMillis of our outstanding kind:9021 join request awaiting approval. */
+    /** groupKey(relay, groupId) -> epoch seconds of our outstanding kind:9021 awaiting approval. */
     val pendingApprovalSince: StateFlow<Map<String, Long>>
     val groupAdmins: StateFlow<Map<String, List<String>>>
     val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>>
