@@ -143,6 +143,14 @@ val DmPage =
         // True while the user is at (or near) the bottom; drives whether async media growth keeps
         // the view pinned. Updated on scroll; seeded true so a fresh conversation stays pinned.
         val pinnedToBottom = useRef(true)
+        // Same fact as the ref, in state: the jump pill has to re-render when it changes.
+        val (atBottom, setAtBottom) = useState { true }
+        // Messages FROM THE PEER that landed while the reader was up in the history. Reported on
+        // the pill so going back down is their decision with the count in hand. Own messages are
+        // never counted: the reader wrote them, and writing already returns the view to the bottom.
+        val (newWhileAway, setNewWhileAway) = useState { 0 }
+        val seenPeerCount = useRef(0)
+        val peerCount = messages.count { !it.mine }
         // Opening a conversation lands on the newest message; after that the position is the
         // reader's, not the stream's.
         useLayoutEffect(pubkey) {
@@ -162,12 +170,22 @@ val DmPage =
             // reader left the bottom), so the browser has held their position through the insert.
             if (pinnedToBottom.current == true) el.scrollTop = el.scrollHeight.toDouble()
         }
+        useEffect(peerCount, atBottom) {
+            if (atBottom) {
+                seenPeerCount.current = peerCount
+                setNewWhileAway(0)
+            } else {
+                setNewWhileAway((peerCount - (seenPeerCount.current ?: 0)).coerceAtLeast(0))
+            }
+        }
         // Our own send always returns to the bottom: the reader caused this one.
         val newestOwnId = messages.lastOrNull()?.takeIf { it.mine }?.id
         useLayoutEffect(newestOwnId) {
             if (newestOwnId == null) return@useLayoutEffect
             val el = messagesRef.current ?: return@useLayoutEffect
             pinnedToBottom.current = true
+            seenPeerCount.current = peerCount
+            setAtBottom(true)
             el.asDynamic().style.overflowAnchor = "none"
             el.scrollTop = el.scrollHeight.toDouble()
         }
@@ -371,200 +389,207 @@ val DmPage =
             }
 
             div {
-                className = ClassName("dm-messages")
-                ref = messagesRef
-                onScroll = {
-                    val el = messagesRef.current
-                    if (el != null) {
-                        val atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80.0
-                        pinnedToBottom.current = atBottom
-                        // Set here, not when the list next changes: the browser applies its scroll
-                        // anchor while laying out the insertion itself, so switching it afterwards
-                        // (from an effect) arrives one mutation too late and the message that
-                        // arrived still moves the page.
-                        el.asDynamic().style.overflowAnchor = if (atBottom) "none" else "auto"
-                    }
-                }
-                // Sitting above the thread, so older messages landing in are expected rather than
-                // startling. Sending stays available: no client can promise it holds every message.
-                if (syncing) {
-                    div {
-                        className = ClassName("dm-syncing")
-                        span { className = ClassName("upload-spinner") }
-                        +"Catching up on older messages"
-                    }
-                }
+                className = ClassName("dm-messages-wrap")
                 div {
-                    className = ClassName("dm-intro")
-                    WebAvatar {
-                        url = metadata?.picture
-                        seed = pubkey
-                        this.name = name
-                        cls = "dm-intro-avatar link"
-                        onClick = { props.onOpenProfile(UserRoute(pubkey)) }
-                    }
-                    div {
-                        className = ClassName("dm-intro-name link")
-                        onClick = { props.onOpenProfile(UserRoute(pubkey)) }
-                        +name
-                    }
-                    div {
-                        className = ClassName("dm-intro-text")
-                        +"Beginning of your direct conversation with $name. Direct messages are encrypted (NIP-17)."
-                    }
-                }
-                buildDmChatItems(messages).forEach { item ->
-                    when (item) {
-                        is DmChatItem.DateSeparator ->
-                            div {
-                                key = "sep-${item.label}"
-                                className = ClassName("date-sep")
-                                span {
-                                    className = ClassName("date-sep-label")
-                                    +item.label
-                                }
+                    className = ClassName("dm-messages")
+                    ref = messagesRef
+                    onScroll = {
+                        val el = messagesRef.current
+                        if (el != null) {
+                            val nowAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80.0
+                            if (pinnedToBottom.current != nowAtBottom) {
+                                pinnedToBottom.current = nowAtBottom
+                                if (nowAtBottom) seenPeerCount.current = peerCount
+                                setAtBottom(nowAtBottom)
                             }
-                        is DmChatItem.Message -> {
-                            val m = item.message
-                            div {
-                                key = m.id
-                                className =
-                                    ClassName(
-                                        buildString {
-                                            append("dm-msg")
-                                            if (m.mine) append(" mine")
-                                            if (!item.firstInGroup) append(" grouped")
-                                        },
-                                    )
-                                // First right-click opens our menu at the cursor; with it open the
-                                // second lands on the overlay, which closes ours without
-                                // preventDefault so the native menu shows (Telegram-style).
-                                // Right-click directly on a hyperlink always keeps the native menu.
-                                onContextMenu = { event ->
-                                    if (event.target.asDynamic().closest("a") != null) {
-                                        setMenuFor(null)
-                                    } else if (menuFor == null) {
-                                        event.preventDefault()
-                                        menuOpenedAt.current = 0.0
-                                        setMenuAt(event.clientX.toInt() to event.clientY.toInt())
-                                        setMenuFor(m.id)
-                                    } else {
-                                        setMenuFor(null)
-                                    }
-                                }
-                                // Stationary 380ms hold arms the long-press; the menu opens on
-                                // touchend so the page can't jump while the finger is down.
-                                onTouchStart = { event ->
-                                    val t = event.asDynamic().touches[0]
-                                    touchStartX.current = t.clientX as Double
-                                    touchStartY.current = t.clientY as Double
-                                    longPressReady.current = false
-                                    window.clearTimeout(longPressTimer.current ?: 0)
-                                    longPressTimer.current = window.setTimeout({
-                                        longPressReady.current = true
-                                        val nav = window.navigator.asDynamic()
-                                        if (nav.vibrate != null) nav.vibrate(15)
-                                    }, 380)
-                                }
-                                onTouchMove = { event ->
-                                    val t = event.asDynamic().touches[0]
-                                    val dx = (t.clientX as Double) - (touchStartX.current ?: 0.0)
-                                    val dy = (t.clientY as Double) - (touchStartY.current ?: 0.0)
-                                    if (abs(dx) > 10.0 || abs(dy) > 10.0) {
-                                        window.clearTimeout(longPressTimer.current ?: 0)
-                                        longPressReady.current = false
-                                    }
-                                }
-                                onTouchEnd = { event ->
-                                    window.clearTimeout(longPressTimer.current ?: 0)
-                                    if (longPressReady.current == true && menuFor == null) {
-                                        // Suppress the synthesized click so it can't hit the
-                                        // overlay and instantly close the menu we're opening.
-                                        event.preventDefault()
-                                        menuOpenedAt.current = kotlin.js.Date.now()
-                                        setMenuAt(
-                                            (touchStartX.current ?: 0.0).toInt() to (touchStartY.current ?: 0.0).toInt(),
-                                        )
-                                        setMenuFor(m.id)
-                                    }
-                                }
-                                // Clock on its own line below the message, right-aligned (matches
-                                // native); hover shows the full date.
+                            // Set here, not when the list next changes: the browser applies its scroll
+                            // anchor while laying out the insertion itself, so switching it afterwards
+                            // (from an effect) arrives one mutation too late and the message that
+                            // arrived still moves the page.
+                            el.asDynamic().style.overflowAnchor = if (nowAtBottom) "none" else "auto"
+                        }
+                    }
+                    // Sitting above the thread, so older messages landing in are expected rather than
+                    // startling. Sending stays available: no client can promise it holds every message.
+                    if (syncing) {
+                        div {
+                            className = ClassName("dm-syncing")
+                            span { className = ClassName("upload-spinner") }
+                            +"Catching up on older messages"
+                        }
+                    }
+                    div {
+                        className = ClassName("dm-intro")
+                        WebAvatar {
+                            url = metadata?.picture
+                            seed = pubkey
+                            this.name = name
+                            cls = "dm-intro-avatar link"
+                            onClick = { props.onOpenProfile(UserRoute(pubkey)) }
+                        }
+                        div {
+                            className = ClassName("dm-intro-name link")
+                            onClick = { props.onOpenProfile(UserRoute(pubkey)) }
+                            +name
+                        }
+                        div {
+                            className = ClassName("dm-intro-text")
+                            +"Beginning of your direct conversation with $name. Direct messages are encrypted (NIP-17)."
+                        }
+                    }
+                    buildDmChatItems(messages).forEach { item ->
+                        when (item) {
+                            is DmChatItem.DateSeparator ->
                                 div {
-                                    className = ClassName("dm-bubble")
-                                    title = formatDateTime(m.createdAt)
-                                    // A group naddr on its own line renders as the prototype
-                                    // invite card (text above, card + View group button below).
-                                    // Quote of the message this one answers, above its body.
-                                    m.replyToId?.let { parentId ->
-                                        val parent = messages.firstOrNull { it.id == parentId }
-                                        div {
-                                            className = ClassName("msg-reply")
-                                            div { className = ClassName("msg-reply-bar") }
+                                    key = "sep-${item.label}"
+                                    className = ClassName("date-sep")
+                                    span {
+                                        className = ClassName("date-sep-label")
+                                        +item.label
+                                    }
+                                }
+                            is DmChatItem.Message -> {
+                                val m = item.message
+                                div {
+                                    key = m.id
+                                    className =
+                                        ClassName(
+                                            buildString {
+                                                append("dm-msg")
+                                                if (m.mine) append(" mine")
+                                                if (!item.firstInGroup) append(" grouped")
+                                            },
+                                        )
+                                    // First right-click opens our menu at the cursor; with it open the
+                                    // second lands on the overlay, which closes ours without
+                                    // preventDefault so the native menu shows (Telegram-style).
+                                    // Right-click directly on a hyperlink always keeps the native menu.
+                                    onContextMenu = { event ->
+                                        if (event.target.asDynamic().closest("a") != null) {
+                                            setMenuFor(null)
+                                        } else if (menuFor == null) {
+                                            event.preventDefault()
+                                            menuOpenedAt.current = 0.0
+                                            setMenuAt(event.clientX.toInt() to event.clientY.toInt())
+                                            setMenuFor(m.id)
+                                        } else {
+                                            setMenuFor(null)
+                                        }
+                                    }
+                                    // Stationary 380ms hold arms the long-press; the menu opens on
+                                    // touchend so the page can't jump while the finger is down.
+                                    onTouchStart = { event ->
+                                        val t = event.asDynamic().touches[0]
+                                        touchStartX.current = t.clientX as Double
+                                        touchStartY.current = t.clientY as Double
+                                        longPressReady.current = false
+                                        window.clearTimeout(longPressTimer.current ?: 0)
+                                        longPressTimer.current = window.setTimeout({
+                                            longPressReady.current = true
+                                            val nav = window.navigator.asDynamic()
+                                            if (nav.vibrate != null) nav.vibrate(15)
+                                        }, 380)
+                                    }
+                                    onTouchMove = { event ->
+                                        val t = event.asDynamic().touches[0]
+                                        val dx = (t.clientX as Double) - (touchStartX.current ?: 0.0)
+                                        val dy = (t.clientY as Double) - (touchStartY.current ?: 0.0)
+                                        if (abs(dx) > 10.0 || abs(dy) > 10.0) {
+                                            window.clearTimeout(longPressTimer.current ?: 0)
+                                            longPressReady.current = false
+                                        }
+                                    }
+                                    onTouchEnd = { event ->
+                                        window.clearTimeout(longPressTimer.current ?: 0)
+                                        if (longPressReady.current == true && menuFor == null) {
+                                            // Suppress the synthesized click so it can't hit the
+                                            // overlay and instantly close the menu we're opening.
+                                            event.preventDefault()
+                                            menuOpenedAt.current = kotlin.js.Date.now()
+                                            setMenuAt(
+                                                (touchStartX.current ?: 0.0).toInt() to (touchStartY.current ?: 0.0).toInt(),
+                                            )
+                                            setMenuFor(m.id)
+                                        }
+                                    }
+                                    // Clock on its own line below the message, right-aligned (matches
+                                    // native); hover shows the full date.
+                                    div {
+                                        className = ClassName("dm-bubble")
+                                        title = formatDateTime(m.createdAt)
+                                        // A group naddr on its own line renders as the prototype
+                                        // invite card (text above, card + View group button below).
+                                        // Quote of the message this one answers, above its body.
+                                        m.replyToId?.let { parentId ->
+                                            val parent = messages.firstOrNull { it.id == parentId }
                                             div {
-                                                className = ClassName("msg-reply-content")
+                                                className = ClassName("msg-reply")
+                                                div { className = ClassName("msg-reply-bar") }
                                                 div {
-                                                    className = ClassName("msg-reply-author")
-                                                    +dmReplyAuthorName(parent, userMetadata, name, myPubkey)
-                                                }
-                                                parent?.let { p ->
+                                                    className = ClassName("msg-reply-content")
                                                     div {
-                                                        className = ClassName("msg-reply-text")
-                                                        +p.previewText()
+                                                        className = ClassName("msg-reply-author")
+                                                        +dmReplyAuthorName(parent, userMetadata, name, myPubkey)
+                                                    }
+                                                    parent?.let { p ->
+                                                        div {
+                                                            className = ClassName("msg-reply-text")
+                                                            +p.previewText()
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
-                                    }
-                                    val attachment = m.file
-                                    val invite = extractDmGroupInvite(m.content)
-                                    val body = if (attachment != null) "" else invite?.remainingText ?: m.content
-                                    if (attachment != null) {
-                                        DmAttachment {
-                                            file = attachment
-                                            state = dmFiles[m.id]
-                                            onLoad = { dmVm.loadFile(m) }
-                                            onRetry = { dmVm.retryFile(m) }
+                                        val attachment = m.file
+                                        val invite = extractDmGroupInvite(m.content)
+                                        val body = if (attachment != null) "" else invite?.remainingText ?: m.content
+                                        if (attachment != null) {
+                                            DmAttachment {
+                                                file = attachment
+                                                state = dmFiles[m.id]
+                                                onLoad = { dmVm.loadFile(m) }
+                                                onRetry = { dmVm.retryFile(m) }
+                                            }
                                         }
-                                    }
-                                    if (body.isNotBlank()) {
-                                        // Rich body: inline images/video/audio/links/mentions/markdown,
-                                        // reusing the group chat renderer (same package).
-                                        renderMessageContent(
-                                            body,
-                                            // The rumor's own tags: custom emoji and the imeta
-                                            // hints that pre-size an inline image, same as chat.
-                                            m.tags,
-                                            userMetadata,
-                                            emptyMap(),
-                                            { props.onOpenProfile(UserRoute(it)) },
-                                            {},
-                                            { gid, relay -> relay?.let { props.onOpenGroup(GroupRoute(it, gid)) } },
-                                            // A DM is not in a group: the by-id REQ stays unscoped
-                                            // and there is no host relay to compare a quote against.
-                                            null,
-                                            "",
-                                        )
-                                    }
-                                    if (invite != null) {
-                                        GroupInviteCard {
-                                            groupId = invite.groupId
-                                            relayUrl = invite.relayUrl
-                                            onOpen = { props.onOpenGroup(GroupRoute(invite.relayUrl, invite.groupId)) }
+                                        if (body.isNotBlank()) {
+                                            // Rich body: inline images/video/audio/links/mentions/markdown,
+                                            // reusing the group chat renderer (same package).
+                                            renderMessageContent(
+                                                body,
+                                                // The rumor's own tags: custom emoji and the imeta
+                                                // hints that pre-size an inline image, same as chat.
+                                                m.tags,
+                                                userMetadata,
+                                                emptyMap(),
+                                                { props.onOpenProfile(UserRoute(it)) },
+                                                {},
+                                                { gid, relay -> relay?.let { props.onOpenGroup(GroupRoute(it, gid)) } },
+                                                // A DM is not in a group: the by-id REQ stays unscoped
+                                                // and there is no host relay to compare a quote against.
+                                                null,
+                                                "",
+                                            )
                                         }
-                                    }
-                                    span {
-                                        className = ClassName("dm-bubble-time")
-                                        +formatTime(m.createdAt)
-                                        // Send state on own messages: clock while Sending, check
-                                        // once a relay OKs the wrap (reuses the group chat icon).
-                                        if (m.mine) sendStateIcon(dmStatus[m.id])
-                                    }
-                                    // Reactions hang inside the bubble so they follow its edge,
-                                    // the way the group chat renders them under a message.
-                                    dmReactions[m.id]?.let { byEmoji ->
-                                        reactionBadges(byEmoji, emptyList(), myPubkey, userMetadata) { emoji ->
-                                            dmVm.react(pubkey, m.id, emoji)
+                                        if (invite != null) {
+                                            GroupInviteCard {
+                                                groupId = invite.groupId
+                                                relayUrl = invite.relayUrl
+                                                onOpen = { props.onOpenGroup(GroupRoute(invite.relayUrl, invite.groupId)) }
+                                            }
+                                        }
+                                        span {
+                                            className = ClassName("dm-bubble-time")
+                                            +formatTime(m.createdAt)
+                                            // Send state on own messages: clock while Sending, check
+                                            // once a relay OKs the wrap (reuses the group chat icon).
+                                            if (m.mine) sendStateIcon(dmStatus[m.id])
+                                        }
+                                        // Reactions hang inside the bubble so they follow its edge,
+                                        // the way the group chat renders them under a message.
+                                        dmReactions[m.id]?.let { byEmoji ->
+                                            reactionBadges(byEmoji, emptyList(), myPubkey, userMetadata) { emoji ->
+                                                dmVm.react(pubkey, m.id, emoji)
+                                            }
                                         }
                                     }
                                 }
@@ -572,95 +597,122 @@ val DmPage =
                         }
                     }
                 }
-            }
 
-            val menuMsg = messages.firstOrNull { it.id == menuFor }
-            if (menuMsg != null) {
-                div {
-                    className = ClassName("ctx-overlay")
-                    onTouchStart = { it.stopPropagation() }
-                    onTouchMove = { it.stopPropagation() }
-                    onTouchEnd = { it.stopPropagation() }
-                    onClick = {
-                        // Ignore the synthesized click that trails a touch-open.
-                        if (kotlin.js.Date.now() - (menuOpenedAt.current ?: 0.0) > 400.0) setMenuFor(null)
-                    }
-                    // Close without preventDefault so the browser shows its native menu.
-                    onContextMenu = { setMenuFor(null) }
-                }
-                div {
-                    ref = menuRef
-                    className = ClassName("ctx-menu")
-                    onTouchStart = { it.stopPropagation() }
-                    onTouchMove = { it.stopPropagation() }
-                    onTouchEnd = { it.stopPropagation() }
-                    // Quick-reactions row (one tap to react) + the full picker, mirroring the
-                    // group chat menu and the native DM one.
+                val menuMsg = messages.firstOrNull { it.id == menuFor }
+                if (menuMsg != null) {
                     div {
-                        className = ClassName("ctx-reactions")
-                        for (emoji in QuickReactions) {
-                            button {
-                                className = ClassName("ctx-reaction")
-                                onClick = {
-                                    dmVm.react(pubkey, menuMsg.id, emoji)
-                                    setMenuFor(null)
+                        className = ClassName("ctx-overlay")
+                        onTouchStart = { it.stopPropagation() }
+                        onTouchMove = { it.stopPropagation() }
+                        onTouchEnd = { it.stopPropagation() }
+                        onClick = {
+                            // Ignore the synthesized click that trails a touch-open.
+                            if (kotlin.js.Date.now() - (menuOpenedAt.current ?: 0.0) > 400.0) setMenuFor(null)
+                        }
+                        // Close without preventDefault so the browser shows its native menu.
+                        onContextMenu = { setMenuFor(null) }
+                    }
+                    div {
+                        ref = menuRef
+                        className = ClassName("ctx-menu")
+                        onTouchStart = { it.stopPropagation() }
+                        onTouchMove = { it.stopPropagation() }
+                        onTouchEnd = { it.stopPropagation() }
+                        // Quick-reactions row (one tap to react) + the full picker, mirroring the
+                        // group chat menu and the native DM one.
+                        div {
+                            className = ClassName("ctx-reactions")
+                            for (emoji in QuickReactions) {
+                                button {
+                                    className = ClassName("ctx-reaction")
+                                    onClick = {
+                                        dmVm.react(pubkey, menuMsg.id, emoji)
+                                        setMenuFor(null)
+                                    }
+                                    +emoji
                                 }
-                                +emoji
+                            }
+                            button {
+                                className = ClassName("ctx-reaction ctx-reaction-more")
+                                title = "Add reaction"
+                                onClick = {
+                                    setMenuFor(null)
+                                    setReactingTo(menuMsg.id)
+                                }
+                                icon(Ic.EmojiEmotions)
                             }
                         }
-                        button {
-                            className = ClassName("ctx-reaction ctx-reaction-more")
-                            title = "Add reaction"
-                            onClick = {
-                                setMenuFor(null)
-                                setReactingTo(menuMsg.id)
+                        ctxItem(Ic.Reply, "Reply") {
+                            setReplyingTo(menuMsg.id)
+                            setMenuFor(null)
+                        }
+                        ctxItem(Ic.Visibility, "View source") {
+                            setSourceFor(menuMsg.id)
+                            setMenuFor(null)
+                        }
+                        ctxItem(Ic.ContentCopy, "Copy text") {
+                            copyToClipboard(menuMsg.content)
+                            setMenuFor(null)
+                        }
+                    }
+                }
+
+                reactingTo?.let { targetId ->
+                    div {
+                        className = ClassName("emoji-overlay")
+                        onClick = { setReactingTo(null) }
+                        EmojiPicker {
+                            onPick = { emoji ->
+                                dmVm.react(pubkey, targetId, emoji)
+                                setReactingTo(null)
                             }
-                            icon(Ic.EmojiEmotions)
-                        }
-                    }
-                    ctxItem(Ic.Reply, "Reply") {
-                        setReplyingTo(menuMsg.id)
-                        setMenuFor(null)
-                    }
-                    ctxItem(Ic.Visibility, "View source") {
-                        setSourceFor(menuMsg.id)
-                        setMenuFor(null)
-                    }
-                    ctxItem(Ic.ContentCopy, "Copy text") {
-                        copyToClipboard(menuMsg.content)
-                        setMenuFor(null)
-                    }
-                }
-            }
-
-            reactingTo?.let { targetId ->
-                div {
-                    className = ClassName("emoji-overlay")
-                    onClick = { setReactingTo(null) }
-                    EmojiPicker {
-                        onPick = { emoji ->
-                            dmVm.react(pubkey, targetId, emoji)
-                            setReactingTo(null)
                         }
                     }
                 }
-            }
 
-            val sourceMsg = messages.firstOrNull { it.id == sourceFor }
-            if (sourceMsg != null) {
-                DmEventSourceModal {
-                    json = sourceMsg.prettyEventJson()
-                    relays = sourceMsg.relays.toTypedArray()
-                    onCopy = { copyToClipboard(sourceMsg.eventJson()) }
-                    onClose = { setSourceFor(null) }
+                val sourceMsg = messages.firstOrNull { it.id == sourceFor }
+                if (sourceMsg != null) {
+                    DmEventSourceModal {
+                        json = sourceMsg.prettyEventJson()
+                        relays = sourceMsg.relays.toTypedArray()
+                        onCopy = { copyToClipboard(sourceMsg.eventJson()) }
+                        onClose = { setSourceFor(null) }
+                    }
                 }
-            }
-            // Rendered after the message list so toggling it never shifts the list's
-            // sibling position (which would remount it and reset the scroll to the top).
-            if (relaysOpen) {
-                DmRelaysModal {
-                    relays = peerRelays.toTypedArray()
-                    onClose = { setRelaysOpen(false) }
+                // Rendered after the message list so toggling it never shifts the list's
+                // sibling position (which would remount it and reset the scroll to the top).
+                if (relaysOpen) {
+                    DmRelaysModal {
+                        relays = peerRelays.toTypedArray()
+                        onClose = { setRelaysOpen(false) }
+                    }
+                }
+
+                // Returning to the newest message is a tap, never something the feed does on its
+                // own. The count is what arrived while the reader stayed up in the history.
+                if (!atBottom) {
+                    button {
+                        className = ClassName("chat-jump-bottom")
+                        title = "Jump to latest message"
+                        onClick = {
+                            val el = messagesRef.current
+                            if (el != null) {
+                                pinnedToBottom.current = true
+                                seenPeerCount.current = peerCount
+                                setAtBottom(true)
+                                setNewWhileAway(0)
+                                el.asDynamic().style.overflowAnchor = "none"
+                                el.scrollTop = el.scrollHeight.toDouble()
+                            }
+                        }
+                        if (newWhileAway > 0) {
+                            span {
+                                className = ClassName("dm-jump-count")
+                                +(if (newWhileAway > 99) "99+ new" else "$newWhileAway new")
+                            }
+                        }
+                        icon(Ic.ExpandMore)
+                    }
                 }
             }
 
