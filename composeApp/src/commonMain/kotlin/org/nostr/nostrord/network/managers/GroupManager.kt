@@ -3436,9 +3436,11 @@ class GroupManager(
      * [hydrateMessagesFromCache]). The live subscriptions then refresh and dedupe by id;
      * deletions were already evicted from the cache when their kind 5/9005 arrived.
      */
-    private suspend fun hydrateThreadsFromCache(groupId: String) {
+    private suspend fun hydrateThreadsFromCache(groupId: String, relayUrl: String?) {
         val account = currentPubkey ?: return
-        val relay = getRelayForGroup(groupId) ?: return
+        // The caller's relay wins: on a cold open getRelayForGroup answers null until the
+        // kind:39000 / kind:10009 listings land, which is exactly the window the cache is for.
+        val relay = relayUrl?.normalizeRelayUrl() ?: getRelayForGroup(groupId) ?: return
         if (!hydratedThreadGroups.add(groupId)) return
         val cached =
             try {
@@ -3465,13 +3467,17 @@ class GroupManager(
      * Open the threads pane for a group: subscribe to kind:11 roots plus the batched kind:1111
      * reply feed (for per-thread counts/previews). Both subscriptions stay open for live updates
      * until [closeThreadSubscriptions]. Waits for AUTH on a private group, like the chat read; if
-     * AUTH lands later, [resubscribeOpenThreadsAfterAuth] re-fires these.
+     * AUTH lands later, [resubscribeOpenThreads] re-fires these.
      */
-    suspend fun requestGroupThreads(groupId: String): Boolean {
+    suspend fun requestGroupThreads(groupId: String, relayUrl: String? = null): Boolean {
+        // The pane's route names the relay the group is open on, which is authoritative: record it
+        // so the cache slot, the client lookup and every later resolution stop depending on a
+        // listing that has not arrived yet (and on getRelayForGroup's single-serving-relay rule).
+        relayUrl?.let { setGroupRelayHint(groupId, it) }
         // Show the known threads instantly from disk (stale-while-revalidate) - before the
         // client check, so a cold or offline open still renders and the VM's retry loop
         // (which re-enters here until the client is ready) hits the hydration guard.
-        hydrateThreadsFromCache(groupId)
+        hydrateThreadsFromCache(groupId, relayUrl)
         val client = clientForGroup(groupId) ?: return false
         openThreadGroups.add(groupId)
         if (client.requiresAuth() && !client.hasAuthSucceeded()) {
@@ -3497,11 +3503,14 @@ class GroupManager(
     }
 
     /**
-     * Re-fire thread subscriptions for any open threads pane on [relayUrl] after NIP-42 AUTH
-     * succeeds. A private group's pre-AUTH thread REQ is CLOSED "auth-required"; this is the
-     * threads analogue of the chat mux's resubscribeAfterAuth.
+     * Re-fire thread subscriptions for any open threads pane on [relayUrl].
+     *
+     * Two callers, both cases where the previous REQ is gone: after NIP-42 AUTH succeeds (a private
+     * group's pre-AUTH thread REQ comes back CLOSED "auth-required"), and after a reconnect, where
+     * the socket that carried the subscription died. Without the reconnect call an open pane keeps
+     * whatever it had and never sees another thread event.
      */
-    suspend fun resubscribeOpenThreadsAfterAuth(relayUrl: String) {
+    suspend fun resubscribeOpenThreads(relayUrl: String) {
         val normalized = relayUrl.normalizeRelayUrl()
         for (groupId in openThreadGroups.toList()) {
             if (getRelayForGroup(groupId)?.normalizeRelayUrl() != normalized) continue

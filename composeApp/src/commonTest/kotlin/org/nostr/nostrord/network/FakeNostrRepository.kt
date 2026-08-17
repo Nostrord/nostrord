@@ -388,10 +388,14 @@ class FakeNostrRepository : NostrRepositoryApi {
     /** (groupId, relayUrl) of every joinGroup call, so tests can assert the routing relay. */
     val joinRelays = mutableListOf<Pair<String, String?>>()
 
-    override suspend fun requestGroupThreads(groupId: String): Boolean {
+    override suspend fun requestGroupThreads(groupId: String, relayUrl: String?): Boolean {
         calls += "requestGroupThreads:$groupId"
+        threadRequestRelays += groupId to relayUrl
         return true
     }
+
+    /** (groupId, relayUrl) of every requestGroupThreads call, so tests can assert the route relay. */
+    val threadRequestRelays = mutableListOf<Pair<String, String?>>()
 
     override fun closeThreadSubscriptions(groupId: String) {
         calls += "closeThreadSubscriptions:$groupId"

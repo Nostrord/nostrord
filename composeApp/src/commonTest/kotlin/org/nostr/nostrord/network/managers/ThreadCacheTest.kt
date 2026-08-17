@@ -60,6 +60,52 @@ class ThreadCacheTest {
     }
 
     @Test
+    fun `the route's relay hydrates the pane before any group listing arrives`() = runTest {
+        val scope = TestScope(testScheduler)
+        val store = InMemoryCacheStore()
+        val writer = makeManager(scope, store)
+        writer.setCurrentPubkey(PUBKEY)
+        writer.setGroupRelayHint(GROUP, RELAY)
+
+        deliver(writer, threadMsg("root1", kind = 11, createdAt = 100))
+        testScheduler.advanceUntilIdle()
+
+        // Cold start proper: no relay hint, no kind:39000 listing, no kind:10009 - the state
+        // getRelayForGroup reads is empty, so only the caller's relay can name the cache slot.
+        val reader = makeManager(scope, store)
+        reader.setCurrentPubkey(PUBKEY)
+        assertEquals(null, reader.getRelayForGroup(GROUP))
+
+        reader.requestGroupThreads(GROUP, RELAY)
+        assertEquals(listOf("root1"), reader.threadRoots.value[GROUP]?.map { it.id })
+        // The route's relay is authoritative, so it is recorded for every later resolution.
+        assertEquals(RELAY, reader.getRelayForGroup(GROUP))
+
+        scope.cancel()
+    }
+
+    @Test
+    fun `without a relay the cold pane cannot hydrate`() = runTest {
+        val scope = TestScope(testScheduler)
+        val store = InMemoryCacheStore()
+        val writer = makeManager(scope, store)
+        writer.setCurrentPubkey(PUBKEY)
+        writer.setGroupRelayHint(GROUP, RELAY)
+
+        deliver(writer, threadMsg("root1", kind = 11, createdAt = 100))
+        testScheduler.advanceUntilIdle()
+
+        // The slot is relay-scoped by design: a caller with no relay has nothing to look up.
+        // Guards the fallback path, so dropping the parameter cannot silently pass.
+        val reader = makeManager(scope, store)
+        reader.setCurrentPubkey(PUBKEY)
+        reader.requestGroupThreads(GROUP)
+        assertTrue(reader.threadRoots.value[GROUP].isNullOrEmpty())
+
+        scope.cancel()
+    }
+
+    @Test
     fun `a deleted thread root does not rehydrate from cache`() = runTest {
         val scope = TestScope(testScheduler)
         val store = InMemoryCacheStore()

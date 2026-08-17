@@ -4626,7 +4626,7 @@ class NostrRepository(
 
     override fun dismissFailed(groupId: String, eventId: String) = groupManager.dismissFailed(groupId, eventId)
 
-    override suspend fun requestGroupThreads(groupId: String): Boolean = groupManager.requestGroupThreads(groupId)
+    override suspend fun requestGroupThreads(groupId: String, relayUrl: String?): Boolean = groupManager.requestGroupThreads(groupId, relayUrl)
 
     override fun closeThreadSubscriptions(groupId: String) = groupManager.closeThreadSubscriptions(groupId)
 
@@ -6719,6 +6719,10 @@ class NostrRepository(
             groupManager.handleReconnectForGroups(openedGroupIds.toList())
         }
 
+        // An open threads pane has no mux behind it: its kind:11 / kind:1111 REQs died with the
+        // socket, so without this the pane goes silent until the user leaves and re-enters it.
+        groupManager.resubscribeOpenThreads(relayUrl)
+
         // Fast-lane: direct requests for the ACTIVE group so it renders first.
         // Mux provides breadth for all groups; direct requests provide speed for the
         // group the user is currently looking at. Deduplicator handles overlap.
@@ -6857,7 +6861,7 @@ class NostrRepository(
         }
         // Re-fire forum thread subscriptions: a private group's pre-AUTH thread REQ was CLOSED
         // auth-required, and the threads pane has no mux to refresh it post-AUTH.
-        groupManager.resubscribeOpenThreadsAfterAuth(relayUrl)
+        groupManager.resubscribeOpenThreads(relayUrl)
     }
 }
 
