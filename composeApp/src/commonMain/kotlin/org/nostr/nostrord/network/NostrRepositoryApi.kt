@@ -695,8 +695,13 @@ interface NostrRepositoryApi {
     /** Drop a failed own message from the chat. */
     fun dismissFailed(groupId: String, eventId: String)
 
-    /** Open the threads-pane subscriptions for a group (kind:11 roots + batched kind:1111 replies). */
-    suspend fun requestGroupThreads(groupId: String): Boolean
+    /**
+     * Open the threads-pane subscriptions for a group (kind:11 roots + batched kind:1111 replies).
+     *
+     * [relayUrl] is the relay the pane's route names. Passing it lets the disk cache hydrate on a
+     * cold open, before the group listings that [getRelayForGroup] would need have arrived.
+     */
+    suspend fun requestGroupThreads(groupId: String, relayUrl: String? = null): Boolean
 
     /** CLOSE the threads-pane subscriptions for a group (on leaving the pane). Fire-and-forget. */
     fun closeThreadSubscriptions(groupId: String)

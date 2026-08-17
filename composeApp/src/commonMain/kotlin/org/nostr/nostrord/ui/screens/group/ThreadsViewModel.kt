@@ -294,7 +294,9 @@ class ThreadsViewModel(
         // (leaving the list stuck empty / "No threads yet").
         viewModelScope.launch {
             repeat(THREAD_REQUEST_ATTEMPTS) {
-                if (repo.requestGroupThreads(groupId)) return@launch
+                // The route's relay goes with it: it is what lets the first attempt hydrate the
+                // pane from disk instead of waiting on the group listings.
+                if (repo.requestGroupThreads(groupId, hostRelay)) return@launch
                 delay(THREAD_REQUEST_RETRY_MS)
             }
         }
