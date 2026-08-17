@@ -158,12 +158,9 @@ val DmPage =
         // the bottom for a message they did not send is what makes a backfill feel like a bug.
         useLayoutEffect(messages.size) {
             val el = messagesRef.current ?: return@useLayoutEffect
-            if (pinnedToBottom.current == true) {
-                el.asDynamic().style.overflowAnchor = "none"
-                el.scrollTop = el.scrollHeight.toDouble()
-            } else {
-                el.asDynamic().style.overflowAnchor = "auto"
-            }
+            // Reading further up: nothing to do. The anchor is already "auto" (set the moment the
+            // reader left the bottom), so the browser has held their position through the insert.
+            if (pinnedToBottom.current == true) el.scrollTop = el.scrollHeight.toDouble()
         }
         // Our own send always returns to the bottom: the reader caused this one.
         val newestOwnId = messages.lastOrNull()?.takeIf { it.mine }?.id
@@ -379,7 +376,13 @@ val DmPage =
                 onScroll = {
                     val el = messagesRef.current
                     if (el != null) {
-                        pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80.0
+                        val atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80.0
+                        pinnedToBottom.current = atBottom
+                        // Set here, not when the list next changes: the browser applies its scroll
+                        // anchor while laying out the insertion itself, so switching it afterwards
+                        // (from an effect) arrives one mutation too late and the message that
+                        // arrived still moves the page.
+                        el.asDynamic().style.overflowAnchor = if (atBottom) "none" else "auto"
                     }
                 }
                 // Sitting above the thread, so older messages landing in are expected rather than

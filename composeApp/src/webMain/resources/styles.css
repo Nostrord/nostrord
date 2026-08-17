@@ -3404,10 +3404,15 @@ body {
     }
 }
 
+/* Anchoring on by default (same as .chat-messages-list): the browser holds the row the reader
+   is on when the backlog inserts older messages above, or when media above the viewport settles
+   its height. The component flips it to 'none' only while pinned at the bottom, where anchoring
+   would fight the bottom-pin. */
 .dm-messages {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-anchor: auto;
     padding: var(--space-lg);
 }
 
