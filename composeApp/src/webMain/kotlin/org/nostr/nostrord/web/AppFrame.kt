@@ -862,6 +862,9 @@ val AppFrame =
                         }
                     r is UserRoute ->
                         ProfilePage {
+                            // Same reason the DM page and the chat screen are keyed: one profile
+                            // must not inherit the hooks of the one viewed before it.
+                            key = r.pubkey
                             pubkey = r.pubkey
                             onOpenGroup = { pushRoute(it) }
                             onEditProfile = { pushRoute(SettingsRoute) }
@@ -869,6 +872,11 @@ val AppFrame =
                         }
                     r is DmRoute && dmEnabled ->
                         DmPage {
+                            // Keyed on the peer so switching conversation remounts the page
+                            // instead of feeding a new peer into the previous one's hooks: the
+                            // header avatar keeps refs of the last good picture, and the composer
+                            // holds a draft, neither of which belongs to the person just opened.
+                            key = r.pubkey
                             pubkey = r.pubkey
                             onOpenProfile = { pushRoute(it) }
                             onOpenConversation = { pushRoute(it) }
