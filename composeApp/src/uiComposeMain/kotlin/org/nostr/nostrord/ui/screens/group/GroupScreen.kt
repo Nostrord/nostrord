@@ -204,7 +204,7 @@ fun GroupScreen(
 
     // messageInput is only the failure-restore channel into the composer (the live text
     // lives in MessageInput); keyed by groupId so a restore value can't leak across groups.
-    var messageInput by remember(groupId) { mutableStateOf("") }
+    var messageInput by remember(chatKey) { mutableStateOf("") }
     // Mention maps are part of the per-group draft: seed from the store on group change so
     // an @user / %group typed before switching is restored (and doesn't bleed into the next
     // group, which the un-keyed remember used to do).
@@ -212,11 +212,14 @@ fun GroupScreen(
     var groupMentions by remember(chatKey) {
         mutableStateOf(decodeGroupMentions(AppModule.messageDraftStore.get(chatKey).groupMentions))
     }
-    var replyingToMessage by remember(groupId) { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
+    // Keyed by (relay, group) like the draft: the twin group on another relay is a different
+    // group, and a reply target carried across sent the `q` tag pointing at a message the
+    // destination group never had.
+    var replyingToMessage by remember(chatKey) { mutableStateOf<NostrGroupClient.NostrMessage?>(null) }
     // Bumped on EVERY reply tap so re-replying to the same message still refocuses the
     // composer and re-summons the keyboard (the message alone doesn't change then).
-    var replyNonce by remember(groupId) { mutableStateOf(0) }
-    var pendingUploads by remember { mutableStateOf<List<UploadResult>>(emptyList()) }
+    var replyNonce by remember(chatKey) { mutableStateOf(0) }
+    var pendingUploads by remember(chatKey) { mutableStateOf<List<UploadResult>>(emptyList()) }
     var showLeaveDialog by remember { mutableStateOf(false) }
     var showGroupInfoModal by remember { mutableStateOf(false) }
     var showEditGroupModal by remember { mutableStateOf(false) }
