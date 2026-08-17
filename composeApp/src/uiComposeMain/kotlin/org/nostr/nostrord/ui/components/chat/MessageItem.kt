@@ -62,6 +62,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordTypography
 import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.utils.formatTime
+import org.nostr.nostrord.utils.normalizeRelayUrl
 import org.nostr.nostrord.utils.rememberClipboardWriter
 import org.nostr.nostrord.utils.shortNpub
 import kotlin.math.abs
@@ -165,20 +166,31 @@ fun MessageItem(
             if (replyParentId != null) resolveReplyMessage(replyParentId) else null
         }
 
-    // If not in allMessages, check cachedEvents and convert to NostrMessage
+    // If not in allMessages, check cachedEvents and convert to NostrMessage. Only this (relay,
+    // group)'s own events qualify: a `q` tag can point at an event another group put in the
+    // shared by-id cache, and painting that shows a different group's message inside this one.
+    // An unstamped copy (restored from disk) is accepted, like an unstamped NostrMessage.
     val parentFromCache: NostrGroupClient.NostrMessage? =
-        remember(replyParentId, cachedEvents, parentMessage) {
+        remember(replyParentId, cachedEvents, parentMessage, currentGroupId, currentRelayUrl) {
             if (replyParentId != null && parentMessage == null) {
-                cachedEvents[replyParentId]?.let { cached ->
-                    NostrGroupClient.NostrMessage(
-                        id = cached.id,
-                        pubkey = cached.pubkey,
-                        content = cached.content,
-                        createdAt = cached.createdAt,
-                        kind = cached.kind,
-                        tags = cached.tags,
-                    )
-                }
+                cachedEvents[replyParentId]
+                    ?.takeIf { cached ->
+                        val cachedGroup = cached.tags.firstOrNull { it.size >= 2 && it[0] == "h" }?.get(1)
+                        val groupOk = currentGroupId == null || cachedGroup == null || cachedGroup == currentGroupId
+                        val relayOk = currentRelayUrl == null ||
+                            cached.relayUrl == null ||
+                            cached.relayUrl == currentRelayUrl.normalizeRelayUrl()
+                        groupOk && relayOk
+                    }?.let { cached ->
+                        NostrGroupClient.NostrMessage(
+                            id = cached.id,
+                            pubkey = cached.pubkey,
+                            content = cached.content,
+                            createdAt = cached.createdAt,
+                            kind = cached.kind,
+                            tags = cached.tags,
+                        )
+                    }
             } else {
                 null
             }

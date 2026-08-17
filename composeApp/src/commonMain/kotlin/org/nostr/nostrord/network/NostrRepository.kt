@@ -6347,7 +6347,7 @@ class NostrRepository(
 
                 // Handle event subscriptions (event_* or e_*) for quotes
                 if (subId.startsWith("event_") || subId.startsWith("e_")) {
-                    metadataManager.parseAndCacheEvent(event)?.let { cachedEvent ->
+                    metadataManager.parseAndCacheEvent(event, client.getRelayUrl())?.let { cachedEvent ->
                         if (!metadataManager.hasMetadata(cachedEvent.pubkey)) {
                             scope.launch {
                                 requestUserMetadata(setOf(cachedEvent.pubkey))
@@ -6530,7 +6530,7 @@ class NostrRepository(
 
                 // Handle event subscriptions (event_* or e_*)
                 if (subId.startsWith("event_") || subId.startsWith("e_")) {
-                    metadataManager.parseAndCacheEvent(event)?.let { cachedEvent ->
+                    metadataManager.parseAndCacheEvent(event, client.getRelayUrl())?.let { cachedEvent ->
                         if (!metadataManager.hasMetadata(cachedEvent.pubkey)) {
                             scope.launch {
                                 requestUserMetadata(setOf(cachedEvent.pubkey))
@@ -6542,7 +6542,7 @@ class NostrRepository(
 
                 // Handle addressable event subscriptions (addr_* or a_*)
                 if (subId.startsWith("addr_") || subId.startsWith("a_")) {
-                    metadataManager.parseAndCacheAddressableEvent(event)?.let { cachedEvent ->
+                    metadataManager.parseAndCacheAddressableEvent(event, client.getRelayUrl())?.let { cachedEvent ->
                         if (!metadataManager.hasMetadata(cachedEvent.pubkey)) {
                             scope.launch {
                                 requestUserMetadata(setOf(cachedEvent.pubkey))

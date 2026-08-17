@@ -732,11 +732,21 @@ class MetadataManager(
         },
     )
 
-    fun parseAndCacheEvent(eventJson: JsonObject): CachedEvent? {
+    fun parseAndCacheEvent(eventJson: JsonObject, relayUrl: String? = null): CachedEvent? {
         return try {
             val eventId = eventJson["id"]?.jsonPrimitive?.content ?: return null
 
-            eventsCache.get(eventId)?.let { return it }
+            // A copy already in the cache wins, but an unstamped one (disk restore) takes the
+            // relay this delivery came from: readers scope quote/reply previews on it.
+            eventsCache.get(eventId)?.let { existing ->
+                if (existing.relayUrl == null && relayUrl != null) {
+                    val stamped = existing.copy(relayUrl = relayUrl.normalizeRelayUrl())
+                    eventsCache.put(eventId, stamped)
+                    _cachedEvents.value = eventsCache.toMap()
+                    return stamped
+                }
+                return existing
+            }
 
             val pubkey = eventJson["pubkey"]?.jsonPrimitive?.content ?: return null
             val content = eventJson["content"]?.jsonPrimitive?.content ?: ""
@@ -755,6 +765,7 @@ class MetadataManager(
                     content = content,
                     createdAt = createdAt,
                     tags = tags,
+                    relayUrl = relayUrl?.normalizeRelayUrl(),
                 )
 
             eventsCache.put(eventId, cachedEvent)
@@ -766,7 +777,7 @@ class MetadataManager(
         }
     }
 
-    fun parseAndCacheAddressableEvent(eventJson: JsonObject): CachedEvent? {
+    fun parseAndCacheAddressableEvent(eventJson: JsonObject, relayUrl: String? = null): CachedEvent? {
         return try {
             val eventId = eventJson["id"]?.jsonPrimitive?.content ?: return null
             val pubkey = eventJson["pubkey"]?.jsonPrimitive?.content ?: return null
@@ -790,6 +801,7 @@ class MetadataManager(
                     content = content,
                     createdAt = createdAt,
                     tags = tags,
+                    relayUrl = relayUrl?.normalizeRelayUrl(),
                 )
 
             eventsCache.put(eventId, cachedEvent)
