@@ -66,6 +66,24 @@ class DmPairingManagerTest {
     }
 
     @Test
+    fun `a share published by another holder drops our prompt for the same request`() {
+        val manager = DmPairingManager()
+        val requester = KeyPair.generate()
+        val holder = KeyPair.generate()
+        manager.onRequestSeen(request(requester.publicKeyHex))
+
+        // A third device answered first. Its kind:4455 reaches every device of the account, and the
+        // recipient tag says which request it settles.
+        val share = Nip4e.buildKeyShare(identity, holder.publicKeyHex, requester.publicKeyHex, "ciphertext", createdAt = 2L)
+        manager.resolveIncoming(Nip4e.keyShareRecipientFrom(share)!!)
+
+        assertIs<DmPairingManager.State.Idle>(manager.state.value)
+        // And it stays gone: the relay keeps serving the request until it is deleted or expires.
+        manager.onRequestSeen(request(requester.publicKeyHex))
+        assertIs<DmPairingManager.State.Idle>(manager.state.value)
+    }
+
+    @Test
     fun `a declined request stays declined across a restart`() {
         val other = KeyPair.generate()
         val event = request(other.publicKeyHex)

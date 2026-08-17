@@ -2548,9 +2548,9 @@ class NostrRepository(
                 )
             publishEventToRelays(pairingRelays(myPub), signed)
             dmPairingManager.resolveIncoming(incoming.throwawayPubkey)
-            // The share is single-use: once the requester holds the key, leaving a copy of the
-            // ciphertext on relays only widens the window for offline attacks on the throwaway keys.
-            signed.id?.let { scope.launch { publishDeletion(myPub, signer, listOf(it)) } }
+            // No deletion from this side: the requester deletes the share (and its own request)
+            // once it holds the key. Deleting here races the delivery — relays honour the kind:5
+            // before the waiting device has read the share, so the pairing never completes.
             Result.Success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -2571,8 +2571,13 @@ class NostrRepository(
 
     /** A kind:4455 answering our own outstanding request: decrypt, validate, hold. */
     private fun handleKeyShare(event: Event, myPub: String) {
+        val recipient = Nip4e.keyShareRecipientFrom(event) ?: return
+        // Every device of the account sees the answer. One still prompting for that same request
+        // drops it here: the key is already on its way, and a second share would put another copy
+        // of the ciphertext on the relays for a request nobody is waiting on.
+        dmPairingManager.resolveIncoming(recipient)
         val ours = dmPairingManager.requestThrowawayKey() ?: return
-        if (Nip4e.keyShareRecipientFrom(event) != ours.publicKeyHex) return
+        if (recipient != ours.publicKeyHex) return
         val senderThrowaway = Nip4e.throwawayPubkeyFrom(event) ?: return
         val keyHex =
             runCatching { Nip44.decrypt(event.content, ours.privateKeyHex, senderThrowaway) }.getOrNull()
