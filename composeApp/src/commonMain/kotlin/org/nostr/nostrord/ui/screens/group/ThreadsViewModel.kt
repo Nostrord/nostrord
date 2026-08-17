@@ -140,6 +140,17 @@ fun canDeleteThreadMessage(
     isAdmin: Boolean,
 ): Boolean = myPubkey != null && (authorPubkey == myPubkey || isAdmin)
 
+/**
+ * Whether a keypress in the thread reply box posts it. A forum reply is expected to run to more
+ * than one line, so Enter inserts a newline and only Ctrl/Cmd+Enter posts - deliberately the
+ * inverse of the chat composer, where Enter sends.
+ */
+fun threadComposerSubmits(
+    isEnter: Boolean,
+    ctrlOrMeta: Boolean,
+    shift: Boolean,
+): Boolean = isEnter && ctrlOrMeta && !shift
+
 /** What the threads list shows when it has no cards to render. */
 enum class ThreadsPlaceholder {
     /** Still fetching: roots may yet arrive. */

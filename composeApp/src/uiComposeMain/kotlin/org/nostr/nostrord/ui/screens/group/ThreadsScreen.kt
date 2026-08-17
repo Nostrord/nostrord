@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.screens.group
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.TextRange
@@ -105,7 +109,7 @@ import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.ui.theme.rememberEmojiFontFamily
-import org.nostr.nostrord.utils.formatTimestamp
+import org.nostr.nostrord.utils.formatDateTime
 import org.nostr.nostrord.utils.getDateLabel
 import org.nostr.nostrord.utils.rememberClipboardWriter
 import org.nostr.nostrord.utils.resolveGroupRef
@@ -348,6 +352,8 @@ fun ThreadsScreen(
                     Column(
                         modifier = Modifier.weight(1f).fillMaxWidth()
                             .verticalScroll(threadScroll).padding(Spacing.md),
+                        // Posts are separated cards, not adjacent chat rows.
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     ) {
                         CompositionLocalProvider(
                             LocalImageViewerUrl provides imageViewerUrl,
@@ -401,7 +407,6 @@ fun ThreadsScreen(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.5.sp,
-                                modifier = Modifier.padding(vertical = Spacing.sm),
                             )
                             detail.replies.forEach { renderMessage(it, false) }
                         }
@@ -413,6 +418,12 @@ fun ThreadsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                         ) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.Reply,
+                                contentDescription = null,
+                                tint = NostrordColors.TextMuted,
+                                modifier = Modifier.size(14.dp),
+                            )
                             Text("Replying to", color = NostrordColors.TextMuted, fontSize = 12.sp)
                             Text(
                                 threadDisplayName(target.pubkey, userMetadata[target.pubkey]),
@@ -461,6 +472,11 @@ fun ThreadsScreen(
                         },
                         placeholder = "Write a reply...",
                         isSending = sending,
+                        // Post box, not a chat pill: it opens three lines tall, posts from a
+                        // labeled button, and Enter writes a newline (issue #267).
+                        sendLabel = "Post reply",
+                        minLines = 3,
+                        sendOnEnter = false,
                         focusRequester = composerFocus,
                         members = mentionMembers,
                         availableGroups = mentionGroups,
@@ -796,6 +812,24 @@ private fun ThreadCard(
     }
 }
 
+/** Text+icon action in a thread post footer ("Reply", "React"). */
+@Composable
+private fun PostAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.clip(NostrordShapes.shapeSmall).clickable(onClick = onClick)
+            .padding(horizontal = Spacing.xs, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = NostrordColors.TextMuted, modifier = Modifier.size(14.dp))
+        Text(label, color = NostrordColors.TextMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
 /** Compact emoji+count chip on a thread list card (a root's top reactions, Discord-style). */
 @Composable
 private fun ReactionChipBadge(chip: ReactionChip) {
@@ -851,22 +885,25 @@ private fun ThreadMessage(
     val writeClipboard = rememberClipboardWriter()
     val interaction = remember { MutableInteractionSource() }
     val isHovered by interaction.collectIsHoveredAsState()
-    // Hover tint like chat rows; the deep-link flash overrides it and fades back out.
+    // A post is a card with its own surface, not a hovering chat row: the OP reads as the
+    // subject of the page and each reply as a deliberate contribution to it (issue #267).
+    val cardBackground = if (isRoot) NostrordColors.SurfaceVariant else NostrordColors.Surface
     val rowBackground by animateColorAsState(
         when {
             highlighted -> NostrordColors.Primary.copy(alpha = 0.18f)
             // The open menu keeps its target tinted, so it is obvious which message the
             // actions apply to (chat parity: .msg.menu-open).
             menuVisible || isHovered -> NostrordColors.MessageHover
-            else -> Color.Transparent
+            else -> cardBackground
         },
     )
     Box(
         modifier =
         Modifier
             .fillMaxWidth()
-            .clip(NostrordShapes.shapeMedium)
+            .clip(NostrordShapes.shapeLarge)
             .background(rowBackground)
+            .border(1.dp, NostrordColors.Divider, NostrordShapes.shapeLarge)
             .hoverable(interaction)
             .then(
                 if (onPositioned != null) {
@@ -913,7 +950,7 @@ private fun ThreadMessage(
             },
         )
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.md),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             // Avatar and author name open the user profile modal (chat parity).
@@ -934,15 +971,16 @@ private fun ThreadMessage(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.clickable { onUserClick(msg.pubkey) },
                     )
-                    Text(formatTimestamp(msg.createdAt), color = NostrordColors.TextMuted, fontSize = 12.sp)
+                    // Absolute date, not "2h ago": a post is a dated record.
+                    Text(formatDateTime(msg.createdAt), color = NostrordColors.TextMuted, fontSize = 12.sp)
                 }
                 if (isRoot) {
                     Text(
                         msg.threadTitle(),
                         color = NostrordColors.TextPrimary,
-                        fontSize = 18.sp,
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(vertical = Spacing.xs),
+                        modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.sm),
                     )
                 }
                 // Nested reply: quote the answered message above the body (placeholder when the
@@ -976,8 +1014,6 @@ private fun ThreadMessage(
                 if (myPubkey != null && myPubkey == msg.pubkey && status is GroupManager.MessageStatus.Failed) {
                     MessageStatusIndicator(status, onRetry, onDismiss)
                 }
-                // Reaction badges; adding a reaction goes through the context menu (quick row
-                // or the full picker), so there is no always-visible add button.
                 ReactionBadges(
                     reactions = reactions,
                     currentUserPubkey = myPubkey,
@@ -985,6 +1021,16 @@ private fun ThreadMessage(
                     onReactionClick = onReact,
                     pendingEmojis = pendingEmojis,
                 )
+                // Answering a forum post is the primary action, so it is a visible footer button
+                // and not only a context-menu item the way a chat reply is.
+                Row(
+                    modifier = Modifier.padding(top = Spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PostAction(Icons.AutoMirrored.Outlined.Reply, "Reply", onReply)
+                    PostAction(Icons.Outlined.EmojiEmotions, "React", onOpenReactionPicker)
+                }
             }
         }
     }

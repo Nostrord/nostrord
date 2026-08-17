@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -57,12 +59,15 @@ import org.nostr.nostrord.network.upload.mimeTypeForFilename
 import org.nostr.nostrord.network.upload.rememberClipboardImageReader
 import org.nostr.nostrord.network.upload.uploadMedia
 import org.nostr.nostrord.ui.components.ConfirmDialog
+import org.nostr.nostrord.ui.components.buttons.AppButton
+import org.nostr.nostrord.ui.components.buttons.AppButtonSize
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
 import org.nostr.nostrord.ui.components.upload.MessageUploadButton
 import org.nostr.nostrord.ui.mentions.MentionAutocomplete
 import org.nostr.nostrord.ui.screens.group.components.MentionVisualTransformation
 import org.nostr.nostrord.ui.screens.group.model.GroupInfo
 import org.nostr.nostrord.ui.screens.group.model.MemberInfo
+import org.nostr.nostrord.ui.screens.group.threadComposerSubmits
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.NostrordTypography
@@ -80,6 +85,9 @@ import org.nostr.nostrord.utils.Result
  * suggestion writes the token into the text and reports it through [onMentionsChange] /
  * [onGroupMentionsChange], which the caller resolves at send time. Left empty (the DM page) the
  * composer behaves as a plain field.
+ *
+ * [sendLabel] + [minLines] + `sendOnEnter = false` turn it into the forum post box the thread
+ * view uses: a tall field with a labeled button, where Enter writes a newline.
  */
 @Composable
 fun MessageComposer(
@@ -89,6 +97,12 @@ fun MessageComposer(
     placeholder: String,
     isSending: Boolean,
     modifier: Modifier = Modifier,
+    // Labeled button instead of the paper-plane glyph ("Post reply"), for a deliberate post.
+    sendLabel: String? = null,
+    // Opening height of the field, in lines.
+    minLines: Int = 1,
+    // false: Enter writes a newline and Ctrl/Cmd+Enter sends (threadComposerSubmits).
+    sendOnEnter: Boolean = true,
     // Lets a caller put the caret here (picking Reply focuses the composer to type into).
     focusRequester: FocusRequester? = null,
     members: List<MemberInfo> = emptyList(),
@@ -203,30 +217,75 @@ fun MessageComposer(
             }
         }
         Box(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clip(NostrordShapes.inputShape)
-                    .background(NostrordColors.SurfaceVariant)
-                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            // Post box (sendLabel != null): field on its own full-width line with the controls in
+            // a row under it, mirroring the web .thread-composer. Chat / DM keep the one-line pill.
+            val boxModifier = Modifier
+                .fillMaxWidth()
+                .clip(NostrordShapes.inputShape)
+                .background(NostrordColors.SurfaceVariant)
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm)
+            val uploadButton: @Composable () -> Unit = {
                 MessageUploadButton(
                     externalBusy = isUploadingPaste,
                     onUploadComplete = { uploadResult -> appendUploadedUrl(uploadResult.url) },
                 )
+            }
+            val emojiButton: @Composable () -> Unit = {
+                IconButton(
+                    onClick = { showEmojiPicker = !showEmojiPicker },
+                    modifier = Modifier.size(width = 26.dp, height = 32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.EmojiEmotions,
+                        contentDescription = "Emoji",
+                        tint = if (showEmojiPicker) NostrordColors.Primary else NostrordColors.TextMuted,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            val sendButton: @Composable () -> Unit = {
+                if (sendLabel != null) {
+                    AppButton(
+                        text = sendLabel,
+                        onClick = onSend,
+                        enabled = canSend,
+                        loading = isSending,
+                        size = AppButtonSize.Small,
+                    )
+                } else {
+                    IconButton(
+                        onClick = onSend,
+                        enabled = canSend,
+                        modifier = Modifier.size(width = 26.dp, height = 32.dp),
+                    ) {
+                        if (isSending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = NostrordColors.Primary,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = if (value.text.isNotBlank()) NostrordColors.Primary else NostrordColors.TextMuted,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            val textField: @Composable (Modifier) -> Unit = { fieldModifier ->
                 BasicTextField(
                     value = value,
                     onValueChange = { changeText(it) },
                     cursorBrush = SolidColor(NostrordColors.TextContent),
                     textStyle = NostrordTypography.Input.copy(color = NostrordColors.TextContent),
                     visualTransformation = mentionVisualTransformation,
-                    maxLines = 7,
+                    minLines = minLines,
+                    maxLines = if (minLines > 1) 12 else 7,
                     modifier =
-                    Modifier
-                        .weight(1f)
+                    fieldModifier
                         .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                         .onFocusChanged { focusState ->
                             // Android drops focus transiently while the IME composes; dismissing there
@@ -277,6 +336,17 @@ fun MessageComposer(
                                         false
                                     }
                                 }
+                                // Post box: only Ctrl/Cmd+Enter sends, every other Enter falls
+                                // through to the field so it writes a newline.
+                                !sendOnEnter && event.type == KeyEventType.KeyDown && event.key == Key.Enter -> {
+                                    val submits = threadComposerSubmits(
+                                        isEnter = true,
+                                        ctrlOrMeta = event.isCtrlPressed || event.isMetaPressed,
+                                        shift = event.isShiftPressed,
+                                    )
+                                    if (submits && canSend) onSend()
+                                    submits
+                                }
                                 event.type == KeyEventType.KeyDown && event.key == Key.Enter && event.isShiftPressed -> {
                                     val sel = value.selection
                                     val t = value.text
@@ -292,7 +362,10 @@ fun MessageComposer(
                             }
                         },
                     decorationBox = { innerTextField ->
-                        Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Box(
+                            contentAlignment = if (minLines > 1) Alignment.TopStart else Alignment.CenterStart,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        ) {
                             if (value.text.isEmpty()) {
                                 Text(
                                     placeholder,
@@ -304,36 +377,31 @@ fun MessageComposer(
                         }
                     },
                 )
-                IconButton(
-                    onClick = { showEmojiPicker = !showEmojiPicker },
-                    modifier = Modifier.size(width = 26.dp, height = 32.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.EmojiEmotions,
-                        contentDescription = "Emoji",
-                        tint = if (showEmojiPicker) NostrordColors.Primary else NostrordColors.TextMuted,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-                IconButton(
-                    onClick = onSend,
-                    enabled = canSend,
-                    modifier = Modifier.size(width = 26.dp, height = 32.dp),
-                ) {
-                    if (isSending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = NostrordColors.Primary,
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = if (value.text.isNotBlank()) NostrordColors.Primary else NostrordColors.TextMuted,
-                            modifier = Modifier.size(20.dp),
-                        )
+            }
+            if (sendLabel != null) {
+                Column(modifier = boxModifier) {
+                    textField(Modifier.fillMaxWidth())
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        uploadButton()
+                        emojiButton()
+                        Spacer(modifier = Modifier.weight(1f))
+                        sendButton()
                     }
+                }
+            } else {
+                Row(
+                    modifier = boxModifier,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    uploadButton()
+                    textField(Modifier.weight(1f))
+                    emojiButton()
+                    sendButton()
                 }
             }
 
