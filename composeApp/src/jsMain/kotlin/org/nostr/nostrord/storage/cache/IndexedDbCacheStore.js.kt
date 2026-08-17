@@ -242,8 +242,8 @@ class IndexedDbCacheStore : CacheStore {
         val out = ArrayList<SizeRow>()
         drainCursor(store.openCursor(boundAccount(account), "next")) { cursor ->
             val v = cursor.value
-            // DMs (kind 14) are excluded from the byte budget so a conversation is never evicted.
-            if (!(storeName == MESSAGE && v.kind.unsafeCast<Int>() == DM_CACHE_KIND)) {
+            // DMs are excluded from the byte budget so a conversation is never evicted.
+            if (!(storeName == MESSAGE && v.kind.unsafeCast<Int>() in DM_CACHE_KINDS)) {
                 val bytes = (v.content.unsafeCast<String>().length + v.tags_json.unsafeCast<String>().length + 120).toLong()
                 out.add(SizeRow(storeName, v.id.unsafeCast<String>(), (v.created_at.unsafeCast<Double>()).toLong(), bytes))
             }
