@@ -2184,7 +2184,7 @@ class NostrRepository(
      * self-copy for us, and publish each to its side's DM relays. The seal's NIP-44 encrypt and
      * signature run through the active signer, so local, bunker, and NIP-07 accounts all work.
      */
-    override suspend fun sendDm(recipientPubkey: String, content: String): Result<Unit> {
+    override suspend fun sendDm(recipientPubkey: String, content: String, replyToId: String?): Result<Unit> {
         val signer =
             ActiveAccountManager.session.value?.signer
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
@@ -2193,7 +2193,15 @@ class NostrRepository(
         // defaults only, which for a first contact means it is published where they never look and
         // is lost silently. Their kind:10044 rides the same REQ, so addressing improves too.
         awaitPeerDmRelays(recipientPubkey)
-        return publishDmRumor(Nip17.buildRumor(myPub, recipientPubkey, content), recipientPubkey, myPub, signer)
+        // A reply is an `e` tag on the rumor, with no relay hint: the rumor's id is computed
+        // before any relay lookup, and the reply never leaves the conversation anyway.
+        val replyTags = replyToId?.let { listOf(listOf("e", it)) } ?: emptyList()
+        return publishDmRumor(
+            Nip17.buildRumor(myPub, recipientPubkey, content, extraTags = replyTags),
+            recipientPubkey,
+            myPub,
+            signer,
+        )
     }
 
     /**

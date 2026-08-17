@@ -311,7 +311,8 @@ interface NostrRepositoryApi {
     fun dismissDmPairing()
 
     /** Send a NIP-17 direct message to [recipientPubkey]. */
-    suspend fun sendDm(recipientPubkey: String, content: String): Result<Unit>
+    /** [replyToId] marks this message as a reply to another one in the same conversation. */
+    suspend fun sendDm(recipientPubkey: String, content: String, replyToId: String? = null): Result<Unit>
 
     /** Mark a DM conversation read up to its newest message (clears its unread badge). */
     suspend fun markDmRead(peerPubkey: String)

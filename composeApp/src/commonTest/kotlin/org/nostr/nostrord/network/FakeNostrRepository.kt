@@ -614,7 +614,13 @@ class FakeNostrRepository : NostrRepositoryApi {
 
     var sendDmAction: (String, String) -> Result<Unit> = { _, _ -> Result.Success(Unit) }
 
-    override suspend fun sendDm(recipientPubkey: String, content: String): Result<Unit> = sendDmAction(recipientPubkey, content)
+    /** Reply targets passed to [sendDm], in call order (null when the message starts a thread). */
+    val sentDmReplyTargets = mutableListOf<String?>()
+
+    override suspend fun sendDm(recipientPubkey: String, content: String, replyToId: String?): Result<Unit> {
+        sentDmReplyTargets += replyToId
+        return sendDmAction(recipientPubkey, content)
+    }
 
     override suspend fun markDmRead(peerPubkey: String) {}
 

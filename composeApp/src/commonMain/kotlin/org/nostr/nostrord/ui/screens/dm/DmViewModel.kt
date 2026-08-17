@@ -120,13 +120,14 @@ class DmViewModel(
     fun send(
         recipientPubkey: String,
         content: String,
+        replyToId: String? = null,
         onSuccess: () -> Unit = {},
         onFailure: () -> Unit = {},
     ) {
         val text = content.trim()
         if (text.isEmpty()) return
         viewModelScope.launch {
-            val result = withMinDuration { repo.sendDm(recipientPubkey, text) }
+            val result = withMinDuration { repo.sendDm(recipientPubkey, text, replyToId) }
             when (result) {
                 is Result.Error -> onFailure()
                 is Result.Success -> onSuccess()

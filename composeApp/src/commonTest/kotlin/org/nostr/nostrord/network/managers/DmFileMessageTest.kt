@@ -127,6 +127,36 @@ class DmFileMessageTest {
         assertEquals(Nip17.KIND_FILE, dm.messagesByPeer.value[alice.pubkey]?.single()?.kind)
     }
 
+    @Test
+    fun `a reply carries the id of the message it answers`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val alice = signer()
+        val bob = signer()
+        val reply =
+            Nip17.buildRumor(
+                senderPubkey = alice.pubkey,
+                recipientPubkey = bob.pubkey,
+                content = "answering that",
+                createdAt = 2000L,
+                extraTags = listOf(listOf("e", "parent-1")),
+            )
+        dm.ingestGiftWrap(Nip17.wrap(reply, bob.pubkey, alice), bob.pubkey, bob)
+
+        val message = dm.messagesByPeer.value[alice.pubkey]?.single()
+        assertNotNull(message)
+        assertEquals("parent-1", message.replyToId)
+    }
+
+    @Test
+    fun `a plain message answers nothing`() = runTest {
+        val dm = DmManager(backgroundScope)
+        val alice = signer()
+        val bob = signer()
+        dm.ingestGiftWrap(Nip17.wrap(Nip17.buildRumor(alice.pubkey, bob.pubkey, "hi"), bob.pubkey, alice), bob.pubkey, bob)
+
+        assertNull(dm.messagesByPeer.value[alice.pubkey]?.single()?.replyToId)
+    }
+
     private companion object {
         val FILE_TAGS =
             listOf(

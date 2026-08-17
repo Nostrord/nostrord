@@ -52,6 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.nostr.nostrord.di.AppModule
+import org.nostr.nostrord.network.UserMetadata
+import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.network.managers.previewText
 import org.nostr.nostrord.network.upload.mimeTypeForFilename
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
@@ -64,6 +67,7 @@ import org.nostr.nostrord.ui.components.chat.GroupInviteCard
 import org.nostr.nostrord.ui.components.chat.MessageComposer
 import org.nostr.nostrord.ui.components.chat.MessageContent
 import org.nostr.nostrord.ui.components.chat.ReactionBadges
+import org.nostr.nostrord.ui.components.chat.ReplyQuote
 import org.nostr.nostrord.ui.components.chat.SendStateIcon
 import org.nostr.nostrord.ui.components.chat.rightClickContextMenuModifier
 import org.nostr.nostrord.ui.components.emoji.EmojiPicker
@@ -166,6 +170,8 @@ fun DmPageScreen(
         // Message the emoji picker was opened for; null while it is closed.
         var reactingTo by remember { mutableStateOf<String?>(null) }
         var uploadError by remember { mutableStateOf<String?>(null) }
+        // Message being replied to; the composer shows its quote until it is sent or cancelled.
+        var replyingTo by remember { mutableStateOf<String?>(null) }
         // Resolve where this peer reads before the first message is written, not after their reply.
         LaunchedEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -197,6 +203,9 @@ fun DmPageScreen(
             if (pinnedToBottom.value) messagesScroll.scrollTo(messagesScroll.maxValue)
         }
 
+        // The message the composer is answering, if it is still in the thread.
+        val replyParent = messages.firstOrNull { it.id == replyingTo }
+
         val send = {
             val body = textFieldValue.text.trim()
             if (body.isNotBlank() && !isSending) {
@@ -204,8 +213,10 @@ fun DmPageScreen(
                 dmVm.send(
                     pubkey,
                     body,
+                    replyToId = replyParent?.id,
                     onSuccess = {
                         textFieldValue = TextFieldValue("")
+                        replyingTo = null
                         isSending = false
                     },
                     onFailure = { isSending = false },
@@ -400,6 +411,7 @@ fun DmPageScreen(
                                 onCopyText = { copyToClipboard(m.content) },
                                 onReact = { dmVm.react(pubkey, m.id, it) },
                                 onOpenReactionPicker = { reactingTo = m.id },
+                                onReply = { replyingTo = m.id },
                             )
                             // Web parity (.dm-bubble max-width 75%): the spacer eats the other
                             // 25% on the bubble's growth side; the Box owns the 75% slot and
@@ -416,6 +428,15 @@ fun DmPageScreen(
                                     Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
                                         // A group naddr on its own line renders as the prototype
                                         // invite card (text above, card + View group button below).
+                                        // Quote of the message this one answers, above its body.
+                                        m.replyToId?.let { parentId ->
+                                            val parent = messages.firstOrNull { it.id == parentId }
+                                            ReplyQuote(
+                                                authorName = replyAuthorName(parent, userMetadata, name, myPubkey),
+                                                snippet = parent?.previewText() ?: "Message not loaded",
+                                                modifier = Modifier.padding(bottom = Spacing.xxs),
+                                            )
+                                        }
                                         val attachment = m.file
                                         val invite = remember(m.content) { extractDmGroupInvite(m.content) }
                                         val body = if (attachment != null) "" else invite?.remainingText ?: m.content
@@ -490,6 +511,9 @@ fun DmPageScreen(
             placeholder = "Message $name",
             isSending = isSending,
             modifier = Modifier.padding(horizontal = Spacing.lg).padding(bottom = Spacing.xl, top = Spacing.xs),
+            replyAuthorName = replyParent?.let { replyAuthorName(it, userMetadata, name, myPubkey) },
+            replySnippet = replyParent?.previewText(),
+            onCancelReply = { replyingTo = null },
             // A DM attachment is encrypted before it reaches a media server, so the picked bytes
             // go out as a kind:15 message instead of being uploaded and pasted as a url.
             onFilePicked = { bytes, filename ->
@@ -538,4 +562,22 @@ fun DmPageScreen(
             }
         }
     }
+}
+
+/**
+ * Name to show on a reply quote. The peer's own name is already in the header, so an unknown
+ * parent falls back to it rather than to a raw npub.
+ */
+private fun replyAuthorName(
+    parent: DmMessage?,
+    metadata: Map<String, UserMetadata>,
+    peerName: String,
+    myPubkey: String?,
+): String = when {
+    parent == null -> peerName
+    parent.senderPubkey == myPubkey -> "You"
+    else ->
+        metadata[parent.senderPubkey]?.displayName
+            ?: metadata[parent.senderPubkey]?.name
+            ?: peerName
 }
