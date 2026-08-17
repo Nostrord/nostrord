@@ -16,6 +16,7 @@ import org.nostr.nostrord.ui.screens.group.GroupViewModel
 import org.nostr.nostrord.ui.screens.group.deriveMembershipStatus
 import org.nostr.nostrord.utils.AppError
 import org.nostr.nostrord.utils.Result
+import org.nostr.nostrord.utils.groupKey
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -166,6 +167,21 @@ class GroupViewModelTest {
 
         assertEquals(listOf<Pair<String, String?>>("dev" to "wss://b"), fake.addedToList.toList())
         assertEquals(false, vm.canAddToMyList.value, "once listed there is nothing to add")
+    }
+
+    @Test
+    fun `a join request on one relay leaves the same id on another relay joinable`() = runTest {
+        val fake = FakeNostrRepository()
+        fake.fakePublicKey = "me"
+        fake._pendingApprovalSince.value = mapOf(groupKey("wss://a", "dev") to 1_000L)
+
+        val onA = GroupViewModel(fake, "dev", "wss://a")
+        val onB = GroupViewModel(fake, "dev", "wss://b")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(GroupMembership.PENDING, onA.membershipState.value.status)
+        assertEquals(1_000L, onA.membershipState.value.requestedAtSeconds)
+        assertEquals(GroupMembership.NONE, onB.membershipState.value.status, "another relay's request is a different group")
     }
 
     @Test

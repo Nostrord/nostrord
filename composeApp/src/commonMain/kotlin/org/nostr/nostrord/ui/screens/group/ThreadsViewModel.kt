@@ -451,11 +451,17 @@ class ThreadsViewModel(
             .map { restrictedHere(it) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), restrictedHere(repo.restrictedGroups.value))
 
-    /** A join request is in flight and no admin has answered yet. */
+    private fun pendingHere(pending: Map<String, Long>): Boolean = if (hostRelay != null) {
+        groupKey(hostRelay, groupId) in pending
+    } else {
+        pending.keys.any { groupKeyId(it) == groupId }
+    }
+
+    /** A join request is in flight on this group's relay and no admin has answered yet. */
     val isPendingApproval: StateFlow<Boolean> =
         repo.pendingApprovalSince
-            .map { groupId in it }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), groupId in repo.pendingApprovalSince.value)
+            .map { pendingHere(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), pendingHere(repo.pendingApprovalSince.value))
 
     private val membershipModel = GroupMembershipModel(repo, groupId, hostRelay, viewModelScope)
 

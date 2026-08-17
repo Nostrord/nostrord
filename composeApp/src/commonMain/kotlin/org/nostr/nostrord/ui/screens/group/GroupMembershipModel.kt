@@ -111,7 +111,14 @@ class GroupMembershipModel(
             // a left group is removed from our joined list, so a stale 9021 still echoed in a re-fetched
             // feed no longer reads as pending. (`leaveGroup` clears the feed and a re-fetch races, which
             // is why the feed alone left a left group stuck on "Request pending" until a reload.)
-            val localPendingAt = pendingByGroup[groupId]
+            // Relay-scoped like `joined`: a request sent to another relay's same-id group is a
+            // request to a different group and must not open this one on "Request pending".
+            val localPendingAt =
+                if (hostRelay != null) {
+                    pendingByGroup[groupKey(hostRelay, groupId)]
+                } else {
+                    pendingByGroup.entries.firstOrNull { groupKeyId(it.key) == groupId }?.value
+                }
             val ownEvents = messagesByGroup[groupId].orEmpty().asSequence()
                 .filter { it.pubkey == pubkey }
                 .filter { hostRelay == null || it.relayUrl == null || it.relayUrl == hostRelay }

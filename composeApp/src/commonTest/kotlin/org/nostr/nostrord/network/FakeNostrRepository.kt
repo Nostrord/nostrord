@@ -136,7 +136,8 @@ class FakeNostrRepository : NostrRepositoryApi {
     val _groupAdminsByRelay = MutableStateFlow<Map<String, Map<String, List<String>>>>(emptyMap())
     override val groupAdminsByRelay: StateFlow<Map<String, Map<String, List<String>>>> = _groupAdminsByRelay
     override val groupRolesByRelay: StateFlow<Map<String, Map<String, List<RoleDefinition>>>> = MutableStateFlow(emptyMap())
-    override val pendingApprovalSince: StateFlow<Map<String, Long>> = MutableStateFlow(emptyMap())
+    val _pendingApprovalSince = MutableStateFlow<Map<String, Long>>(emptyMap())
+    override val pendingApprovalSince: StateFlow<Map<String, Long>> = _pendingApprovalSince
     override val groupAdmins: StateFlow<Map<String, List<String>>> = _groupAdmins
     override val userMetadata: StateFlow<Map<String, UserMetadata>> = _userMetadata
     override val cachedEvents: StateFlow<Map<String, CachedEvent>> = _cachedEvents
