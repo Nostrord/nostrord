@@ -73,13 +73,28 @@ fun formatTimestamp(timestamp: Long): String {
     }
 }
 
+/**
+ * Days since 1970-01-01 for a civil date (proleptic Gregorian), by Howard Hinnant's days_from_civil.
+ * Calendar-exact: month lengths and leap years both count, which a fixed 30-day month does not.
+ */
+internal fun daysFromCivil(
+    year: Int,
+    month: Int,
+    day: Int,
+): Long {
+    // March-based year: the leap day lands last, so no month length depends on the leap rule.
+    val y = if (month <= 2) year - 1 else year
+    val era = (if (y >= 0) y else y - 399) / 400
+    val yearOfEra = y - era * 400
+    val monthFromMarch = (month + 9) % 12
+    val dayOfYear = (153 * monthFromMarch + 2) / 5 + day - 1
+    val dayOfEra = yearOfEra * 365L + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+    return era * 146_097L + dayOfEra - 719_468L
+}
+
 private fun calculateDaysDiff(
     date1: SimpleDateTime,
     date2: SimpleDateTime,
-): Int {
-    // Simple day difference calculation
-    val days1 = date1.year * 365 + date1.month * 30 + date1.day
-    val days2 = date2.year * 365 + date2.month * 30 + date2.day
-
-    return kotlin.math.abs(days1 - days2)
-}
+): Int = kotlin.math.abs(
+    daysFromCivil(date1.year, date1.month, date1.day) - daysFromCivil(date2.year, date2.month, date2.day),
+).toInt()
