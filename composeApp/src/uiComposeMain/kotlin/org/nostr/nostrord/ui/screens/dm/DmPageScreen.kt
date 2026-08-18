@@ -35,6 +35,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -68,6 +69,9 @@ import org.nostr.nostrord.ui.components.chat.DmEventSourceDialog
 import org.nostr.nostrord.ui.components.chat.DmMessageContextMenu
 import org.nostr.nostrord.ui.components.chat.DmRelaysDialog
 import org.nostr.nostrord.ui.components.chat.GroupInviteCard
+import org.nostr.nostrord.ui.components.chat.ImageViewerModal
+import org.nostr.nostrord.ui.components.chat.LocalAnimatedImageHidden
+import org.nostr.nostrord.ui.components.chat.LocalImageViewerUrl
 import org.nostr.nostrord.ui.components.chat.MessageComposer
 import org.nostr.nostrord.ui.components.chat.MessageContent
 import org.nostr.nostrord.ui.components.chat.ReactionBadges
@@ -205,6 +209,11 @@ fun DmPageScreen(
                 pinnedToBottom.value = messagesScroll.value >= messagesScroll.maxValue - 40
             }
         }
+        // Inline images in a message body report their tap through LocalImageViewerUrl. Its default
+        // is a throwaway state nobody reads, so a screen that renders message bodies has to provide
+        // one and show the viewer, or every tap on an image is silently dropped.
+        val imageViewerUrl = remember { mutableStateOf<String?>(null) }
+
         // Messages FROM THE PEER that landed while the reader stayed up in the history. Reported
         // on the jump pill so going back down is their decision with the count in hand. Own
         // messages are never counted: the reader wrote them, and writing already returns the view
@@ -378,194 +387,206 @@ fun DmPageScreen(
         HorizontalDivider(color = NostrordColors.Divider)
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(messagesScroll).padding(Spacing.lg),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            CompositionLocalProvider(
+                LocalAnimatedImageHidden provides (imageViewerUrl.value != null),
+                LocalImageViewerUrl provides imageViewerUrl,
             ) {
-                // Avatar + name open the peer's profile, like the header peer button.
-                OptimizedSmallAvatar(
-                    imageUrl = metadata?.picture,
-                    identifier = pubkey,
-                    displayName = name,
-                    size = 64.dp,
-                    shape = CircleShape,
-                    modifier = Modifier.clip(CircleShape).clickable { onOpenProfile(UserRoute(pubkey)) },
-                )
-                Spacer(modifier = Modifier.height(Spacing.sm))
-                Text(
-                    name,
-                    color = NostrordColors.TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier =
-                    Modifier
-                        .clip(NostrordShapes.shapeSmall)
-                        .clickable { onOpenProfile(UserRoute(pubkey)) }
-                        .padding(horizontal = Spacing.xs, vertical = Spacing.xxs),
-                )
-                Text(
-                    "Beginning of your direct conversation with $name. Direct messages are encrypted (NIP-17).",
-                    color = NostrordColors.TextMuted,
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.widthIn(max = 320.dp),
-                )
-                // Sitting above the thread, so older messages landing in are expected rather than
-                // startling. Sending stays available: no client can promise it holds every message.
-                if (syncing) {
-                    Row(
-                        modifier = Modifier.padding(vertical = Spacing.xs),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            color = NostrordColors.TextMuted,
-                            strokeWidth = 1.5.dp,
-                        )
-                        Text(
-                            "Catching up on older messages",
-                            color = NostrordColors.TextMuted,
-                            fontSize = 12.sp,
+                Column(
+                    modifier = Modifier.fillMaxSize().verticalScroll(messagesScroll).padding(Spacing.lg),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    // Avatar + name open the peer's profile, like the header peer button.
+                    OptimizedSmallAvatar(
+                        imageUrl = metadata?.picture,
+                        identifier = pubkey,
+                        displayName = name,
+                        size = 64.dp,
+                        shape = CircleShape,
+                        modifier = Modifier.clip(CircleShape).clickable { onOpenProfile(UserRoute(pubkey)) },
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    Text(
+                        name,
+                        color = NostrordColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier =
+                        Modifier
+                            .clip(NostrordShapes.shapeSmall)
+                            .clickable { onOpenProfile(UserRoute(pubkey)) }
+                            .padding(horizontal = Spacing.xs, vertical = Spacing.xxs),
+                    )
+                    Text(
+                        "Beginning of your direct conversation with $name. Direct messages are encrypted (NIP-17).",
+                        color = NostrordColors.TextMuted,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.widthIn(max = 320.dp),
+                    )
+                    // Sitting above the thread, so older messages landing in are expected rather than
+                    // startling. Sending stays available: no client can promise it holds every message.
+                    if (syncing) {
+                        Row(
+                            modifier = Modifier.padding(vertical = Spacing.xs),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                color = NostrordColors.TextMuted,
+                                strokeWidth = 1.5.dp,
+                            )
+                            Text(
+                                "Catching up on older messages",
+                                color = NostrordColors.TextMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                    val chatItems = remember(messages) { buildDmChatItems(messages) }
+                    var menuForId by remember { mutableStateOf<String?>(null) }
+                    var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
+                    var sourceForId by remember { mutableStateOf<String?>(null) }
+                    messages.firstOrNull { it.id == sourceForId }?.let { src ->
+                        DmEventSourceDialog(
+                            json = src.prettyEventJson(),
+                            relays = src.relays,
+                            onCopyJson = { copyToClipboard(src.eventJson()) },
+                            onDismiss = { sourceForId = null },
                         )
                     }
-                }
-                val chatItems = remember(messages) { buildDmChatItems(messages) }
-                var menuForId by remember { mutableStateOf<String?>(null) }
-                var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
-                var sourceForId by remember { mutableStateOf<String?>(null) }
-                messages.firstOrNull { it.id == sourceForId }?.let { src ->
-                    DmEventSourceDialog(
-                        json = src.prettyEventJson(),
-                        relays = src.relays,
-                        onCopyJson = { copyToClipboard(src.eventJson()) },
-                        onDismiss = { sourceForId = null },
-                    )
-                }
-                chatItems.forEach { item ->
-                    when (item) {
-                        is DmChatItem.DateSeparator -> DateSeparator(item.label)
-                        is DmChatItem.Message -> {
-                            val m = item.message
-                            // WhatsApp/Telegram-style: a small clock inside every bubble,
-                            // bottom-right under the text.
-                            Row(
-                                modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = if (item.firstInGroup) Spacing.sm else Spacing.xxs)
-                                    // Tap (mobile) / right-click (desktop) opens the context menu
-                                    // at the pointer, same interaction as group chat rows.
-                                    .then(
-                                        rightClickContextMenuModifier { clickOffset ->
-                                            menuAnchorPx = clickOffset
-                                            menuForId = m.id
-                                        },
-                                    ),
-                                verticalAlignment = Alignment.Bottom,
-                            ) {
-                                DmMessageContextMenu(
-                                    visible = menuForId == m.id,
-                                    anchorOffsetPx = menuAnchorPx,
-                                    onDismiss = { menuForId = null },
-                                    onViewSource = { sourceForId = m.id },
-                                    onCopyText = { copyToClipboard(m.content) },
-                                    onReact = { dmVm.react(pubkey, m.id, it) },
-                                    onOpenReactionPicker = { reactingTo = m.id },
-                                    onReply = { replyingTo = m.id },
-                                )
-                                // Web parity (.dm-bubble max-width 75%): the spacer eats the other
-                                // 25% on the bubble's growth side; the Box owns the 75% slot and
-                                // pins the bubble to the correct edge inside it.
-                                if (m.mine) Spacer(modifier = Modifier.weight(0.25f))
-                                Box(
-                                    modifier = Modifier.weight(0.75f),
-                                    contentAlignment = if (m.mine) Alignment.BottomEnd else Alignment.BottomStart,
+                    chatItems.forEach { item ->
+                        when (item) {
+                            is DmChatItem.DateSeparator -> DateSeparator(item.label)
+                            is DmChatItem.Message -> {
+                                val m = item.message
+                                // WhatsApp/Telegram-style: a small clock inside every bubble,
+                                // bottom-right under the text.
+                                Row(
+                                    modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = if (item.firstInGroup) Spacing.sm else Spacing.xxs)
+                                        // Tap (mobile) / right-click (desktop) opens the context menu
+                                        // at the pointer, same interaction as group chat rows.
+                                        .then(
+                                            rightClickContextMenuModifier { clickOffset ->
+                                                menuAnchorPx = clickOffset
+                                                menuForId = m.id
+                                            },
+                                        ),
+                                    verticalAlignment = Alignment.Bottom,
                                 ) {
-                                    Surface(
-                                        shape = NostrordShapes.shapeMedium,
-                                        color = if (m.mine) NostrordColors.Primary else NostrordColors.BackgroundFloating,
+                                    DmMessageContextMenu(
+                                        visible = menuForId == m.id,
+                                        anchorOffsetPx = menuAnchorPx,
+                                        onDismiss = { menuForId = null },
+                                        onViewSource = { sourceForId = m.id },
+                                        onCopyText = { copyToClipboard(m.content) },
+                                        onReact = { dmVm.react(pubkey, m.id, it) },
+                                        onOpenReactionPicker = { reactingTo = m.id },
+                                        onReply = { replyingTo = m.id },
+                                    )
+                                    // Web parity (.dm-bubble max-width 75%): the spacer eats the other
+                                    // 25% on the bubble's growth side; the Box owns the 75% slot and
+                                    // pins the bubble to the correct edge inside it.
+                                    if (m.mine) Spacer(modifier = Modifier.weight(0.25f))
+                                    Box(
+                                        modifier = Modifier.weight(0.75f),
+                                        contentAlignment = if (m.mine) Alignment.BottomEnd else Alignment.BottomStart,
                                     ) {
-                                        Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
-                                            // A group naddr on its own line renders as the prototype
-                                            // invite card (text above, card + View group button below).
-                                            // Quote of the message this one answers, above its body.
-                                            m.replyToId?.let { parentId ->
-                                                val parent = messages.firstOrNull { it.id == parentId }
-                                                ReplyQuote(
-                                                    authorName = replyAuthorName(parent, userMetadata, name, myPubkey),
-                                                    snippet = parent?.previewText() ?: "Message not loaded",
-                                                    modifier = Modifier.padding(bottom = Spacing.xxs),
-                                                )
-                                            }
-                                            val attachment = m.file
-                                            val invite = remember(m.content) { extractDmGroupInvite(m.content) }
-                                            val body = if (attachment != null) "" else invite?.remainingText ?: m.content
-                                            if (attachment != null) {
-                                                DmAttachment(
-                                                    file = attachment,
-                                                    state = dmFiles[m.id],
-                                                    onLoad = { dmVm.loadFile(m) },
-                                                    onRetry = { dmVm.retryFile(m) },
-                                                    onImage = m.mine,
-                                                )
-                                            }
-                                            if (body.isNotBlank()) {
-                                                // Rich body: inline images/video/audio/links/mentions/markdown,
-                                                // reusing the group chat renderer. White text on the "mine" bubble.
-                                                MessageContent(
-                                                    content = body,
-                                                    // The rumor's own tags: custom emoji and the imeta
-                                                    // hints that pre-size an inline image, same as chat.
-                                                    tags = m.tags,
-                                                    onMentionClick = { onOpenProfile(UserRoute(it)) },
-                                                    textColor = if (m.mine) Color.White else NostrordColors.TextPrimary,
-                                                )
-                                            }
-                                            if (invite != null) {
-                                                GroupInviteCard(
-                                                    groupId = invite.groupId,
-                                                    relayUrl = invite.relayUrl,
-                                                    onOpen = { onOpenGroup(invite.relayUrl, invite.groupId) },
-                                                    modifier = Modifier.padding(vertical = Spacing.xxs),
-                                                )
-                                            }
-                                            // Time + send-state (clock while Sending, check once Delivered),
-                                            // reusing the group chat's SendStateIcon on own messages.
-                                            Row(
-                                                modifier = Modifier.align(Alignment.End).padding(top = Spacing.xxs),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                            ) {
-                                                Text(
-                                                    formatTime(m.createdAt),
-                                                    color = if (m.mine) Color.White.copy(alpha = 0.7f) else NostrordColors.TextMuted,
-                                                    fontSize = 10.sp,
-                                                )
-                                                if (m.mine) {
-                                                    dmStatus[m.id]?.let { st ->
-                                                        SendStateIcon(status = st, tint = Color.White.copy(alpha = 0.7f))
+                                        Surface(
+                                            shape = NostrordShapes.shapeMedium,
+                                            color = if (m.mine) NostrordColors.Primary else NostrordColors.BackgroundFloating,
+                                        ) {
+                                            Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+                                                // A group naddr on its own line renders as the prototype
+                                                // invite card (text above, card + View group button below).
+                                                // Quote of the message this one answers, above its body.
+                                                m.replyToId?.let { parentId ->
+                                                    val parent = messages.firstOrNull { it.id == parentId }
+                                                    ReplyQuote(
+                                                        authorName = replyAuthorName(parent, userMetadata, name, myPubkey),
+                                                        snippet = parent?.previewText() ?: "Message not loaded",
+                                                        modifier = Modifier.padding(bottom = Spacing.xxs),
+                                                    )
+                                                }
+                                                val attachment = m.file
+                                                val invite = remember(m.content) { extractDmGroupInvite(m.content) }
+                                                val body = if (attachment != null) "" else invite?.remainingText ?: m.content
+                                                if (attachment != null) {
+                                                    DmAttachment(
+                                                        file = attachment,
+                                                        state = dmFiles[m.id],
+                                                        onLoad = { dmVm.loadFile(m) },
+                                                        onRetry = { dmVm.retryFile(m) },
+                                                        onImage = m.mine,
+                                                    )
+                                                }
+                                                if (body.isNotBlank()) {
+                                                    // Rich body: inline images/video/audio/links/mentions/markdown,
+                                                    // reusing the group chat renderer. White text on the "mine" bubble.
+                                                    MessageContent(
+                                                        content = body,
+                                                        // The rumor's own tags: custom emoji and the imeta
+                                                        // hints that pre-size an inline image, same as chat.
+                                                        tags = m.tags,
+                                                        onMentionClick = { onOpenProfile(UserRoute(it)) },
+                                                        textColor = if (m.mine) Color.White else NostrordColors.TextPrimary,
+                                                    )
+                                                }
+                                                if (invite != null) {
+                                                    GroupInviteCard(
+                                                        groupId = invite.groupId,
+                                                        relayUrl = invite.relayUrl,
+                                                        onOpen = { onOpenGroup(invite.relayUrl, invite.groupId) },
+                                                        modifier = Modifier.padding(vertical = Spacing.xxs),
+                                                    )
+                                                }
+                                                // Time + send-state (clock while Sending, check once Delivered),
+                                                // reusing the group chat's SendStateIcon on own messages.
+                                                Row(
+                                                    modifier = Modifier.align(Alignment.End).padding(top = Spacing.xxs),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Text(
+                                                        formatTime(m.createdAt),
+                                                        color = if (m.mine) Color.White.copy(alpha = 0.7f) else NostrordColors.TextMuted,
+                                                        fontSize = 10.sp,
+                                                    )
+                                                    if (m.mine) {
+                                                        dmStatus[m.id]?.let { st ->
+                                                            SendStateIcon(status = st, tint = Color.White.copy(alpha = 0.7f))
+                                                        }
                                                     }
                                                 }
-                                            }
-                                            // Reactions sit inside the bubble so they follow its edge,
-                                            // the way the group chat hangs them under a message.
-                                            dmReactions[m.id]?.let { byEmoji ->
-                                                ReactionBadges(
-                                                    reactions = byEmoji,
-                                                    currentUserPubkey = myPubkey,
-                                                    resolveMetadata = { userMetadata[it] },
-                                                    onReactionClick = { emoji -> dmVm.react(pubkey, m.id, emoji) },
-                                                    modifier = Modifier.padding(top = Spacing.xxs),
-                                                )
+                                                // Reactions sit inside the bubble so they follow its edge,
+                                                // the way the group chat hangs them under a message.
+                                                dmReactions[m.id]?.let { byEmoji ->
+                                                    ReactionBadges(
+                                                        reactions = byEmoji,
+                                                        currentUserPubkey = myPubkey,
+                                                        resolveMetadata = { userMetadata[it] },
+                                                        onReactionClick = { emoji -> dmVm.react(pubkey, m.id, emoji) },
+                                                        modifier = Modifier.padding(top = Spacing.xxs),
+                                                    )
+                                                }
                                             }
                                         }
                                     }
+                                    if (!m.mine) Spacer(modifier = Modifier.weight(0.25f))
                                 }
-                                if (!m.mine) Spacer(modifier = Modifier.weight(0.25f))
                             }
                         }
                     }
                 }
+            } // CompositionLocalProvider
+
+            imageViewerUrl.value?.let { url ->
+                ImageViewerModal(
+                    imageUrl = url,
+                    onDismiss = { imageViewerUrl.value = null },
+                )
             }
 
             // Returning to the newest message is a tap, never something the feed does on its own.
