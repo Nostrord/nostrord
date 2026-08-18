@@ -546,7 +546,7 @@ fun DmPageScreen(
                                                 // Time + send-state (clock while Sending, check once Delivered),
                                                 // reusing the group chat's SendStateIcon on own messages.
                                                 Row(
-                                                    modifier = Modifier.align(Alignment.End).padding(top = Spacing.xxs),
+                                                    modifier = Modifier.align(Alignment.End).padding(top = Spacing.xs),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                 ) {
                                                     Text(

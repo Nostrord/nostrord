@@ -336,7 +336,9 @@ fun MessageContent(
                 if (group.size == 1 && isBlockPart(firstPart!!)) {
                     when (firstPart) {
                         is ImagePart -> {
-                            Spacer(modifier = Modifier.height(8.dp))
+                            // 4dp above and nothing below: the web's `.msg-image { margin-top: 4px }`,
+                            // whose own bottom spacing comes from whatever follows it.
+                            Spacer(modifier = Modifier.height(4.dp))
                             GatedMedia(
                                 autoLoad = autoLoadMedia,
                                 label = "image",
@@ -347,7 +349,6 @@ fun MessageContent(
                                     onClick = { selectedImageUrl = firstPart.url },
                                 )
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
                         }
                         is CodeBlockPart -> {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -1235,6 +1236,10 @@ private fun ChatImage(
     modifier: Modifier = Modifier,
 ) {
     var showError by remember(imageUrl) { mutableStateOf(false) }
+    // The decoded size, once known. It stands in for a missing imeta hint: without either, the
+    // slot keeps its square placeholder floor, and a wide, short image sits letterboxed in it
+    // with the bubble padded out around the empty space. Mirrors the web reading naturalWidth.
+    var decodedSize by remember(imageUrl) { mutableStateOf<Pair<Int, Int>?>(null) }
 
     if (showError) {
         Text(
@@ -1251,17 +1256,20 @@ private fun ChatImage(
     // of filling the column. When NIP-68 dimensions are known we also fix the
     // aspect ratio so the slot is reserved before the load resolves; portrait
     // images match the height cap first, landscape the width cap.
+    val slotSize = dimensions ?: decodedSize
     val sizeModifier =
-        if (dimensions != null) {
-            val (w, h) = dimensions
+        if (slotSize != null) {
+            val (w, h) = slotSize
             val ratio = w.toFloat() / h.toFloat()
             Modifier
                 .widthIn(max = INLINE_MEDIA_MAX_WIDTH.dp)
                 .heightIn(max = INLINE_MEDIA_MAX_HEIGHT.dp)
                 .aspectRatio(ratio, matchHeightConstraintsFirst = ratio < 1f)
         } else {
-            // No imeta hint: floor the slot so the loading skeleton is visible and the row
-            // doesn't grow from nothing when the bitmap resolves.
+            // Size unknown so far: floor the slot so the loading skeleton is visible and the row
+            // doesn't grow from nothing when the bitmap resolves. Dropped the moment the decode
+            // reports a real size, which is what keeps a wide image from sitting letterboxed in a
+            // square box with the bubble padded out around it.
             Modifier
                 .widthIn(max = INLINE_MEDIA_MAX_WIDTH.dp)
                 .heightIn(max = INLINE_MEDIA_MAX_HEIGHT.dp)
@@ -1280,6 +1288,7 @@ private fun ChatImage(
         )
     } else {
         StaticImage(
+            onIntrinsicSize = { w, h -> if (w > 0 && h > 0) decodedSize = w to h },
             url = imageUrl,
             modifier =
             modifier

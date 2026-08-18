@@ -33,6 +33,7 @@ actual fun StaticImage(
     contentScale: ContentScale,
     onClick: () -> Unit,
     onError: () -> Unit,
+    onIntrinsicSize: (width: Int, height: Int) -> Unit,
 ) {
     val context = LocalPlatformContext.current
     // Inline base64 image: decode to bytes and hand them straight to Coil (no proxy/retry).
@@ -67,6 +68,7 @@ actual fun StaticImage(
             when (state) {
                 is AsyncImagePainter.State.Success -> {
                     loading = false
+                    onIntrinsicSize(state.result.image.width, state.result.image.height)
                     backdrop = sampleImageArgb(state.result.image)?.let(::decideImageBackdrop)
                 }
                 is AsyncImagePainter.State.Error -> {

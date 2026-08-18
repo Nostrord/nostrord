@@ -24,6 +24,8 @@ import org.nostr.nostrord.ui.image.ImageBackdrop
  * [contentScale] How to scale the image within its bounds.
  * [onClick]      Invoked when the user taps/clicks the image.
  * [onError]      Invoked if the image fails to load (so the caller can show a fallback).
+ * [onIntrinsicSize] Reports the decoded pixel size, which stands in for a missing NIP-68 `imeta`
+ *                 hint so the slot can take the image's real shape instead of the square floor.
  */
 @Composable
 expect fun StaticImage(
@@ -32,6 +34,7 @@ expect fun StaticImage(
     contentScale: ContentScale = ContentScale.Fit,
     onClick: () -> Unit = {},
     onError: () -> Unit = {},
+    onIntrinsicSize: (width: Int, height: Int) -> Unit = { _, _ -> },
 )
 
 /**
