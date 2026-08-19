@@ -258,17 +258,27 @@ fun DmPageScreen(
         val send = {
             val body = textFieldValue.text.trim()
             if (body.isNotBlank() && !isSending) {
+                // Snapshot for restore-on-failure (GroupScreen does the same). The field clears
+                // in the gesture that sent: the publish round-trip runs for as long as the signer
+                // takes, and a draft still sitting there reads as "not sent".
+                val sentValue = textFieldValue
+                val sentReply = replyParent?.id
                 isSending = true
+                textFieldValue = TextFieldValue("")
+                replyingTo = null
                 dmVm.send(
                     pubkey,
                     body,
-                    replyToId = replyParent?.id,
-                    onSuccess = {
-                        textFieldValue = TextFieldValue("")
-                        replyingTo = null
+                    replyToId = sentReply,
+                    onSuccess = { isSending = false },
+                    onFailure = {
                         isSending = false
+                        // Push it back for a retry, unless a new message was started.
+                        if (textFieldValue.text.isBlank()) {
+                            textFieldValue = sentValue
+                            replyingTo = sentReply
+                        }
                     },
-                    onFailure = { isSending = false },
                 )
             }
         }
