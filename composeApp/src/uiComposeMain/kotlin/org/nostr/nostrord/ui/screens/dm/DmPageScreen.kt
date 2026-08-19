@@ -190,6 +190,8 @@ fun DmPageScreen(
         LaunchedEffect(replyingTo, replyFocusNonce) {
             if (replyingTo != null) runCatching { composerFocus.requestFocus() }
         }
+        // Second tick: the wrap reached every inbox relay this peer publishes.
+        val fullyDelivered by dmVm.fullyDelivered.collectAsState()
         // Resolve where this peer reads before the first message is written, not after their reply.
         LaunchedEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -581,7 +583,11 @@ fun DmPageScreen(
                                                     )
                                                     if (m.mine) {
                                                         dmStatus[m.id]?.let { st ->
-                                                            SendStateIcon(status = st, tint = Color.White.copy(alpha = 0.7f))
+                                                            SendStateIcon(
+                                                                status = st,
+                                                                tint = Color.White.copy(alpha = 0.7f),
+                                                                allInboxes = m.id in fullyDelivered,
+                                                            )
                                                         }
                                                     }
                                                 }

@@ -145,7 +145,8 @@ class FakeNostrRepository : NostrRepositoryApi {
     override val cachedEvents: StateFlow<Map<String, CachedEvent>> = _cachedEvents
     override val unreadByGroupKey: StateFlow<Map<String, Int>> = _unreadByGroupKey
     override val dmConversations: StateFlow<List<DmConversation>> = MutableStateFlow(emptyList())
-    override val dmMessagesByPeer: StateFlow<Map<String, List<DmMessage>>> = MutableStateFlow(emptyMap())
+    val dmMessagesByPeerFlow = MutableStateFlow<Map<String, List<DmMessage>>>(emptyMap())
+    override val dmMessagesByPeer: StateFlow<Map<String, List<DmMessage>>> = dmMessagesByPeerFlow
     override val dmUnreadByPeer: StateFlow<Map<String, Int>> = MutableStateFlow(emptyMap())
     override val totalDmUnread: StateFlow<Int> = MutableStateFlow(0)
     val lastDmPeerFlow = MutableStateFlow<String?>(null)
