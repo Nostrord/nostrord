@@ -86,6 +86,7 @@ class DmViewModel(
         val file = message.file ?: return
         repo.retryDmFile(message.id, file)
     }
+
     /**
      * Rumor ids of our own messages whose wrap every one of the recipient's kind:10050 inbox
      * relays accepted: the second tick.

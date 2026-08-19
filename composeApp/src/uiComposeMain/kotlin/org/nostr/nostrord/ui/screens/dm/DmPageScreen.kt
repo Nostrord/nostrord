@@ -522,99 +522,99 @@ fun DmPageScreen(
                                         // The failure row hangs under the bubble, so the bubble and it
                                         // stack in a column inside the 75% slot.
                                         Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
-                                        Surface(
-                                            shape = NostrordShapes.shapeMedium,
-                                            color = if (m.mine) NostrordColors.Primary else NostrordColors.BackgroundFloating,
-                                        ) {
-                                            Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
-                                                // A group naddr on its own line renders as the prototype
-                                                // invite card (text above, card + View group button below).
-                                                // Quote of the message this one answers, above its body.
-                                                m.replyToId?.let { parentId ->
-                                                    val parent = messages.firstOrNull { it.id == parentId }
-                                                    ReplyQuote(
-                                                        authorName = replyAuthorName(parent, userMetadata, name, myPubkey),
-                                                        snippet = parent?.previewText() ?: "Message not loaded",
-                                                        modifier = Modifier.padding(bottom = Spacing.xxs),
-                                                    )
-                                                }
-                                                val attachment = m.file
-                                                val invite = remember(m.content) { extractDmGroupInvite(m.content) }
-                                                val body = if (attachment != null) "" else invite?.remainingText ?: m.content
-                                                if (attachment != null) {
-                                                    DmAttachment(
-                                                        file = attachment,
-                                                        state = dmFiles[m.id],
-                                                        onLoad = { dmVm.loadFile(m) },
-                                                        onRetry = { dmVm.retryFile(m) },
-                                                        onImage = m.mine,
-                                                    )
-                                                }
-                                                if (body.isNotBlank()) {
-                                                    // Rich body: inline images/video/audio/links/mentions/markdown,
-                                                    // reusing the group chat renderer. White text on the "mine" bubble.
-                                                    MessageContent(
-                                                        content = body,
-                                                        // The rumor's own tags: custom emoji and the imeta
-                                                        // hints that pre-size an inline image, same as chat.
-                                                        tags = m.tags,
-                                                        onMentionClick = { onOpenProfile(UserRoute(it)) },
-                                                        textColor = if (m.mine) Color.White else NostrordColors.TextPrimary,
-                                                    )
-                                                }
-                                                if (invite != null) {
-                                                    GroupInviteCard(
-                                                        groupId = invite.groupId,
-                                                        relayUrl = invite.relayUrl,
-                                                        onOpen = { onOpenGroup(invite.relayUrl, invite.groupId) },
-                                                        modifier = Modifier.padding(vertical = Spacing.xxs),
-                                                    )
-                                                }
-                                                // Time + send-state (clock while Sending, check once Delivered),
-                                                // reusing the group chat's SendStateIcon on own messages.
-                                                Row(
-                                                    modifier = Modifier.align(Alignment.End).padding(top = Spacing.xs),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                ) {
-                                                    Text(
-                                                        formatTime(m.createdAt),
-                                                        color = if (m.mine) Color.White.copy(alpha = 0.7f) else NostrordColors.TextMuted,
-                                                        fontSize = 10.sp,
-                                                    )
-                                                    if (m.mine) {
-                                                        dmStatus[m.id]?.let { st ->
-                                                            SendStateIcon(
-                                                                status = st,
-                                                                tint = Color.White.copy(alpha = 0.7f),
-                                                                allInboxes = m.id in fullyDelivered,
-                                                            )
+                                            Surface(
+                                                shape = NostrordShapes.shapeMedium,
+                                                color = if (m.mine) NostrordColors.Primary else NostrordColors.BackgroundFloating,
+                                            ) {
+                                                Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+                                                    // A group naddr on its own line renders as the prototype
+                                                    // invite card (text above, card + View group button below).
+                                                    // Quote of the message this one answers, above its body.
+                                                    m.replyToId?.let { parentId ->
+                                                        val parent = messages.firstOrNull { it.id == parentId }
+                                                        ReplyQuote(
+                                                            authorName = replyAuthorName(parent, userMetadata, name, myPubkey),
+                                                            snippet = parent?.previewText() ?: "Message not loaded",
+                                                            modifier = Modifier.padding(bottom = Spacing.xxs),
+                                                        )
+                                                    }
+                                                    val attachment = m.file
+                                                    val invite = remember(m.content) { extractDmGroupInvite(m.content) }
+                                                    val body = if (attachment != null) "" else invite?.remainingText ?: m.content
+                                                    if (attachment != null) {
+                                                        DmAttachment(
+                                                            file = attachment,
+                                                            state = dmFiles[m.id],
+                                                            onLoad = { dmVm.loadFile(m) },
+                                                            onRetry = { dmVm.retryFile(m) },
+                                                            onImage = m.mine,
+                                                        )
+                                                    }
+                                                    if (body.isNotBlank()) {
+                                                        // Rich body: inline images/video/audio/links/mentions/markdown,
+                                                        // reusing the group chat renderer. White text on the "mine" bubble.
+                                                        MessageContent(
+                                                            content = body,
+                                                            // The rumor's own tags: custom emoji and the imeta
+                                                            // hints that pre-size an inline image, same as chat.
+                                                            tags = m.tags,
+                                                            onMentionClick = { onOpenProfile(UserRoute(it)) },
+                                                            textColor = if (m.mine) Color.White else NostrordColors.TextPrimary,
+                                                        )
+                                                    }
+                                                    if (invite != null) {
+                                                        GroupInviteCard(
+                                                            groupId = invite.groupId,
+                                                            relayUrl = invite.relayUrl,
+                                                            onOpen = { onOpenGroup(invite.relayUrl, invite.groupId) },
+                                                            modifier = Modifier.padding(vertical = Spacing.xxs),
+                                                        )
+                                                    }
+                                                    // Time + send-state (clock while Sending, check once Delivered),
+                                                    // reusing the group chat's SendStateIcon on own messages.
+                                                    Row(
+                                                        modifier = Modifier.align(Alignment.End).padding(top = Spacing.xs),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
+                                                        Text(
+                                                            formatTime(m.createdAt),
+                                                            color = if (m.mine) Color.White.copy(alpha = 0.7f) else NostrordColors.TextMuted,
+                                                            fontSize = 10.sp,
+                                                        )
+                                                        if (m.mine) {
+                                                            dmStatus[m.id]?.let { st ->
+                                                                SendStateIcon(
+                                                                    status = st,
+                                                                    tint = Color.White.copy(alpha = 0.7f),
+                                                                    allInboxes = m.id in fullyDelivered,
+                                                                )
+                                                            }
                                                         }
                                                     }
+                                                    // Reactions sit inside the bubble so they follow its edge,
+                                                    // the way the group chat hangs them under a message.
+                                                    dmReactions[m.id]?.let { byEmoji ->
+                                                        ReactionBadges(
+                                                            reactions = byEmoji,
+                                                            currentUserPubkey = myPubkey,
+                                                            resolveMetadata = { userMetadata[it] },
+                                                            onReactionClick = { emoji -> dmVm.react(pubkey, m.id, emoji) },
+                                                            modifier = Modifier.padding(top = Spacing.xxs),
+                                                        )
+                                                    }
                                                 }
-                                                // Reactions sit inside the bubble so they follow its edge,
-                                                // the way the group chat hangs them under a message.
-                                                dmReactions[m.id]?.let { byEmoji ->
-                                                    ReactionBadges(
-                                                        reactions = byEmoji,
-                                                        currentUserPubkey = myPubkey,
-                                                        resolveMetadata = { userMetadata[it] },
-                                                        onReactionClick = { emoji -> dmVm.react(pubkey, m.id, emoji) },
-                                                        modifier = Modifier.padding(top = Spacing.xxs),
+                                            }
+                                            // Every relay refused it: "Not delivered" with Retry / Dismiss,
+                                            // the same row the group chat shows, under the bubble.
+                                            if (m.mine) {
+                                                dmStatus[m.id]?.let { st ->
+                                                    MessageStatusIndicator(
+                                                        status = st,
+                                                        onRetry = { dmVm.retry(m.id) },
+                                                        onDismiss = { dmVm.dismiss(m.id) },
                                                     )
                                                 }
                                             }
-                                        }
-                                        // Every relay refused it: "Not delivered" with Retry / Dismiss,
-                                        // the same row the group chat shows, under the bubble.
-                                        if (m.mine) {
-                                            dmStatus[m.id]?.let { st ->
-                                                MessageStatusIndicator(
-                                                    status = st,
-                                                    onRetry = { dmVm.retry(m.id) },
-                                                    onDismiss = { dmVm.dismiss(m.id) },
-                                                )
-                                            }
-                                        }
                                         }
                                     }
                                     if (!m.mine) Spacer(modifier = Modifier.weight(0.25f))

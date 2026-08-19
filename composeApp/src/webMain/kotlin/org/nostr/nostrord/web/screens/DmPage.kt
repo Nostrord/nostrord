@@ -542,94 +542,94 @@ val DmPage =
                                     // native); hover shows the full date. The column wrapper lets the
                                     // failure row hang under the bubble instead of inside it.
                                     div {
-                                    className = ClassName("dm-msg-col")
-                                    div {
-                                        className = ClassName("dm-bubble")
-                                        title = formatDateTime(m.createdAt)
-                                        // A group naddr on its own line renders as the prototype
-                                        // invite card (text above, card + View group button below).
-                                        // Quote of the message this one answers, above its body.
-                                        m.replyToId?.let { parentId ->
-                                            val parent = messages.firstOrNull { it.id == parentId }
-                                            div {
-                                                className = ClassName("msg-reply")
-                                                div { className = ClassName("msg-reply-bar") }
+                                        className = ClassName("dm-msg-col")
+                                        div {
+                                            className = ClassName("dm-bubble")
+                                            title = formatDateTime(m.createdAt)
+                                            // A group naddr on its own line renders as the prototype
+                                            // invite card (text above, card + View group button below).
+                                            // Quote of the message this one answers, above its body.
+                                            m.replyToId?.let { parentId ->
+                                                val parent = messages.firstOrNull { it.id == parentId }
                                                 div {
-                                                    className = ClassName("msg-reply-content")
+                                                    className = ClassName("msg-reply")
+                                                    div { className = ClassName("msg-reply-bar") }
                                                     div {
-                                                        className = ClassName("msg-reply-author")
-                                                        +dmReplyAuthorName(parent, userMetadata, name, myPubkey)
-                                                    }
-                                                    parent?.let { p ->
+                                                        className = ClassName("msg-reply-content")
                                                         div {
-                                                            className = ClassName("msg-reply-text")
-                                                            +p.previewText()
+                                                            className = ClassName("msg-reply-author")
+                                                            +dmReplyAuthorName(parent, userMetadata, name, myPubkey)
+                                                        }
+                                                        parent?.let { p ->
+                                                            div {
+                                                                className = ClassName("msg-reply-text")
+                                                                +p.previewText()
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
-                                        }
-                                        val attachment = m.file
-                                        val invite = extractDmGroupInvite(m.content)
-                                        val body = if (attachment != null) "" else invite?.remainingText ?: m.content
-                                        if (attachment != null) {
-                                            DmAttachment {
-                                                file = attachment
-                                                state = dmFiles[m.id]
-                                                onLoad = { dmVm.loadFile(m) }
-                                                onRetry = { dmVm.retryFile(m) }
+                                            val attachment = m.file
+                                            val invite = extractDmGroupInvite(m.content)
+                                            val body = if (attachment != null) "" else invite?.remainingText ?: m.content
+                                            if (attachment != null) {
+                                                DmAttachment {
+                                                    file = attachment
+                                                    state = dmFiles[m.id]
+                                                    onLoad = { dmVm.loadFile(m) }
+                                                    onRetry = { dmVm.retryFile(m) }
+                                                }
+                                            }
+                                            if (body.isNotBlank()) {
+                                                // Rich body: inline images/video/audio/links/mentions/markdown,
+                                                // reusing the group chat renderer (same package).
+                                                renderMessageContent(
+                                                    body,
+                                                    // The rumor's own tags: custom emoji and the imeta
+                                                    // hints that pre-size an inline image, same as chat.
+                                                    m.tags,
+                                                    userMetadata,
+                                                    emptyMap(),
+                                                    { props.onOpenProfile(UserRoute(it)) },
+                                                    {},
+                                                    { gid, relay -> relay?.let { props.onOpenGroup(GroupRoute(it, gid)) } },
+                                                    // A DM is not in a group: the by-id REQ stays unscoped
+                                                    // and there is no host relay to compare a quote against.
+                                                    null,
+                                                    "",
+                                                )
+                                            }
+                                            if (invite != null) {
+                                                GroupInviteCard {
+                                                    groupId = invite.groupId
+                                                    relayUrl = invite.relayUrl
+                                                    onOpen = { props.onOpenGroup(GroupRoute(invite.relayUrl, invite.groupId)) }
+                                                }
+                                            }
+                                            span {
+                                                className = ClassName("dm-bubble-time")
+                                                +formatTime(m.createdAt)
+                                                // Send state on own messages: clock while Sending, check
+                                                // once a relay OKs the wrap (reuses the group chat icon).
+                                                if (m.mine) sendStateIcon(dmStatus[m.id], m.id in fullyDelivered)
+                                            }
+                                            // Reactions hang inside the bubble so they follow its edge,
+                                            // the way the group chat renders them under a message.
+                                            dmReactions[m.id]?.let { byEmoji ->
+                                                reactionBadges(byEmoji, emptyList(), myPubkey, userMetadata) { emoji ->
+                                                    dmVm.react(pubkey, m.id, emoji)
+                                                }
                                             }
                                         }
-                                        if (body.isNotBlank()) {
-                                            // Rich body: inline images/video/audio/links/mentions/markdown,
-                                            // reusing the group chat renderer (same package).
-                                            renderMessageContent(
-                                                body,
-                                                // The rumor's own tags: custom emoji and the imeta
-                                                // hints that pre-size an inline image, same as chat.
-                                                m.tags,
-                                                userMetadata,
-                                                emptyMap(),
-                                                { props.onOpenProfile(UserRoute(it)) },
-                                                {},
-                                                { gid, relay -> relay?.let { props.onOpenGroup(GroupRoute(it, gid)) } },
-                                                // A DM is not in a group: the by-id REQ stays unscoped
-                                                // and there is no host relay to compare a quote against.
-                                                null,
-                                                "",
+                                        // Every relay refused it: "Not delivered" with Retry / Dismiss,
+                                        // the same row the group chat shows, under the bubble.
+                                        if (m.mine) {
+                                            messageSendStatus(
+                                                status = dmStatus[m.id],
+                                                onRetry = { dmVm.retry(m.id) },
+                                                onDismiss = { dmVm.dismiss(m.id) },
                                             )
                                         }
-                                        if (invite != null) {
-                                            GroupInviteCard {
-                                                groupId = invite.groupId
-                                                relayUrl = invite.relayUrl
-                                                onOpen = { props.onOpenGroup(GroupRoute(invite.relayUrl, invite.groupId)) }
-                                            }
-                                        }
-                                        span {
-                                            className = ClassName("dm-bubble-time")
-                                            +formatTime(m.createdAt)
-                                            // Send state on own messages: clock while Sending, check
-                                            // once a relay OKs the wrap (reuses the group chat icon).
-                                            if (m.mine) sendStateIcon(dmStatus[m.id], m.id in fullyDelivered)
-                                        }
-                                        // Reactions hang inside the bubble so they follow its edge,
-                                        // the way the group chat renders them under a message.
-                                        dmReactions[m.id]?.let { byEmoji ->
-                                            reactionBadges(byEmoji, emptyList(), myPubkey, userMetadata) { emoji ->
-                                                dmVm.react(pubkey, m.id, emoji)
-                                            }
-                                        }
-                                    }
-                                    // Every relay refused it: "Not delivered" with Retry / Dismiss,
-                                    // the same row the group chat shows, under the bubble.
-                                    if (m.mine) {
-                                        messageSendStatus(
-                                            status = dmStatus[m.id],
-                                            onRetry = { dmVm.retry(m.id) },
-                                            onDismiss = { dmVm.dismiss(m.id) },
-                                        )
-                                    }
                                     }
                                 }
                             }
