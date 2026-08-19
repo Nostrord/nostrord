@@ -136,6 +136,8 @@ val DmPage =
         val (replyingTo, setReplyingTo) = useState<String?> { null }
         // Bumped per Reply pick so replying twice to the same message re-focuses the composer.
         val (replyNonce, setReplyNonce) = useState { 0 }
+        // Second tick: the wrap reached every inbox relay this peer publishes.
+        val fullyDelivered = useStateFlow(dmVm.fullyDelivered)
         // Resolve where this peer reads before the first message is written, not after their reply.
         useEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -609,7 +611,7 @@ val DmPage =
                                             +formatTime(m.createdAt)
                                             // Send state on own messages: clock while Sending, check
                                             // once a relay OKs the wrap (reuses the group chat icon).
-                                            if (m.mine) sendStateIcon(dmStatus[m.id])
+                                            if (m.mine) sendStateIcon(dmStatus[m.id], m.id in fullyDelivered)
                                         }
                                         // Reactions hang inside the bubble so they follow its edge,
                                         // the way the group chat renders them under a message.

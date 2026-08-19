@@ -86,6 +86,36 @@ class DmViewModel(
         val file = message.file ?: return
         repo.retryDmFile(message.id, file)
     }
+    /**
+     * Rumor ids of our own messages whose wrap every one of the recipient's kind:10050 inbox
+     * relays accepted: the second tick.
+     *
+     * A DM is a fan-out, so "Delivered" alone is weaker here than in a group, where landing on the
+     * group's one relay means everyone can read it. A wrap on a subset of the peer's inboxes only
+     * reaches them if they happen to open the client that reads that relay; a wrap on all of them
+     * reaches them whichever they open. It says nothing about the peer having fetched it - NIP-17
+     * has no delivery receipt, by design.
+     *
+     * A peer with no published list is absent: without their kind:10050 there is no known set of
+     * inboxes to have covered, so those messages stay at one tick.
+     */
+    val fullyDelivered: StateFlow<Set<String>> =
+        combine(repo.dmMessagesByPeer, repo.dmRelaysByPubkey) { byPeer, inboxesByPeer ->
+            buildSet {
+                for ((peer, messages) in byPeer) {
+                    val inboxes = inboxesByPeer[peer].orEmpty().map(::normalizeRelay).toSet()
+                    if (inboxes.isEmpty()) continue
+                    for (message in messages) {
+                        if (!message.mine) continue
+                        if (message.relays.map(::normalizeRelay).toSet().containsAll(inboxes)) add(message.id)
+                    }
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptySet())
+
+    // The accepted-on set is recorded from the publish target list while the inbox list comes from
+    // the peer's event, so the two spellings of the same relay have to meet somewhere.
+    private fun normalizeRelay(url: String): String = url.trim().lowercase().trimEnd('/')
 
     val followsConversations: StateFlow<List<DmConversation>> =
         partition(keepFollowed = true)

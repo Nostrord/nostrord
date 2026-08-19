@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -24,17 +25,27 @@ import org.nostr.nostrord.ui.theme.Spacing
  * Inline send-state icon for the author's own message: a muted clock while Sending, a check
  * once Delivered. Rendered on the same line as the message content (no extra row, so the
  * chat never shifts). Failed renders nothing here; [MessageStatusIndicator] handles it.
- * Shared by chat (MessageItem) and threads.
+ * Shared by chat (MessageItem), threads and DMs.
+ *
+ * [allInboxes] is the DM-only second tick: the wrap reached every relay the recipient publishes.
+ * A group message has one relay to reach, so its caller leaves this false and one check is the
+ * whole story.
  */
 @Composable
 fun SendStateIcon(
     status: GroupManager.MessageStatus,
     modifier: Modifier = Modifier,
     tint: androidx.compose.ui.graphics.Color = NostrordColors.TextMuted,
+    allInboxes: Boolean = false,
 ) {
     val (image, description) = when (status) {
         is GroupManager.MessageStatus.Sending -> Icons.Default.Schedule to "Sending"
-        is GroupManager.MessageStatus.Delivered -> Icons.Default.Check to "Delivered"
+        is GroupManager.MessageStatus.Delivered ->
+            if (allInboxes) {
+                Icons.Default.DoneAll to "On all of their inbox relays"
+            } else {
+                Icons.Default.Check to "Delivered to a relay"
+            }
         is GroupManager.MessageStatus.Failed -> return
     }
     Icon(

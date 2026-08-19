@@ -11,9 +11,16 @@ import web.cssom.ClassName
  * Inline send-state icon for the author's own message: a muted clock while Sending, a check
  * once Delivered. Flows at the end of the message content (no extra row, so the chat never
  * shifts). Failed renders nothing here; [messageSendStatus] handles it.
- * Shared by chat (MessageRow) and threads.
+ * Shared by chat (MessageRow), threads and DMs.
+ *
+ * [allInboxes] is the DM-only second tick: the wrap reached every relay the recipient publishes.
+ * A group message has one relay to reach, so its caller leaves this false and one check is the
+ * whole story.
  */
-fun ChildrenBuilder.sendStateIcon(status: GroupManager.MessageStatus?) {
+fun ChildrenBuilder.sendStateIcon(
+    status: GroupManager.MessageStatus?,
+    allInboxes: Boolean = false,
+) {
     when (status) {
         is GroupManager.MessageStatus.Sending ->
             span {
@@ -24,8 +31,8 @@ fun ChildrenBuilder.sendStateIcon(status: GroupManager.MessageStatus?) {
         is GroupManager.MessageStatus.Delivered ->
             span {
                 className = ClassName("msg-state-icon")
-                title = "Delivered"
-                icon(Ic.Check)
+                title = if (allInboxes) "On all of their inbox relays" else "Delivered to a relay"
+                icon(if (allInboxes) Ic.DoneAll else Ic.Check)
             }
         else -> {}
     }
