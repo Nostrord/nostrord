@@ -3203,7 +3203,16 @@ class GroupManager(
         when (val result = client.sendAndAwaitOk(eventJson, eventId)) {
             is org.nostr.nostrord.network.PublishResult.Success -> markDelivered(eventId)
             is org.nostr.nostrord.network.PublishResult.Rejected ->
-                markFailed(eventId, groupId, eventJson, result.reason)
+                // Only a refusal that re-asking cannot fix is the user's problem. "duplicate" means
+                // the relay already has it (a lost OK), and auth/rate-limit refusals clear on their
+                // own, so those go back to the queue instead of onto the screen.
+                when (org.nostr.nostrord.network.classifyRejection(result.reason)) {
+                    org.nostr.nostrord.network.RelayRejection.AlreadyStored -> markDelivered(eventId)
+                    org.nostr.nostrord.network.RelayRejection.Transient ->
+                        pendingEventManager?.queueEvent(eventJson, eventId, groupId)
+                    org.nostr.nostrord.network.RelayRejection.Permanent ->
+                        markFailed(eventId, groupId, eventJson, result.reason)
+                }
             is org.nostr.nostrord.network.PublishResult.Timeout ->
                 pendingEventManager?.queueEvent(eventJson, eventId, groupId)
             is org.nostr.nostrord.network.PublishResult.Error ->
