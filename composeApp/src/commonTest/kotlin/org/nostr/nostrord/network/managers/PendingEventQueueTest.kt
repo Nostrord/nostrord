@@ -64,6 +64,35 @@ class PendingEventQueueTest {
     }
 
     @Test
+    fun `a restored queue repaints its message in the chat`() = runTest {
+        val scope = TestScope(testScheduler)
+        // A previous run left an undelivered kind:9. It never reached the cache (only a relay
+        // confirmation caches an own message), so the queue is the only copy of it.
+        val event = """{"id":"event-4","pubkey":"$PQ_PUBKEY","content":"still unsent",""" +
+            """"created_at":42,"kind":9,"tags":[["h","$PQ_GROUP"]]}"""
+        PendingEventManager(ConnectionManager(scope), scope).apply {
+            setCurrentPubkey(PQ_PUBKEY)
+            queueEvent("""["EVENT",$event]""", "event-4", PQ_GROUP)
+        }
+
+        val pending = PendingEventManager(ConnectionManager(scope), scope)
+        val manager = GroupManager(
+            connectionManager = ConnectionManager(scope),
+            scope = scope,
+            pendingEventManager = pending,
+            cacheStore = InMemoryCacheStore(),
+        ).apply { setCurrentPubkey(PQ_PUBKEY) }
+        pending.setCurrentPubkey(PQ_PUBKEY)
+        runCurrent()
+
+        val message = manager.getMessagesForGroup(PQ_GROUP).singleOrNull()
+        assertEquals("still unsent", message?.content, "the queued message must be back on screen")
+        assertEquals(GroupManager.MessageStatus.Sending, manager.messageStatus.value["event-4"])
+
+        scope.cancel()
+    }
+
+    @Test
     fun `a long-unreachable relay never turns a queued event into a failure`() = runTest {
         val scope = TestScope(testScheduler)
         // A previous run left an event that failed to land many times over (relay offline).

@@ -153,9 +153,52 @@ class GroupManager(
                             statuses + missing.associate { it.eventId to MessageStatus.Sending }
                         }
                     }
+                    // After a restart the queue has the event but the screen has nothing: an own
+                    // message reaches the disk cache only once a relay confirms it. Repaint from
+                    // the queue's own copy, which is exactly the set still owed a delivery.
+                    // Nothing is cached here - the queue keeps retrying either way, and it stays
+                    // true that a cached own message is one a relay accepted.
+                    events.forEach { repaintQueuedMessage(it.groupId, it.eventId, it.eventJson) }
                 }
             }
         }
+    }
+
+    /**
+     * Put a still-queued own message back on screen, as Sending. A no-op once it is present, so
+     * the queue's later emissions (every retry rewrites the entry) neither duplicate it nor bump
+     * the group's recency.
+     */
+    private fun repaintQueuedMessage(groupId: String, eventId: String, eventJson: String) {
+        val known = _messages.value[groupId]?.any { it.id == eventId } == true ||
+            _threadRoots.value[groupId]?.any { it.id == eventId } == true ||
+            _threadReplies.value[groupId]?.any { it.id == eventId } == true
+        if (known) return
+        val message = parseQueuedEvent(groupId, eventJson) ?: return
+        // Threads and chat keep separate stores; a queued reply belongs back in its thread.
+        if (message.kind == 11 || message.kind == 1111) {
+            applyThreadEvent(groupId, message, persist = false)
+        } else {
+            insertOwnMessage(groupId, message)
+        }
+    }
+
+    /** The queued frame is `["EVENT",{...}]`; rebuild the message from its event object. */
+    private fun parseQueuedEvent(groupId: String, eventJson: String): NostrGroupClient.NostrMessage? = try {
+        val obj = Json.parseToJsonElement(eventJson).jsonArray[1].jsonObject
+        NostrGroupClient.NostrMessage(
+            id = obj["id"]?.jsonPrimitive?.content ?: return null,
+            pubkey = obj["pubkey"]?.jsonPrimitive?.content ?: return null,
+            content = obj["content"]?.jsonPrimitive?.content.orEmpty(),
+            createdAt = obj["created_at"]?.jsonPrimitive?.long ?: return null,
+            kind = obj["kind"]?.jsonPrimitive?.int ?: return null,
+            tags = obj["tags"]?.jsonArray?.map { tag -> tag.jsonArray.map { it.jsonPrimitive.content } }.orEmpty(),
+            // Same scoping as the optimistic insert: the bubble belongs to the group's own relay,
+            // never to a same-id group on another one.
+            relayUrl = getRelayForGroup(groupId)?.normalizeRelayUrl(),
+        )
+    } catch (e: Exception) {
+        null
     }
 
     /**
