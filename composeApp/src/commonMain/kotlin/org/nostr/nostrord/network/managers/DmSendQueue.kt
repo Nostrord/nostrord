@@ -72,20 +72,24 @@ class DmSendQueue(
     /** Number of wraps still awaiting a relay OK. */
     val size: Int get() = entries.value.size
 
-    /** Queue freshly signed wraps and attempt delivery immediately. */
-    fun enqueue(
+    /**
+     * Queue freshly signed wraps and attempt delivery immediately.
+     *
+     * Suspends until the queue is on disk. The caller shows the message only after this returns, so
+     * a process death can leave a queued wrap with no bubble (the self-copy paints it back) but
+     * never a bubble with nothing retrying it, which is the failure this queue exists to prevent.
+     */
+    suspend fun enqueue(
         pubkey: String,
         wraps: List<PendingDmWrap>,
     ) {
         if (wraps.isEmpty()) return
-        scope.launch {
-            mutex.withLock {
-                owner = pubkey
-                entries.value = (entries.value + wraps).takeLast(MAX_QUEUE_SIZE)
-            }
-            persistNow()
-            restartSweep()
+        mutex.withLock {
+            owner = pubkey
+            entries.value = (entries.value + wraps).takeLast(MAX_QUEUE_SIZE)
         }
+        persistNow()
+        restartSweep()
     }
 
     /** Restore the persisted queue on login and resume delivery. */

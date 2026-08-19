@@ -2367,12 +2367,18 @@ class NostrRepository(
                 } else {
                     Nip17.wrap(rumor, myPub, signer)
                 }
-            if (optimistic) dmManager.addOptimistic(rumor, recipientPubkey, myPub)
             val rumorId = rumor.id ?: return Result.Error(AppError.Unknown("Failed to build the message"))
             // Enqueue both wraps (recipient + self-copy) in the persisted send queue, then publish.
             // The message shows as Sending and flips to Delivered on the first relay OK (or when the
             // self-copy echoes back). The queue survives an app restart and never gives up, so a
             // wrap that never reached a relay keeps retrying instead of being stranded local-only.
+            //
+            // Queue first, bubble second: both writes are durable, and this order means a crash
+            // between them costs the bubble (which the self-copy repaints) rather than the retry.
+            // The status has to be staked out before the queue can publish, though: markDelivered
+            // only resolves ids it already knows, so a wrap accepted before the bubble existed
+            // would leave the message on Sending for good.
+            dmManager.setSending(rumorId)
             val now = rumor.createdAt
             dmSendQueue.enqueue(
                 myPub,
@@ -2381,6 +2387,7 @@ class NostrRepository(
                     PendingDmWrap(rumorId, selfWrap.id ?: "", selfWrap.toJsonObject().toString(), dmRelaysWithDefaults(myPub), now, toSelf = true),
                 ),
             )
+            if (optimistic) dmManager.addOptimistic(rumor, recipientPubkey, myPub)
             if (NIP4E_DUAL_SEND && myEncKey != null && recipientEncKey != null) {
                 // Best-effort copies in the encryption-key-signed shape, the only one deployed
                 // readers that predate the identity-signed seal accept. Both are signed locally,
@@ -2913,29 +2920,29 @@ class NostrRepository(
                     }
                 }.awaitAll()
             }
-        val acceptedBy = results.filter { it.second is PublishResult.Success }.map { it.first }
+        // "duplicate" counts as acceptance: the relay is telling us it already holds this wrap,
+        // which is exactly what the retry wanted. Anything else keeps its OK-false meaning.
+        val acceptedBy =
+            results.mapNotNull { (url, result) ->
+                when (result) {
+                    is PublishResult.Success -> url
+                    is PublishResult.Rejected ->
+                        url.takeIf { classifyRejection(result.reason) == RelayRejection.AlreadyStored }
+                    else -> null
+                }
+            }
         if (acceptedBy.isNotEmpty()) return DmPublishOutcome.Accepted(acceptedBy)
         // A stated rejection is worth more than a timeout, which only says nobody answered, so a
         // send is final only when every target refused it outright.
         val refusals =
             results.mapNotNull { (url, result) ->
-                (result as? PublishResult.Rejected)?.takeIf { isPermanentRejection(it.reason) }?.let { url to it.reason }
+                (result as? PublishResult.Rejected)
+                    ?.takeIf { classifyRejection(it.reason) == RelayRejection.Permanent }
+                    ?.let { url to it.reason }
             }
         if (refusals.size != results.size) return DmPublishOutcome.Retry
         val (url, why) = refusals.first()
         return DmPublishOutcome.Rejected("${relayHost(url)} refused it: $why")
-    }
-
-    /**
-     * NIP-01 machine-readable prefixes split "not yet" from "never". `auth-required` and
-     * `rate-limited` clear on their own, and a bare `error` is the relay's own transient fault;
-     * everything else (`blocked`, `invalid`, `pow`, `restricted`, or an unprefixed refusal) means
-     * asking again changes nothing.
-     */
-    private fun isPermanentRejection(reason: String): Boolean {
-        val normalized = reason.trim().lowercase()
-        val transient = listOf("auth-required", "rate-limited", "error")
-        return transient.none { normalized.startsWith(it) }
     }
 
     private fun relayHost(url: String): String = url.removePrefix("wss://").removePrefix("ws://").trimEnd('/')

@@ -12,6 +12,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.PublishResult
+import org.nostr.nostrord.network.RelayRejection
+import org.nostr.nostrord.network.classifyRejection
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.utils.epochMillis
 
@@ -255,12 +257,21 @@ class PendingEventManager(
                         removeEvent(event.id)
                     }
                     is PublishResult.Rejected -> {
-                        if (isAuthTransient(result.reason)) {
-                            // OK-false "auth-required" is the relay saying "not yet", not
-                            // "never": the publish raced NIP-42. Keep the event and retry
-                            // after AUTH completes instead of failing it permanently.
-                            incrementRetryCount(event.id, result.reason)
-                            continue
+                        when (classifyRejection(result.reason)) {
+                            RelayRejection.AlreadyStored -> {
+                                // The relay already holds it: our earlier OK was lost, not the event.
+                                updateStatus(event.id, PendingEventStatus.Sent(PublishResult.Success(event.eventId, result.reason)))
+                                onEventDelivered?.invoke(event.eventId)
+                                removeEvent(event.id)
+                                continue
+                            }
+                            // "not yet", not "never": the publish raced NIP-42, or the relay is
+                            // rate limiting. Keep the event queued instead of failing it.
+                            RelayRejection.Transient -> {
+                                incrementRetryCount(event.id, result.reason)
+                                continue
+                            }
+                            RelayRejection.Permanent -> Unit
                         }
                         // Don't retry rejected events - relay explicitly refused
                         updateStatus(event.id, PendingEventStatus.Failed(result.reason))
@@ -303,10 +314,19 @@ class PendingEventManager(
                 removeEvent(event.id)
             }
             is PublishResult.Rejected -> {
-                if (isAuthTransient(result.reason)) {
-                    // Same as the batch path: an auth-required rejection is transient.
-                    incrementRetryCount(event.id, result.reason)
-                    return result
+                // Same classification as the batch path.
+                when (classifyRejection(result.reason)) {
+                    RelayRejection.AlreadyStored -> {
+                        updateStatus(event.id, PendingEventStatus.Sent(PublishResult.Success(event.eventId, result.reason)))
+                        onEventDelivered?.invoke(event.eventId)
+                        removeEvent(event.id)
+                        return result
+                    }
+                    RelayRejection.Transient -> {
+                        incrementRetryCount(event.id, result.reason)
+                        return result
+                    }
+                    RelayRejection.Permanent -> Unit
                 }
                 updateStatus(event.id, PendingEventStatus.Failed(result.reason))
                 onEventPermanentlyFailed?.invoke(event.eventId, event.groupId, event.eventJson, result.reason)
@@ -397,8 +417,6 @@ class PendingEventManager(
         }
         saveToStorage()
     }
-
-    private fun isAuthTransient(reason: String): Boolean = reason.contains("auth-required", ignoreCase = true)
 
     private fun calculateRetryDelay(retryCount: Int): Long {
         // Exponential backoff: 1s, 2s, 4s, 8s, ... up to max. The shift is clamped because
