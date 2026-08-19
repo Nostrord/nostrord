@@ -64,6 +64,28 @@ class PendingEventQueueTest {
     }
 
     @Test
+    fun `a long-unreachable relay never turns a queued event into a failure`() = runTest {
+        val scope = TestScope(testScheduler)
+        // A previous run left an event that failed to land many times over (relay offline).
+        SecureStorage.savePendingEvents(
+            PQ_PUBKEY,
+            """[{"id":"pending_1_event-3","eventJson":"[\"EVENT\",{}]","eventId":"event-3",""" +
+                """"groupId":"$PQ_GROUP","createdAt":1,"retryCount":99,"lastAttemptAt":1}]""",
+        )
+
+        val pending = PendingEventManager(ConnectionManager(scope), scope)
+        var failed: String? = null
+        pending.onEventPermanentlyFailed = { eventId, _, _, _ -> failed = eventId }
+        pending.setCurrentPubkey(PQ_PUBKEY)
+        pending.retryPendingEvents()
+
+        assertEquals(listOf("event-3"), pending.pendingEvents.value.map { it.eventId }, "the event must stay queued")
+        assertEquals(null, failed, "a transient failure must never resolve to Not delivered")
+
+        scope.cancel()
+    }
+
+    @Test
     fun `the relay echo of an own message resolves Sending and clears the queue`() = runTest {
         val scope = TestScope(testScheduler)
         val pending = PendingEventManager(ConnectionManager(scope), scope).apply { setCurrentPubkey(PQ_PUBKEY) }
