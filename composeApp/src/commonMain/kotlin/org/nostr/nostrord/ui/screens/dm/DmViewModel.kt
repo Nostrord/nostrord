@@ -93,6 +93,15 @@ class DmViewModel(
     val othersConversations: StateFlow<List<DmConversation>> =
         partition(keepFollowed = false)
 
+    /** NIP-02 follow list, for deciding which inbox tab holds a conversation. */
+    val following: StateFlow<Set<String>> = repo.following
+
+    /**
+     * The conversation with [peerPubkey] sits in the Others inbox (message requests), so the list
+     * must show that tab: an open thread hidden behind the Follows tab reads as an empty inbox.
+     */
+    fun isRequestPeer(peerPubkey: String?, follows: Set<String>): Boolean = peerPubkey != null && peerPubkey !in follows
+
     /** Unread total across the Others inbox, for the requests-tab badge. */
     val othersUnread: StateFlow<Int> =
         othersConversations
@@ -116,7 +125,16 @@ class DmViewModel(
      * before it is written rather than after the reply teaches us. The send waits on this too;
      * asking here means it is usually already answered by the time anyone types.
      */
-    fun openConversation(peerPubkey: String) = repo.requestPeerDmRelays(peerPubkey)
+    fun openConversation(peerPubkey: String) {
+        repo.rememberDmPeer(peerPubkey)
+        repo.requestPeerDmRelays(peerPubkey)
+    }
+
+    /**
+     * Peer the DM nav entry should reopen, or null for the conversation list. Reading a thread and
+     * stepping into a group keeps the thread one click away instead of list-then-peer.
+     */
+    val lastPeer: StateFlow<String?> = repo.lastDmPeer
 
     fun getPublicKey(): String? = repo.getPublicKey()
 

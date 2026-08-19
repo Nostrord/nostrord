@@ -15,6 +15,7 @@ import react.Props
 import react.dom.html.ReactHTML.button
 import react.dom.html.ReactHTML.div
 import react.dom.html.ReactHTML.span
+import react.useEffect
 import react.useState
 import web.cssom.ClassName
 
@@ -121,6 +122,14 @@ val DmConversationList =
         val userMetadata = useStateFlow(dmVm.userMetadata)
         val unreadByPeer = useStateFlow(dmVm.unreadByPeer)
         val conversations = if (tab == 0) follows else others
+
+        // Keyed on the peer and on the follow list, so it lands on Others when the open
+        // conversation is a request (including when kind:3 arrives after the list renders) and
+        // then leaves the choice to whoever taps the tabs.
+        val activeIsRequest = dmVm.isRequestPeer(props.activePubkey, useStateFlow(dmVm.following))
+        useEffect(props.activePubkey, activeIsRequest) {
+            if (activeIsRequest) setTab(1)
+        }
 
         fun nameOf(pubkey: String): String {
             val meta = userMetadata[pubkey]

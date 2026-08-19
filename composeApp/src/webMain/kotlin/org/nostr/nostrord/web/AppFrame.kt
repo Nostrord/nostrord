@@ -558,7 +558,7 @@ val AppFrame =
                             button {
                                 className = ClassName(if (route is DmRoute && !notificationsOpen) "rail-btn active" else "rail-btn")
                                 title = "Direct messages"
-                                onClick = { pushRoute(DmRoute()) }
+                                onClick = { pushRoute(DmRoute(repo.lastDmPeer.value)) }
                                 icon(Ic.Mail)
                             }
                             if (dmUnread > 0) {
@@ -928,7 +928,7 @@ val AppFrame =
                             onOpenGroup = { pushRoute(GroupRoute(it.relayUrl, it.meta.id)) }
                             onCreateGroup = { setAddGroupStep("create") }
                             onJoinGroup = { setAddGroupStep("join") }
-                            onOpenDms = { pushRoute(DmRoute()) }
+                            onOpenDms = { pushRoute(DmRoute(repo.lastDmPeer.value)) }
                             onOpenNotifications = { pushRoute(NotificationsRoute) }
                         }
                 }

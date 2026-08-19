@@ -2118,6 +2118,10 @@ class NostrRepository(
     /** Total unread DMs across all conversations, for the nav badge. */
     override val totalDmUnread: StateFlow<Int> get() = dmManager.totalUnread
 
+    override val lastDmPeer: StateFlow<String?> get() = dmManager.lastPeer
+
+    override fun rememberDmPeer(pubkey: String) = dmManager.rememberLastPeer(pubkey)
+
     // Our own effective DM relays (kind:10050, or the defaults until we publish one). Drives the
     // Settings editor; kept in sync on inbox open, on our own kind:10050, and on publish.
     private val _myDmRelays = MutableStateFlow<List<String>>(emptyList())

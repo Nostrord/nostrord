@@ -531,7 +531,7 @@ fun AppFrame() {
             if (dmEnabled) {
                 Box {
                     RailButton(icon = Icons.Default.Mail, label = "Direct messages", active = route is DmRoute && !showNotifications) {
-                        history.navigate(DmRoute())
+                        history.navigate(DmRoute(AppModule.nostrRepository.lastDmPeer.value))
                         closeDrawer()
                     }
                     if (dmUnread > 0) {
@@ -874,7 +874,7 @@ private fun FrameContent(
                     onOpenRelay = { onNavigate(RelayRoute(it)) },
                     onCreateGroup = onCreateGroup,
                     onJoinGroup = onJoinGroup,
-                    onOpenDms = { onNavigate(DmRoute()) },
+                    onOpenDms = { onNavigate(DmRoute(AppModule.nostrRepository.lastDmPeer.value)) },
                     onOpenNotifications = onOpenNotifications,
                     onOpenDrawer = onOpenDrawer,
                 )

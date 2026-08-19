@@ -1,5 +1,6 @@
 package org.nostr.nostrord.network.managers
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.nostr.nostrord.auth.NostrSigner
@@ -310,5 +311,28 @@ class DmManagerTest {
         assertEquals(false, dm.importRumor(rumor("3".repeat(64), stranger, peer), me))
 
         assertEquals(2, dm.messagesByPeer.value[peer]?.size)
+    }
+
+    @Test
+    fun `the last opened peer survives until the account is cleared`() = runTest {
+        val dm = DmManager(backgroundScope)
+        assertEquals(null, dm.lastPeer.first())
+
+        dm.rememberLastPeer("alice")
+        assertEquals("alice", dm.lastPeer.first())
+
+        dm.clear()
+        assertEquals(null, dm.lastPeer.first())
+    }
+
+    @Test
+    fun `a muted peer is not offered as the last opened conversation`() = runTest {
+        val muted = MutableStateFlow(emptySet<String>())
+        val dm = DmManager(backgroundScope, muted)
+        dm.rememberLastPeer("alice")
+        assertEquals("alice", dm.lastPeer.first())
+
+        muted.value = setOf("alice")
+        assertEquals(null, dm.lastPeer.first { it == null })
     }
 }
