@@ -454,19 +454,33 @@ fun ThreadsScreen(
                         onValueChange = { reply = it },
                         onSend = {
                             if (reply.text.isNotBlank() && !sending) {
+                                // Snapshot for restore-on-failure (GroupScreen does the same). The
+                                // field clears in the gesture that sent, so a slow signer round-trip
+                                // never leaves the reply sitting there looking unsent.
+                                val sentReply = reply
+                                val sentMentions = replyMentions
+                                val sentGroupMentions = replyGroupMentions
+                                val sentParent = replyingTo
                                 sending = true
+                                reply = TextFieldValue("")
+                                replyMentions = emptyMap()
+                                replyGroupMentions = emptyMap()
+                                replyingTo = null
                                 vm.sendReply(
-                                    resolveGroupMentions(reply.text.trim(), replyGroupMentions),
-                                    parent = replyingTo,
-                                    mentions = replyMentions,
-                                    onSuccess = {
-                                        reply = TextFieldValue("")
-                                        replyMentions = emptyMap()
-                                        replyGroupMentions = emptyMap()
-                                        replyingTo = null
+                                    resolveGroupMentions(sentReply.text.trim(), sentGroupMentions),
+                                    parent = sentParent,
+                                    mentions = sentMentions,
+                                    onSuccess = { sending = false },
+                                    onFailure = {
                                         sending = false
+                                        // Push it back for a retry, unless a new reply was started.
+                                        if (reply.text.isBlank()) {
+                                            reply = sentReply
+                                            replyMentions = sentMentions
+                                            replyGroupMentions = sentGroupMentions
+                                            replyingTo = sentParent
+                                        }
                                     },
-                                    onFailure = { sending = false },
                                 )
                             }
                         },
