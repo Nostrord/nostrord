@@ -210,17 +210,24 @@ val DmPage =
         val (sending, setSending) = useState { false }
         val send = {
             if (text.isNotBlank() && !sending) {
+                // Clear in the same gesture that sent: the publish round-trip lasts as long as
+                // the signer takes, and a draft still sitting there reads as "not sent". Only a
+                // build/sign failure pushes it back, and only if no new message was started.
+                val sentText = text
+                val sentReply = replyingTo
                 setSending(true)
+                setText("")
+                setReplyingTo(null)
                 dmVm.send(
                     pubkey,
-                    text,
-                    replyToId = replyingTo,
-                    onSuccess = {
-                        setText("")
-                        setReplyingTo(null)
+                    sentText,
+                    replyToId = sentReply,
+                    onSuccess = { setSending(false) },
+                    onFailure = {
                         setSending(false)
+                        setText { cur -> if (cur.isBlank()) sentText else cur }
+                        setReplyingTo { cur -> cur ?: sentReply }
                     },
-                    onFailure = { setSending(false) },
                 )
             }
         }

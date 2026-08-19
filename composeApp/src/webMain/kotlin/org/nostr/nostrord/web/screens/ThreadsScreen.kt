@@ -201,19 +201,30 @@ private val ThreadComposer =
             // @user mentions are resolved by the repo from the mentions map (+ p tag).
             var text = reply
             groupMentions.forEach { (name, ref) -> text = text.replace("%$name", ref) }
+            // Snapshot for restore-on-failure: the field clears in the same gesture that sent,
+            // so a slow signer round-trip never leaves the reply sitting there looking unsent.
+            val sentReply = reply
+            val sentMentions = mentions
+            val sentGroupMentions = groupMentions
             setSending(true)
+            setReply("")
+            setMentions(emptyMap())
+            setGroupMentions(emptyMap())
             vm.sendReply(
                 text,
                 parent = props.replyingTo,
-                mentions = mentions,
+                mentions = sentMentions,
                 onSuccess = {
-                    setReply("")
-                    setMentions(emptyMap())
-                    setGroupMentions(emptyMap())
                     setSending(false)
                     props.onSent()
                 },
-                onFailure = { setSending(false) },
+                onFailure = {
+                    setSending(false)
+                    // Push the reply back for a retry, unless a new one was started.
+                    setReply { cur -> if (cur.isBlank()) sentReply else cur }
+                    setMentions { cur -> if (cur.isEmpty()) sentMentions else cur }
+                    setGroupMentions { cur -> if (cur.isEmpty()) sentGroupMentions else cur }
+                },
             )
         }
 

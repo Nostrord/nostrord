@@ -297,10 +297,8 @@ private val ChatComposer =
         val groupName = props.groupName
 
         val (draft, setDraft) = useState { "" }
-        // Tracks an in-flight sendMessage so we (a) don't double-send if the user
-        // mashes Enter, and (b) keep the draft visible until the signer + relay
-        // come back — clearing optimistically erased the message when a NIP-07
-        // cancel or relay reject killed the publish.
+        // Tracks an in-flight sendMessage so a mashed Enter can't double-send while
+        // the signer + relay are still out.
         val (sending, setSending) = useState { false }
         // Active media uploads in flight (paste / drag-and-drop). The send button
         // shows a spinner instead of the Send icon while > 0.
@@ -396,25 +394,40 @@ private val ChatComposer =
             val replyId = props.replyingToId
             // NIP-68 imeta for any media uploaded into this draft (native parity).
             val imetaTags = pendingUploads.map { it.toImetaTag() }
+            // Snapshot for restore-on-failure (native GroupScreen does the same). The field
+            // clears now, in the same gesture that sent: the publish round-trip runs for as
+            // long as the signer takes, and a draft still sitting there reads as "not sent"
+            // and swallows whatever is typed meanwhile when the late clear lands.
+            val sentDraft = draft
+            val sentMentions = mentions
+            val sentGroupMentions = groupMentions
+            val sentUploads = pendingUploads
             setSending(true)
+            setDraft("")
+            setMentions(emptyMap())
+            setGroupMentions(emptyMap())
+            setPendingUploads(emptyList())
+            // Keep the mobile keyboard up and the cursor in the field for the next message.
+            composerInputRef.current?.focus()
             vm.sendMessage(
                 content = text,
                 channel = null,
-                mentions = mentions,
+                mentions = sentMentions,
                 replyToId = replyId,
                 extraTags = imetaTags,
                 onSuccess = {
                     setSending(false)
-                    // Clear only after publish succeeded so a cancel/reject keeps the draft.
-                    setDraft("")
-                    setMentions(emptyMap())
-                    setGroupMentions(emptyMap())
-                    setPendingUploads(emptyList())
-                    // Keep the mobile keyboard up and the cursor in the field for the next message.
-                    composerInputRef.current?.focus()
                     props.onSent()
                 },
-                onFailure = { setSending(false) },
+                onFailure = {
+                    setSending(false)
+                    // Push the message back so it can be retried, unless the user already
+                    // started a new one.
+                    setDraft { cur -> if (cur.isBlank()) sentDraft else cur }
+                    setMentions { cur -> if (cur.isEmpty()) sentMentions else cur }
+                    setGroupMentions { cur -> if (cur.isEmpty()) sentGroupMentions else cur }
+                    setPendingUploads { cur -> if (cur.isEmpty()) sentUploads else cur }
+                },
             )
         }
 
