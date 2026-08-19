@@ -24,13 +24,12 @@ data class PendingEvent(
     val eventId: String,
     val groupId: String,
     val createdAt: Long = epochMillis(),
+    /** Drives the backoff only; there is no attempt ceiling. Persisted so the backoff carries
+     *  across restarts instead of restarting from zero on every launch. */
     val retryCount: Int = 0,
-    val maxRetries: Int = 3,
     val lastError: String? = null,
     val lastAttemptAt: Long = 0,
-) {
-    val canRetry: Boolean get() = retryCount < maxRetries
-}
+)
 
 /**
  * Status of a pending event.
@@ -44,21 +43,30 @@ sealed class PendingEventStatus {
         val result: PublishResult,
     ) : PendingEventStatus()
 
+    /** Last attempt did not land, but the reason passes: offline, timeout, AUTH pending. Still queued. */
+    data class Retrying(
+        val lastError: String,
+    ) : PendingEventStatus()
+
+    /** The relay refused it for a reason that will not change. Terminal, and the only state that
+     *  surfaces the message's Not delivered / Retry / Dismiss row. */
     data class Failed(
         val reason: String,
-        val canRetry: Boolean,
     ) : PendingEventStatus()
 }
 
 /**
  * Manages events that failed to send or were queued while offline.
- * Automatically retries when connection is restored.
  *
- * Features:
- * - Queue events when offline
- * - Auto-retry with exponential backoff
- * - Max retry limit per event
- * - Status tracking for UI feedback
+ * An event stays queued until a relay accepts it: attempts are never exhausted and entries never
+ * expire, so a message written while the group's relay is unreachable lands whenever connectivity
+ * returns, including after the app is closed and reopened (the queue is persisted per account and
+ * reloaded in [setCurrentPubkey]). Retries use exponential backoff capped at [MAX_RETRY_DELAY_MS];
+ * a reconnect makes every entry due at once via [onConnectionRestored].
+ *
+ * The exception is an outright relay rejection ("blocked:", "group doesn't exist"): asking again
+ * cannot change that answer, so the event is dropped from the queue and reported through
+ * [onEventPermanentlyFailed] for the UI to offer Retry / Dismiss.
  */
 class PendingEventManager(
     private val connectionManager: ConnectionManager,
@@ -101,8 +109,9 @@ class PendingEventManager(
     /**
      * Terminal-outcome hooks for optimistic send. [onEventDelivered] fires when a
      * queued event is finally accepted by the relay; [onEventPermanentlyFailed]
-     * fires when it is rejected or its retries are exhausted. Both are keyed by the
-     * nostr event id so the owner (GroupManager) can resolve the on-screen status.
+     * fires when a relay refuses it for good, or when it is evicted to keep the
+     * queue bounded. Both are keyed by the nostr event id so the owner (GroupManager)
+     * can resolve the on-screen status.
      */
     var onEventDelivered: ((eventId: String) -> Unit)? = null
     var onEventPermanentlyFailed: ((eventId: String, groupId: String, eventJson: String, reason: String) -> Unit)? = null
@@ -140,6 +149,7 @@ class PendingEventManager(
         eventId: String,
         groupId: String,
     ): Boolean {
+        var evicted: PendingEvent? = null
         val queued = mutex.withLock {
             val current = _pendingEvents.value
 
@@ -148,13 +158,15 @@ class PendingEventManager(
                 return@withLock false
             }
 
-            // Enforce queue size limit
+            // Retries never stop, so the queue is bounded instead: the oldest entry drops once it
+            // is full. It is reported as failed rather than vanishing, or the message would sit in
+            // the chat as Sending with nothing left to send it.
             if (current.size >= MAX_QUEUE_SIZE) {
-                // Remove oldest event to make room
                 val oldest = current.minByOrNull { it.createdAt }
                 if (oldest != null) {
                     _pendingEvents.value = current - oldest
                     _eventStatuses.value = _eventStatuses.value - oldest.id
+                    evicted = oldest
                 }
             }
 
@@ -170,6 +182,7 @@ class PendingEventManager(
             _eventStatuses.value = _eventStatuses.value + (pendingEvent.id to PendingEventStatus.Queued)
             true
         }
+        evicted?.let { onEventPermanentlyFailed?.invoke(it.eventId, it.groupId, it.eventJson, "Send queue full") }
         if (queued) {
             saveToStorage()
             ensureRetrySweep()
@@ -217,18 +230,6 @@ class PendingEventManager(
             if (events.isEmpty()) return
 
             for (event in events) {
-                if (!event.canRetry) {
-                    // Mark as permanently failed
-                    val reason = event.lastError ?: "Max retries exceeded"
-                    updateStatus(
-                        event.id,
-                        PendingEventStatus.Failed(reason = reason, canRetry = false),
-                    )
-                    onEventPermanentlyFailed?.invoke(event.eventId, event.groupId, event.eventJson, reason)
-                    removeEvent(event.id)
-                    continue
-                }
-
                 // Honor per-event exponential backoff without blocking the rest of the queue.
                 if (event.retryCount > 0 && epochMillis() < event.lastAttemptAt + calculateRetryDelay(event.retryCount)) {
                     continue
@@ -262,13 +263,7 @@ class PendingEventManager(
                             continue
                         }
                         // Don't retry rejected events - relay explicitly refused
-                        updateStatus(
-                            event.id,
-                            PendingEventStatus.Failed(
-                                reason = result.reason,
-                                canRetry = false,
-                            ),
-                        )
+                        updateStatus(event.id, PendingEventStatus.Failed(result.reason))
                         onEventPermanentlyFailed?.invoke(event.eventId, event.groupId, event.eventJson, result.reason)
                         removeEvent(event.id)
                     }
@@ -293,7 +288,6 @@ class PendingEventManager(
      */
     suspend fun retrySingleEvent(pendingId: String): PublishResult? {
         val event = _pendingEvents.value.find { it.id == pendingId } ?: return null
-        if (!event.canRetry) return null
 
         val resolve = resolveClient
         val client = (if (resolve != null) resolve(event.groupId) else connectionManager.getFocusedClient()) ?: return null
@@ -314,13 +308,7 @@ class PendingEventManager(
                     incrementRetryCount(event.id, result.reason)
                     return result
                 }
-                updateStatus(
-                    event.id,
-                    PendingEventStatus.Failed(
-                        reason = result.reason,
-                        canRetry = false,
-                    ),
-                )
+                updateStatus(event.id, PendingEventStatus.Failed(result.reason))
                 onEventPermanentlyFailed?.invoke(event.eventId, event.groupId, event.eventJson, result.reason)
                 removeEvent(event.id)
             }
@@ -368,6 +356,11 @@ class PendingEventManager(
      */
     fun onConnectionRestored() {
         scope.launch {
+            // Every entry becomes due now: the relay that was unreachable is the reason they are
+            // still queued, so making them wait out a backoff earned while it was down is wasted time.
+            mutex.withLock {
+                _pendingEvents.value = _pendingEvents.value.map { it.copy(lastAttemptAt = 0) }
+            }
             retryPendingEvents()
             ensureRetrySweep()
         }
@@ -398,21 +391,9 @@ class PendingEventManager(
                 )
 
             _pendingEvents.value = current.map { if (it.id == pendingId) updated else it }
-
-            if (updated.canRetry) {
-                _eventStatuses.value = _eventStatuses.value +
-                    (pendingId to PendingEventStatus.Failed(reason = errorMsg, canRetry = true))
-            } else {
-                // Retries exhausted: terminal failure. Notify the owner and drop it
-                // from the queue so the on-screen message resolves to Failed now
-                // instead of lingering as Sending until the next reconnect sweep.
-                val reason = "Max retries exceeded: $errorMsg"
-                _eventStatuses.value = _eventStatuses.value +
-                    (pendingId to PendingEventStatus.Failed(reason = reason, canRetry = false))
-                onEventPermanentlyFailed?.invoke(updated.eventId, updated.groupId, updated.eventJson, reason)
-                _pendingEvents.value = _pendingEvents.value.filter { it.id != pendingId }
-                _eventStatuses.value = _eventStatuses.value - pendingId
-            }
+            // The message stays Sending on screen: a transient failure is the queue's business,
+            // not something to ask the user about.
+            _eventStatuses.value = _eventStatuses.value + (pendingId to PendingEventStatus.Retrying(errorMsg))
         }
         saveToStorage()
     }
@@ -420,8 +401,9 @@ class PendingEventManager(
     private fun isAuthTransient(reason: String): Boolean = reason.contains("auth-required", ignoreCase = true)
 
     private fun calculateRetryDelay(retryCount: Int): Long {
-        // Exponential backoff: 1s, 2s, 4s, 8s, ... up to max
-        val delay = BASE_RETRY_DELAY_MS * (1 shl retryCount)
+        // Exponential backoff: 1s, 2s, 4s, 8s, ... up to max. The shift is clamped because
+        // retryCount is unbounded, and shifting past the width of an Int wraps to a short delay.
+        val delay = BASE_RETRY_DELAY_MS shl retryCount.coerceIn(0, 20)
         return delay.coerceAtMost(MAX_RETRY_DELAY_MS)
     }
 
@@ -449,7 +431,6 @@ class PendingEventManager(
                             groupId = obj["groupId"]?.jsonPrimitive?.content ?: return@mapNotNull null,
                             createdAt = obj["createdAt"]?.jsonPrimitive?.long ?: epochMillis(),
                             retryCount = obj["retryCount"]?.jsonPrimitive?.int ?: 0,
-                            maxRetries = obj["maxRetries"]?.jsonPrimitive?.int ?: 3,
                             lastError = obj["lastError"]?.jsonPrimitive?.contentOrNull,
                             lastAttemptAt = obj["lastAttemptAt"]?.jsonPrimitive?.long ?: 0,
                         )
@@ -494,7 +475,6 @@ class PendingEventManager(
                                 put("groupId", event.groupId)
                                 put("createdAt", event.createdAt)
                                 put("retryCount", event.retryCount)
-                                put("maxRetries", event.maxRetries)
                                 put("lastAttemptAt", event.lastAttemptAt)
                                 event.lastError?.let { put("lastError", it) }
                             },
