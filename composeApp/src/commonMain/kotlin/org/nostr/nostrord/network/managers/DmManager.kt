@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.nostr.nostrord.auth.NostrSigner
 import org.nostr.nostrord.nostr.Event
@@ -165,6 +166,27 @@ class DmManager(
                 .filterValues { it > 0 }
         }
             .stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    // The conversation the user has open. Session state, not a preference: it lets the DM nav
+    // entry return to the thread the user was reading instead of the list, and dies with the
+    // account. A muted peer resolves to null so the nav never reopens a conversation the lists hide.
+    private val _lastPeer = MutableStateFlow<String?>(null)
+
+    /** Peer of the conversation last opened this session, or null (never opened, or muted). */
+    val lastPeer: StateFlow<String?> = _lastPeer.asStateFlow()
+
+    init {
+        // Read directly (not through a derived flow) so a nav press sees the current peer in the
+        // same frame; muting is rare enough to fold back into the value here.
+        scope.launch {
+            mutedPubkeys.collect { muted -> if (_lastPeer.value in muted) _lastPeer.value = null }
+        }
+    }
+
+    /** Record [pubkey] as the open conversation. */
+    fun rememberLastPeer(pubkey: String) {
+        _lastPeer.value = pubkey
+    }
 
     /** Total unread across all conversations, for the DM nav badge. */
     val totalUnread: StateFlow<Int> =
@@ -614,5 +636,6 @@ class DmManager(
         _dmRelaysByPubkey.value = emptyMap()
         _encKeyByPubkey.value = emptyMap()
         _lastReadByPeer.value = emptyMap()
+        _lastPeer.value = null
     }
 }

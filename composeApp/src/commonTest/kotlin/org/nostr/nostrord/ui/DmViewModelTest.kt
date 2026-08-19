@@ -83,4 +83,25 @@ class DmViewModelTest {
         assertEquals(5, vm.othersUnread.value) // bob (3) + carol (2), not alice
         job.cancel()
     }
+
+    @Test
+    fun `opening a conversation records it as the peer the DM nav returns to`() = runTest {
+        val fake = FakeNostrRepository()
+        val vm = DmViewModel(fake)
+        assertEquals(null, vm.lastPeer.value)
+
+        vm.openConversation("alice")
+        assertEquals("alice", vm.lastPeer.value)
+    }
+
+    @Test
+    fun `an unfollowed peer belongs to the requests inbox`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._following.value = setOf("alice")
+        val vm = DmViewModel(fake)
+
+        assertEquals(false, vm.isRequestPeer("alice", vm.following.value))
+        assertEquals(true, vm.isRequestPeer("bob", vm.following.value))
+        assertEquals(false, vm.isRequestPeer(null, vm.following.value))
+    }
 }

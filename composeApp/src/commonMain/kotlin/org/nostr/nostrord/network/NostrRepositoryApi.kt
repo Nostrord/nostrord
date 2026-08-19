@@ -195,6 +195,16 @@ interface NostrRepositoryApi {
     /** Total unread DMs across all conversations, for the nav badge. */
     val totalDmUnread: StateFlow<Int>
 
+    /**
+     * Peer of the DM conversation last opened this session, or null for none. The DM nav entry
+     * reopens it, so leaving a conversation for a group and coming back lands on the thread
+     * rather than the list. Session-scoped: an account switch clears it.
+     */
+    val lastDmPeer: StateFlow<String?>
+
+    /** Record [pubkey] as the open DM conversation (see [lastDmPeer]). */
+    fun rememberDmPeer(pubkey: String)
+
     /** Our own effective NIP-17 DM relays (kind:10050, or the defaults until one is published). */
     val myDmRelays: StateFlow<List<String>>
 

@@ -148,6 +148,13 @@ class FakeNostrRepository : NostrRepositoryApi {
     override val dmMessagesByPeer: StateFlow<Map<String, List<DmMessage>>> = MutableStateFlow(emptyMap())
     override val dmUnreadByPeer: StateFlow<Map<String, Int>> = MutableStateFlow(emptyMap())
     override val totalDmUnread: StateFlow<Int> = MutableStateFlow(0)
+    val lastDmPeerFlow = MutableStateFlow<String?>(null)
+    override val lastDmPeer: StateFlow<String?> = lastDmPeerFlow
+
+    override fun rememberDmPeer(pubkey: String) {
+        lastDmPeerFlow.value = pubkey
+    }
+
     val myDmRelaysFlow = MutableStateFlow<List<String>>(emptyList())
     override val myDmRelays: StateFlow<List<String>> = myDmRelaysFlow
     val dmRelaysByPubkeyFlow = MutableStateFlow<Map<String, List<String>>>(emptyMap())

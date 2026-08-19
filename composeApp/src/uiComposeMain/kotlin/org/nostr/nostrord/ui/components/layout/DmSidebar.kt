@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -171,6 +172,15 @@ fun DmConversationList(
     val userMetadata by dmVm.userMetadata.collectAsState()
     val unreadByPeer by dmVm.unreadByPeer.collectAsState()
     val conversations = if (tab == 0) follows else others
+
+    // Keyed on the peer and on the follow list, so it lands on Others when the open conversation
+    // is a request (including when kind:3 arrives after the list composes) and then leaves the
+    // choice to whoever taps the tabs.
+    val following by dmVm.following.collectAsState()
+    val activeIsRequest = dmVm.isRequestPeer(activePubkey, following)
+    LaunchedEffect(activePubkey, activeIsRequest) {
+        if (activeIsRequest) tab = 1
+    }
 
     fun nameOf(pubkey: String): String {
         val meta = userMetadata[pubkey]
