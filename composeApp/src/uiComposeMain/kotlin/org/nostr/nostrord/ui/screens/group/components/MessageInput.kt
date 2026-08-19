@@ -285,19 +285,10 @@ fun MessageInput(
     }
 
     fun handleTextFieldValueChange(newValue: TextFieldValue) {
-        // Lock typing while a send is in flight. We do this here instead of via
-        // readOnly so the Android IME session is not torn down and recreated,
-        // which closes and reopens the soft keyboard (flicker) on every send.
-        // Simply dropping the change is not enough: the Android IME keeps a
-        // composing region and replays the buffered keystrokes once the lock
-        // lifts (e.g. "adas" + typed "das" -> "adasdas"). Re-assert the current
-        // value with the composition cleared so nothing can accumulate.
-        if (isSending) {
-            if (textFieldValue.composition != null) {
-                textFieldValue = textFieldValue.copy(composition = null)
-            }
-            return
-        }
+        // Typing stays live while a send is in flight: the round-trip lasts as long as the
+        // signer takes, and a field that swallows keystrokes for that window reads as a frozen
+        // app. Only the send itself waits (see [submit] and the send button). A restore from a
+        // failed send is skipped once the next message is started (see the messageInput channel).
         // Drop the glyph the Ctrl+/ chord injected (see swallowChordGlyph).
         if (swallowChordGlyph) {
             swallowChordGlyph = false
