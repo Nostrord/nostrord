@@ -120,4 +120,16 @@ class DmViewModelTest {
         fake._contactListLoaded.value = true
         assertEquals(true, vm.isRequestPeer("bob", vm.following.value, vm.followsLoaded.value))
     }
+
+    @Test
+    fun `a cache-seeded follow set classifies peers before the live kind3 lands`() = runTest {
+        val fake = FakeNostrRepository()
+        // Cold boot: the follow set is seeded from disk, the relay kind:3 has not arrived yet.
+        fake._contactListLoaded.value = false
+        fake._following.value = setOf("alice")
+        val vm = DmViewModel(fake)
+
+        assertEquals(false, vm.isRequestPeer("alice", vm.following.value, vm.followsLoaded.value))
+        assertEquals(true, vm.isRequestPeer("bob", vm.following.value, vm.followsLoaded.value))
+    }
 }
