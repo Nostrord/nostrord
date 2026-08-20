@@ -126,7 +126,7 @@ val DmConversationList =
         // Keyed on the peer and on the follow list, so it lands on Others when the open
         // conversation is a request (including when kind:3 arrives after the list renders) and
         // then leaves the choice to whoever taps the tabs.
-        val activeIsRequest = dmVm.isRequestPeer(props.activePubkey, useStateFlow(dmVm.following))
+        val activeIsRequest = dmVm.isRequestPeer(props.activePubkey, useStateFlow(dmVm.following), useStateFlow(dmVm.followsLoaded))
         useEffect(props.activePubkey, activeIsRequest) {
             if (activeIsRequest) setTab(1)
         }

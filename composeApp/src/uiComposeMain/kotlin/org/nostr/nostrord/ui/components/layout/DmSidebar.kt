@@ -177,7 +177,8 @@ fun DmConversationList(
     // is a request (including when kind:3 arrives after the list composes) and then leaves the
     // choice to whoever taps the tabs.
     val following by dmVm.following.collectAsState()
-    val activeIsRequest = dmVm.isRequestPeer(activePubkey, following)
+    val followsLoaded by dmVm.followsLoaded.collectAsState()
+    val activeIsRequest = dmVm.isRequestPeer(activePubkey, following, followsLoaded)
     LaunchedEffect(activePubkey, activeIsRequest) {
         if (activeIsRequest) tab = 1
     }
