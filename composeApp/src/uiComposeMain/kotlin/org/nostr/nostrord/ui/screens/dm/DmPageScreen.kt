@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -181,6 +182,13 @@ fun DmPageScreen(
         var uploadError by remember { mutableStateOf<String?>(null) }
         // Message being replied to; the composer shows its quote until it is sent or cancelled.
         var replyingTo by remember { mutableStateOf<String?>(null) }
+        // Picking Reply puts the caret in the composer, ready to type (chat/web parity). Bumped per
+        // pick so replying twice to the same message re-focuses.
+        val composerFocus = remember { FocusRequester() }
+        var replyFocusNonce by remember { mutableStateOf(0) }
+        LaunchedEffect(replyingTo, replyFocusNonce) {
+            if (replyingTo != null) runCatching { composerFocus.requestFocus() }
+        }
         // Resolve where this peer reads before the first message is written, not after their reply.
         LaunchedEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -495,7 +503,10 @@ fun DmPageScreen(
                                         onCopyText = { copyToClipboard(m.content) },
                                         onReact = { dmVm.react(pubkey, m.id, it) },
                                         onOpenReactionPicker = { reactingTo = m.id },
-                                        onReply = { replyingTo = m.id },
+                                        onReply = {
+                                            replyingTo = m.id
+                                            replyFocusNonce++
+                                        },
                                     )
                                     // Web parity (.dm-bubble max-width 75%): the spacer eats the other
                                     // 25% on the bubble's growth side; the Box owns the 75% slot and
@@ -644,6 +655,7 @@ fun DmPageScreen(
             replyAuthorName = replyParent?.let { replyAuthorName(it, userMetadata, name, myPubkey) },
             replySnippet = replyParent?.previewText(),
             onCancelReply = { replyingTo = null },
+            focusRequester = composerFocus,
             // A DM attachment is encrypted before it reaches a media server, so the picked bytes
             // go out as a kind:15 message instead of being uploaded and pasted as a url.
             onFilePicked = { bytes, filename ->
