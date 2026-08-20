@@ -54,6 +54,8 @@ import org.nostr.nostrord.network.managers.DmPairingManager
 import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.LegacySealVerifier
 import org.nostr.nostrord.network.managers.LiveCursorStore
+import org.nostr.nostrord.network.managers.MentionCandidate
+import org.nostr.nostrord.network.managers.MentionTags
 import org.nostr.nostrord.network.managers.MetadataManager
 import org.nostr.nostrord.network.managers.OutboxManager
 import org.nostr.nostrord.network.managers.PendingDmWrap
@@ -4814,6 +4816,20 @@ class NostrRepository(
         groupManager.fetchGroupMessageById(groupId, messageId)
     }
 
+    /**
+     * [mentions] plus the `@name`s typed out in [content] without picking a suggestion, matched
+     * against the group's members so a hand-typed mention still resolves to `nostr:npub` + a `p`
+     * tag. Members are the same pool the composer popup offers.
+     */
+    private fun withTypedMentions(groupId: String, content: String, mentions: Map<String, String>): Map<String, String> {
+        val metadata = metadataManager.userMetadata.value
+        val candidates = groupManager.getMembersForGroup(groupId).map { pubkey ->
+            val meta = metadata[pubkey]
+            MentionCandidate(pubkey, listOfNotNull(meta?.displayName, meta?.name))
+        }
+        return mentions + MentionTags.resolveTyped(content, mentions, candidates)
+    }
+
     override suspend fun sendMessage(groupId: String, content: String, channel: String?, mentions: Map<String, String>, replyToMessageId: String?, extraTags: List<List<String>>): Result<Unit> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
@@ -4822,7 +4838,7 @@ class NostrRepository(
             content = content,
             pubKey = pubKey,
             channel = channel,
-            mentions = mentions,
+            mentions = withTypedMentions(groupId, content, mentions),
             replyToMessageId = replyToMessageId,
             extraTags = extraTags,
             signEvent = { sessionManager.signEvent(it) },
@@ -4852,7 +4868,7 @@ class NostrRepository(
             title = title,
             content = content,
             pubKey = pubKey,
-            mentions = mentions,
+            mentions = withTypedMentions(groupId, content, mentions),
             signEvent = { sessionManager.signEvent(it) },
         )
     }
@@ -4872,7 +4888,7 @@ class NostrRepository(
             parent = parent,
             content = content,
             pubKey = pubKey,
-            mentions = mentions,
+            mentions = withTypedMentions(groupId, content, mentions),
             signEvent = { sessionManager.signEvent(it) },
         )
     }
