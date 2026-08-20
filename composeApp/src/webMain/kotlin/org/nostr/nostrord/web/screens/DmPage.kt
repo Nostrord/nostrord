@@ -22,6 +22,7 @@ import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.formatDateTime
 import org.nostr.nostrord.utils.formatTime
 import org.nostr.nostrord.web.DmConversationList
+import org.nostr.nostrord.web.bridge.VirtualKeyboard
 import org.nostr.nostrord.web.bridge.launchApp
 import org.nostr.nostrord.web.bridge.useStateFlow
 import org.nostr.nostrord.web.bridge.useViewModel
@@ -132,6 +133,8 @@ val DmPage =
         val myPubkey = dmVm.getPublicKey()
         // Message being replied to; the composer keeps its chip until the reply is sent.
         val (replyingTo, setReplyingTo) = useState<String?> { null }
+        // Bumped per Reply pick so replying twice to the same message re-focuses the composer.
+        val (replyNonce, setReplyNonce) = useState { 0 }
         // Resolve where this peer reads before the first message is written, not after their reply.
         useEffect(pubkey) { dmVm.openConversation(pubkey) }
         // Mark the conversation read while it is open (and as new messages stream in).
@@ -330,6 +333,19 @@ val DmPage =
             }
             ta.focus()
             document.asDynamic().execCommand("insertText", false, s)
+        }
+
+        // Picking Reply puts the caret in the composer, ready to type (chat parity). focus() is a
+        // no-op when the textarea is already focused with the keyboard dismissed (Android back
+        // button), so blur first and let the refocus re-summon the IME. Never blur while the
+        // keyboard is up: a refocus outside a user gesture is not guaranteed to bring it back.
+        useEffect(replyingTo, replyNonce) {
+            if (replyingTo == null) return@useEffect
+            val ta = composerInputRef.current ?: return@useEffect
+            if (!VirtualKeyboard.isOpen && document.asDynamic().activeElement === ta.asDynamic()) {
+                ta.blur()
+            }
+            ta.focus()
         }
 
         div {
@@ -651,6 +667,7 @@ val DmPage =
                         }
                         ctxItem(Ic.Reply, "Reply") {
                             setReplyingTo(menuMsg.id)
+                            setReplyNonce { it + 1 }
                             setMenuFor(null)
                         }
                         ctxItem(Ic.Visibility, "View source") {
