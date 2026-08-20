@@ -96,11 +96,16 @@ class DmViewModel(
     /** NIP-02 follow list, for deciding which inbox tab holds a conversation. */
     val following: StateFlow<Set<String>> = repo.following
 
+    /** True once the kind:3 contact list resolved; before that [following] is emptily wrong. */
+    val followsLoaded: StateFlow<Boolean> = repo.contactListLoaded
+
     /**
      * The conversation with [peerPubkey] sits in the Others inbox (message requests), so the list
      * must show that tab: an open thread hidden behind the Follows tab reads as an empty inbox.
+     * Until the contact list loads every peer looks unfollowed, so no one is a request yet:
+     * deciding early would flip a followed peer's reload onto the Others tab.
      */
-    fun isRequestPeer(peerPubkey: String?, follows: Set<String>): Boolean = peerPubkey != null && peerPubkey !in follows
+    fun isRequestPeer(peerPubkey: String?, follows: Set<String>, followsLoaded: Boolean): Boolean = followsLoaded && peerPubkey != null && peerPubkey !in follows
 
     /** Unread total across the Others inbox, for the requests-tab badge. */
     val othersUnread: StateFlow<Int> =

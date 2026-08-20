@@ -98,10 +98,26 @@ class DmViewModelTest {
     fun `an unfollowed peer belongs to the requests inbox`() = runTest {
         val fake = FakeNostrRepository()
         fake._following.value = setOf("alice")
+        fake._contactListLoaded.value = true
         val vm = DmViewModel(fake)
 
-        assertEquals(false, vm.isRequestPeer("alice", vm.following.value))
-        assertEquals(true, vm.isRequestPeer("bob", vm.following.value))
-        assertEquals(false, vm.isRequestPeer(null, vm.following.value))
+        assertEquals(false, vm.isRequestPeer("alice", vm.following.value, vm.followsLoaded.value))
+        assertEquals(true, vm.isRequestPeer("bob", vm.following.value, vm.followsLoaded.value))
+        assertEquals(false, vm.isRequestPeer(null, vm.following.value, vm.followsLoaded.value))
+    }
+
+    @Test
+    fun `no peer is a request before the contact list loads`() = runTest {
+        val fake = FakeNostrRepository()
+        fake._contactListLoaded.value = false
+        val vm = DmViewModel(fake)
+
+        // A reload lands here with follows still empty; deciding now would flip a
+        // followed peer's open conversation onto the Others tab.
+        assertEquals(false, vm.isRequestPeer("bob", vm.following.value, vm.followsLoaded.value))
+
+        fake._following.value = setOf("alice")
+        fake._contactListLoaded.value = true
+        assertEquals(true, vm.isRequestPeer("bob", vm.following.value, vm.followsLoaded.value))
     }
 }
