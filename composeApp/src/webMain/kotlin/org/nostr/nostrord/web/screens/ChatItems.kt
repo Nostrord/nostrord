@@ -1,6 +1,7 @@
 package org.nostr.nostrord.web.screens
 
 import org.nostr.nostrord.network.NostrGroupClient
+import org.nostr.nostrord.network.sortedForDisplay
 import org.nostr.nostrord.ui.screens.group.clampSystemEventsToLoadedWindow
 import org.nostr.nostrord.utils.getDateLabel
 import kotlin.math.abs
@@ -50,7 +51,7 @@ fun buildWebChatItems(
     currentUserPubkey: String? = null,
 ): List<WebChatItem> {
     val items = mutableListOf<WebChatItem>()
-    val sortedAll = messages.sortedBy { it.createdAt }
+    val sortedAll = messages.sortedForDisplay()
 
     // Bound the rendered timeline to the loaded message window (shared with the native list).
     val sorted = clampSystemEventsToLoadedWindow(sortedAll)

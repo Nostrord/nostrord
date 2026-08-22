@@ -2,6 +2,7 @@ package org.nostr.nostrord.ui.screens.group.model
 
 import androidx.compose.runtime.Immutable
 import org.nostr.nostrord.network.NostrGroupClient
+import org.nostr.nostrord.network.sortedForDisplay
 import org.nostr.nostrord.ui.screens.group.clampSystemEventsToLoadedWindow
 import org.nostr.nostrord.utils.getDateLabel
 
@@ -97,7 +98,7 @@ fun buildChatItems(
     var lastMessageTime: Long? = null
     var newMessagesDividerInserted = false
 
-    val sortedAll = messages.sortedBy { it.createdAt }
+    val sortedAll = messages.sortedForDisplay()
     // Bound the rendered timeline to the loaded message window (shared with the web list):
     // hide moderation events older than the oldest loaded kind:9 message so a streamed older
     // join/leave never inserts mid-list and shifts the reading position (opens above old events).

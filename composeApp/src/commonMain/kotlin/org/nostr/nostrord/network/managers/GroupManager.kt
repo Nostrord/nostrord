@@ -36,6 +36,7 @@ import org.nostr.nostrord.network.NostrGroupClient
 import org.nostr.nostrord.network.RoleDefinition
 import org.nostr.nostrord.network.groupMetadataListSerializer
 import org.nostr.nostrord.network.outbox.EventDeduplicator
+import org.nostr.nostrord.network.sortedForDisplay
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.storage.SecureStorage
 import org.nostr.nostrord.storage.addLeftGroupForRelay
@@ -3219,7 +3220,7 @@ class GroupManager(
             val current = currentMap[groupId] ?: emptyList()
             val index = messageIdIndex.getOrPut(groupId) { current.mapTo(mutableSetOf()) { it.id } }
             if (!index.add(message.id)) return@update currentMap
-            currentMap + (groupId to (current + message).sortedBy { it.createdAt })
+            currentMap + (groupId to (current + message).sortedForDisplay())
         }
         touchGroupRecency(groupId)
     }
@@ -3405,7 +3406,7 @@ class GroupManager(
             val list = current[groupId] ?: emptyList()
             if (list.any { it.id == message.id }) return@update current
             inserted = true
-            current + (groupId to (list + message).sortedBy { it.createdAt })
+            current + (groupId to (list + message).sortedForDisplay())
         }
         // Notify only on a real insert of a relay-delivered event: a disk hydration is not news,
         // and an un-echoed optimistic send is our own.
@@ -4215,7 +4216,7 @@ class GroupManager(
             val fresh = restored.filter { index.add(it.id) }
             if (fresh.isEmpty()) return@update current
             added = true
-            current + (groupId to (existing + fresh).sortedBy { it.createdAt })
+            current + (groupId to (existing + fresh).sortedForDisplay())
         }
         return added
     }
@@ -5051,11 +5052,12 @@ class GroupManager(
             // message, just append the sorted batch (the common live-message case).
             // Avoids re-sorting the full list on every flush.
             val lastExistingTs = current.lastOrNull()?.createdAt ?: 0L
-            val allNewer = newMessages.all { it.createdAt >= lastExistingTs }
+            // Strict: a same-second message can sort before an existing one on the id tie-break.
+            val allNewer = newMessages.all { it.createdAt > lastExistingTs }
             val merged = if (allNewer) {
-                current + newMessages.sortedBy { it.createdAt }
+                current + newMessages.sortedForDisplay()
             } else {
-                (current + newMessages).sortedBy { it.createdAt }
+                (current + newMessages).sortedForDisplay()
             }
             currentMap + (groupId to merged)
         }
@@ -5185,7 +5187,7 @@ class GroupManager(
             val index = messageIdIndex.getOrPut(groupId) { existing.mapTo(mutableSetOf()) { it.id } }
             val fresh = restored.filter { index.add(it.id) }
             if (fresh.isEmpty()) return@update current
-            current + (groupId to (existing + fresh).sortedBy { it.createdAt })
+            current + (groupId to (existing + fresh).sortedForDisplay())
         }
         touchGroupRecency(groupId)
     }
@@ -5728,7 +5730,7 @@ class GroupManager(
                     existing.forEach { index.add(it.id) }
                     val newMsgs = messages.filter { index.add(it.id) }
                     if (newMsgs.isEmpty() && existing.isNotEmpty()) return@update current
-                    val merged = (existing + newMsgs).sortedBy { it.createdAt }
+                    val merged = (existing + newMsgs).sortedForDisplay()
                     current + (groupId to merged)
                 }
                 touchGroupRecency(groupId)

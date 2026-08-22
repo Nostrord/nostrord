@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.nostr.nostrord.network.NostrGroupClient
+import org.nostr.nostrord.network.sortedForDisplay
 
 /**
  * Buffers incoming chat messages per group, then flushes them sorted by
@@ -86,7 +87,7 @@ class EventOrderingBuffer(
                                     b.toList()
                                 }
                             if (batch.isNotEmpty()) {
-                                onFlush(groupId, batch.sortedBy { it.createdAt })
+                                onFlush(groupId, batch.sortedForDisplay())
                             }
                         }
                 }
@@ -113,7 +114,7 @@ class EventOrderingBuffer(
                 }
             snapshot.forEach { (groupId, messages) ->
                 if (messages.isNotEmpty()) {
-                    onFlush(groupId, messages.sortedBy { it.createdAt })
+                    onFlush(groupId, messages.sortedForDisplay())
                 }
             }
         }
