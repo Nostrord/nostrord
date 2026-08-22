@@ -3665,9 +3665,14 @@ body {
 }
 
 .dm-composer-btn {
-    display: flex;
+    /* Same 32px box as the group .composer-btn: centers the icon (and the upload spinner)
+       against the one-line textarea, and keeps it on the bottom row when the text grows. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    padding: 0 0 var(--space-xs);
+    height: 32px;
+    padding: 0;
     border: 0;
     background: transparent;
     color: var(--color-text-secondary);
