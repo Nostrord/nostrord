@@ -1910,12 +1910,26 @@ class GroupManager(
                     content = "",
                 ),
             )
-            currentClient.send(
-                buildJsonArray {
-                    add("EVENT")
-                    add(signedMeta.toJsonObject())
-                }.toString(),
-            )
+            val metaJson = buildJsonArray {
+                add("EVENT")
+                add(signedMeta.toJsonObject())
+            }.toString()
+            val metaId = signedMeta.id ?: suggestedId
+            // The group's name rides this 9002, and relays can reject it when the creator's
+            // admin grant from the 9007 hasn't materialized yet — a fire-and-forget send turns
+            // that race into a silently nameless group. Await the OK; one delayed retry covers
+            // the grant race (same event id, so the resend is idempotent).
+            var metaResult = currentClient.sendAndAwaitOk(metaJson, metaId, timeoutMs = 7_000)
+            if (metaResult !is org.nostr.nostrord.network.PublishResult.Success) {
+                delay(1_000)
+                metaResult = currentClient.sendAndAwaitOk(metaJson, metaId, timeoutMs = 7_000)
+            }
+            if (metaResult !is org.nostr.nostrord.network.PublishResult.Success) {
+                // The group itself exists on the relay; failing the create would strand it.
+                org.nostr.nostrord.di.AppModule.postSystemMessage(
+                    "Group created, but the relay did not accept its name. Edit the group to set it.",
+                )
+            }
 
             // Normalized key + merged with the persisted slot, for the same reasons as
             // joinGroup: a raw URL variant forks a parallel relay entry, and a partial
