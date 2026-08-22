@@ -59,7 +59,7 @@ sealed class DmChatItem {
 }
 
 fun buildDmChatItems(messages: List<DmMessage>): List<DmChatItem> {
-    val sorted = messages.sortedBy { it.createdAt }
+    val sorted = messages.sortedBy { it.orderKey }
     val items = mutableListOf<DmChatItem>()
     sorted.forEachIndexed { i, m ->
         val prev = sorted.getOrNull(i - 1)

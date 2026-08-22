@@ -71,6 +71,7 @@ import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.upload.decodeImageDimensions
 import org.nostr.nostrord.network.upload.uploadEncryptedBlob
 import org.nostr.nostrord.nostr.Crypto
+import org.nostr.nostrord.nostr.DmMessageOrder
 import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
@@ -2218,8 +2219,9 @@ class NostrRepository(
         // A reply is an `e` tag on the rumor, with no relay hint: the rumor's id is computed
         // before any relay lookup, and the reply never leaves the conversation anyway.
         val replyTags = replyToId?.let { listOf(listOf("e", it)) } ?: emptyList()
+        val (createdAt, ms) = DmMessageOrder.next()
         return publishDmRumor(
-            Nip17.buildRumor(myPub, recipientPubkey, content, extraTags = replyTags),
+            Nip17.buildRumor(myPub, recipientPubkey, content, createdAt, DmMessageOrder.withOrderTag(replyTags, ms)),
             recipientPubkey,
             myPub,
             signer,
@@ -2297,8 +2299,9 @@ class NostrRepository(
                 val h = file.height
                 if (w != null && h != null) add(listOf("dim", "${w}x$h"))
             }
+        val (createdAt, ms) = DmMessageOrder.next()
         return publishDmRumor(
-            Nip17.buildRumor(myPub, recipientPubkey, file.url, extraTags = tags, kind = Nip17.KIND_FILE),
+            Nip17.buildRumor(myPub, recipientPubkey, file.url, createdAt, DmMessageOrder.withOrderTag(tags, ms), kind = Nip17.KIND_FILE),
             recipientPubkey,
             myPub,
             signer,
@@ -3222,6 +3225,7 @@ class NostrRepository(
             senderPubkey = pubkey,
             content = content,
             createdAt = createdAt,
+            orderKey = DmMessageOrder.orderKey(createdAt, tagsJson),
             mine = pubkey == myPubkey,
             kind = rumorKind,
             // Assembled as text around the tags exactly as they were stored, rather than parsed

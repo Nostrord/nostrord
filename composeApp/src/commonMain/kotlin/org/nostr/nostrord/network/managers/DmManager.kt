@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.nostr.nostrord.auth.NostrSigner
+import org.nostr.nostrord.nostr.DmMessageOrder
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.Nip17
 import org.nostr.nostrord.nostr.Nip17File
@@ -26,6 +27,8 @@ data class DmMessage(
     val content: String,
     val createdAt: Long,
     val mine: Boolean,
+    /** Sort key with the rumor's `ms` tag folded in; see [org.nostr.nostrord.nostr.DmMessageOrder]. */
+    val orderKey: Long = createdAt * 1000,
     /** Full decrypted rumor as NIP-01 JSON (unsigned). Null on messages cached
      *  before this field existed; DmMessage.eventJson() reconstructs a fallback. */
     val rumorJson: String? = null,
@@ -341,6 +344,7 @@ class DmManager(
                 senderPubkey = sender,
                 content = rumor.content,
                 createdAt = rumor.createdAt,
+                orderKey = DmMessageOrder.orderKey(rumor),
                 mine = sender == myPubkey,
                 rumorJson = rumor.toJsonString(),
                 kind = rumor.kind,
@@ -376,6 +380,7 @@ class DmManager(
                 senderPubkey = rumor.pubkey,
                 content = rumor.content,
                 createdAt = rumor.createdAt,
+                orderKey = DmMessageOrder.orderKey(rumor),
                 mine = rumor.pubkey == myPubkey,
                 rumorJson = rumor.toJsonString(),
                 kind = rumor.kind,
@@ -397,6 +402,7 @@ class DmManager(
                 senderPubkey = myPubkey,
                 content = rumor.content,
                 createdAt = rumor.createdAt,
+                orderKey = DmMessageOrder.orderKey(rumor),
                 mine = true,
                 rumorJson = rumor.toJsonString(),
                 kind = rumor.kind,
@@ -424,6 +430,7 @@ class DmManager(
                 senderPubkey = sender,
                 content = rumor.content,
                 createdAt = rumor.createdAt,
+                orderKey = DmMessageOrder.orderKey(rumor),
                 mine = sender == myPubkey,
                 rumorJson = rumor.toJsonString(),
                 kind = Nip17.KIND_REACTION,
@@ -443,6 +450,7 @@ class DmManager(
                 senderPubkey = myPubkey,
                 content = rumor.content,
                 createdAt = rumor.createdAt,
+                orderKey = DmMessageOrder.orderKey(rumor),
                 mine = true,
                 rumorJson = rumor.toJsonString(),
                 kind = Nip17.KIND_REACTION,
@@ -491,7 +499,7 @@ class DmManager(
     private fun addMessage(peer: String, message: DmMessage) {
         peerByRumor.update { it + (message.id to peer) }
         _messagesByPeer.update { current ->
-            val merged = (current[peer].orEmpty() + message).sortedBy { it.createdAt }
+            val merged = (current[peer].orEmpty() + message).sortedBy { it.orderKey }
             current + (peer to merged)
         }
     }
@@ -610,7 +618,7 @@ class DmManager(
                 messages
                     .groupBy { it.peerPubkey }
                     .mapValues { (_, msgs) ->
-                        msgs.sortedBy { it.createdAt }.map { m ->
+                        msgs.sortedBy { it.orderKey }.map { m ->
                             relaysByRumor.value[m.id]?.sorted()?.let { m.copy(relays = it) } ?: m
                         }
                     }
