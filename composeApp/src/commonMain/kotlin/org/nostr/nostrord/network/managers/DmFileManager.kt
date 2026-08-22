@@ -65,7 +65,7 @@ class DmFileManager(
      */
     fun load(rumorId: String, file: Nip17File) {
         if (_states.value[rumorId] is FileState.Ready || rumorId in inFlight.value) return
-        if (!file.isDecryptable) {
+        if (!file.isReadable) {
             _states.update { it + (rumorId to FileState.Failed("Unsupported encryption")) }
             return
         }
@@ -99,6 +99,14 @@ class DmFileManager(
                 http.get { url(file.url) }.readRawBytes()
             }
         if (encrypted.isEmpty()) return FileState.Failed("The file is no longer on the server")
+        if (file.isPlain) {
+            // Plain upload: `x` is the hash of the served bytes, nothing to decrypt.
+            val expected = file.encryptedHashHex ?: file.originalHashHex
+            if (expected != null && Crypto.sha256(encrypted).toHexString() != expected.lowercase()) {
+                return FileState.Failed("This file was altered on the server")
+            }
+            return FileState.Ready(encrypted, file.mimeType)
+        }
         val key = file.decryptionKeyHex?.decodeHexOrNull() ?: return FileState.Failed("Missing decryption key")
         val nonce = file.decryptionNonceHex?.decodeHexOrNull() ?: return FileState.Failed("Missing decryption nonce")
         val plaintext =

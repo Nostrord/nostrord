@@ -69,8 +69,9 @@ import org.nostr.nostrord.network.managers.UnreadManager
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
 import org.nostr.nostrord.network.upload.decodeImageDimensions
-import org.nostr.nostrord.network.upload.uploadMedia
+import org.nostr.nostrord.network.upload.uploadEncryptedBlob
 import org.nostr.nostrord.nostr.Crypto
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.nostr.Event
 import org.nostr.nostrord.nostr.KeyPair
 import org.nostr.nostrord.nostr.Nip11RelayInfo
@@ -2226,23 +2227,17 @@ class NostrRepository(
     }
 
     /**
-     * Send an image or other file as a NIP-17 kind:15 message: encrypt it, upload the ciphertext,
-     * and put the url plus the decryption material in the rumor. The media server only ever holds
-     * bytes it cannot read, unlike a plain url in a text message, which anyone who learns it can
-     * fetch. [width] and [height] let the reader reserve the right slot before the bytes land.
+     * Encrypt and upload a DM attachment, returning what the composer keeps until Enter. The
+     * media server only ever holds ciphertext: key and nonce travel inside the sealed kind:15.
+     * [width] and [height] let the reader reserve the right slot before the bytes land.
      */
-    override suspend fun sendDmFile(
-        recipientPubkey: String,
+    override suspend fun uploadDmFile(
         bytes: ByteArray,
         filename: String,
         mimeType: String,
         width: Int?,
         height: Int?,
-    ): Result<Unit> {
-        val signer =
-            ActiveAccountManager.session.value?.signer
-                ?: return Result.Error(AppError.Auth.NotAuthenticated)
-        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+    ): Result<DmOutgoingFile> {
         if (bytes.isEmpty()) return Result.Error(AppError.Unknown("The file is empty"))
         // A private key is 32 bytes off the platform CSPRNG, which is exactly what the cipher
         // wants; drawing from it keeps randomness on one primitive instead of a fifth expect/actual.
@@ -2251,37 +2246,75 @@ class NostrRepository(
         val encrypted =
             AesGcm.encrypt(key, nonce, bytes)
                 ?: return Result.Error(AppError.Unknown("Could not encrypt the file"))
-        val uploaded = uploadMedia(encrypted, "$filename.bin", "application/octet-stream")
+        val uploaded = uploadEncryptedBlob(encrypted, filename)
         val upload = uploaded.getOrNull() ?: return Result.Error(uploaded.errorOrNull() ?: AppError.Unknown("Upload failed"))
-        awaitPeerDmRelays(recipientPubkey)
         // Without a `dim` the reader cannot reserve the image's box and the thread jumps when the
-        // bytes land. The server cannot supply one here (it only sees ciphertext), so decode it.
+        // bytes land. The server cannot supply one (it only sees ciphertext), so decode it here.
         val (dimWidth, dimHeight) =
             if (width != null && height != null) {
                 width to height
             } else {
                 decodeImageDimensions(bytes, mimeType) ?: (null to null)
             }
+        return Result.Success(
+            DmOutgoingFile(
+                url = upload.url,
+                mimeType = mimeType,
+                keyHex = key.toHexString(),
+                nonceHex = nonce.toHexString(),
+                originalHashHex = Crypto.sha256(bytes).toHexString(),
+                size = bytes.size.toLong(),
+                width = dimWidth?.takeIf { it > 0 },
+                height = dimHeight?.takeIf { it > 0 },
+            ),
+        )
+    }
+
+    /**
+     * Send an uploaded attachment as a NIP-17 kind:15: the url is the content and the tags carry
+     * the key, the nonce and `ox`, the shape other NIP-17 clients read. Each file is its own rumor;
+     * any text goes in a separate kind:14.
+     */
+    override suspend fun sendDmUploadedFile(
+        recipientPubkey: String,
+        file: DmOutgoingFile,
+    ): Result<Unit> {
+        val signer =
+            ActiveAccountManager.session.value?.signer
+                ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        awaitPeerDmRelays(recipientPubkey)
         val tags =
             buildList {
-                add(listOf("file-type", mimeType))
+                add(listOf(Nip17File.TAG_FILE_TYPE, file.mimeType))
                 add(listOf("encryption-algorithm", Nip17File.ALGORITHM_AES_GCM))
-                add(listOf(Nip17File.TAG_DECRYPTION_KEY, key.toHexString()))
-                add(listOf("decryption-nonce", nonce.toHexString()))
+                add(listOf(Nip17File.TAG_DECRYPTION_KEY, file.keyHex))
+                add(listOf("decryption-nonce", file.nonceHex))
                 // Hash of the plaintext: what the reader checks the decrypted bytes against.
-                add(listOf("ox", Crypto.sha256(bytes).toHexString()))
-                add(listOf("x", Crypto.sha256(encrypted).toHexString()))
-                add(listOf("size", bytes.size.toString()))
-                if (dimWidth != null && dimHeight != null && dimWidth > 0 && dimHeight > 0) {
-                    add(listOf("dim", "${dimWidth}x$dimHeight"))
-                }
+                add(listOf("ox", file.originalHashHex))
+                add(listOf("size", file.size.toString()))
+                val w = file.width
+                val h = file.height
+                if (w != null && h != null) add(listOf("dim", "${w}x$h"))
             }
         return publishDmRumor(
-            Nip17.buildRumor(myPub, recipientPubkey, upload.url, extraTags = tags, kind = Nip17.KIND_FILE),
+            Nip17.buildRumor(myPub, recipientPubkey, file.url, extraTags = tags, kind = Nip17.KIND_FILE),
             recipientPubkey,
             myPub,
             signer,
         )
+    }
+
+    override suspend fun sendDmFile(
+        recipientPubkey: String,
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int?,
+        height: Int?,
+    ): Result<Unit> = when (val uploaded = uploadDmFile(bytes, filename, mimeType, width, height)) {
+        is Result.Error -> Result.Error(uploaded.error)
+        is Result.Success -> sendDmUploadedFile(recipientPubkey, uploaded.data)
     }
 
     /**
@@ -3174,11 +3207,11 @@ class NostrRepository(
 
     private fun org.nostr.nostrord.storage.cache.CachedMsg.toDmMessage(myPubkey: String): DmMessage {
         // Rows written before file messages had their own cache kind all claim kind:14, so the
-        // decryption tag is what identifies an attachment; without this an existing one hydrates
+        // file-type tag is what identifies an attachment; without this an existing one hydrates
         // as text and renders its blob url. Matched on the raw json: hydration runs over the whole
         // history at startup, and parsing every row's tags to answer this costs more than it saves.
         val rumorKind =
-            if (kind == DM_FILE_CACHE_KIND || tagsJson.contains("\"${Nip17File.TAG_DECRYPTION_KEY}\"")) {
+            if (kind == DM_FILE_CACHE_KIND || tagsJson.contains("\"${Nip17File.TAG_FILE_TYPE}\"")) {
                 Nip17.KIND_FILE
             } else {
                 Nip17.KIND_CHAT

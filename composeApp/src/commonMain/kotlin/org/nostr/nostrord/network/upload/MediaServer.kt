@@ -39,6 +39,13 @@ val RECOMMENDED_BLOSSOM_SERVERS: List<String> =
 val DEFAULT_BLOSSOM_SERVERS: List<String> = RECOMMENDED_BLOSSOM_SERVERS.take(3)
 
 /**
+ * Where an encrypted DM attachment goes when the user's own media service refuses it: media
+ * hosts such as nostr.build only take images, video and audio, and the ciphertext is none of
+ * those. A host other NIP-17 clients already use for the same purpose.
+ */
+const val ENCRYPTED_DM_FALLBACK_BLOSSOM: String = "https://blossom.jumble.social"
+
+/**
  * Normalize a user-typed server address to a comparable origin: adds `https://` when the
  * scheme is missing, drops the path/trailing slash, lowercases the host. Returns null when
  * the input can't be a server URL, so the caller can reject it with one check.

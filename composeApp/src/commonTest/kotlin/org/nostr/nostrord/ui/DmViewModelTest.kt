@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.nostr.nostrord.network.FakeNostrRepository
 import org.nostr.nostrord.network.managers.DmConversation
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.ui.screens.dm.DmViewModel
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -30,6 +31,8 @@ class DmViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
         Dispatchers.resetMain()
     }
+
+    private fun outgoing(url: String) = DmOutgoingFile(url, "image/png", "a".repeat(64), "b".repeat(24), "c".repeat(64), 10, null, null)
 
     private fun convo(peer: String, unread: Int = 0) = DmConversation(peerPubkey = peer, lastMessage = "hi", lastAt = 1, unread = unread)
 
@@ -131,5 +134,36 @@ class DmViewModelTest {
 
         assertEquals(false, vm.isRequestPeer("alice", vm.following.value, vm.followsLoaded.value))
         assertEquals(true, vm.isRequestPeer("bob", vm.following.value, vm.followsLoaded.value))
+    }
+
+    @Test
+    fun `each uploaded url goes out as its own file message and the text as one chat message`() = runTest {
+        val repo = FakeNostrRepository()
+        val sent = mutableListOf<String>()
+        repo.sendDmAction = { _, content ->
+            sent += content
+            org.nostr.nostrord.utils.Result.Success(Unit)
+        }
+        val vm = DmViewModel(repo)
+        val a = outgoing("https://x/a.png")
+        val b = outgoing("https://x/b.png")
+
+        vm.send("peer", "look https://x/a.png at these https://x/b.png", uploads = listOf(a, b))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("peer" to a.url, "peer" to b.url), repo.sentDmUploads)
+        assertEquals(listOf("look at these"), sent)
+    }
+
+    @Test
+    fun `an upload removed from the draft is not sent`() = runTest {
+        val repo = FakeNostrRepository()
+        val vm = DmViewModel(repo)
+        val a = outgoing("https://x/a.png")
+
+        vm.send("peer", "https://x/a.png", uploads = listOf(a, outgoing("https://x/gone.png")))
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("peer" to a.url), repo.sentDmUploads)
     }
 }

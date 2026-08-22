@@ -7,6 +7,7 @@ import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.network.managers.previewText
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.extractDmGroupInvite
 import org.nostr.nostrord.ui.navigation.DmRoute
@@ -214,6 +215,8 @@ val DmPage =
         }
         val (text, setText) = useState { "" }
         val (sending, setSending) = useState { false }
+        // Uploads whose url sits in the draft; each goes out as its own kind:15 on send.
+        val (pendingUploads, setPendingUploads) = useState<List<DmOutgoingFile>> { emptyList() }
         val send = {
             if (text.isNotBlank() && !sending) {
                 // Clear in the same gesture that sent: the publish round-trip lasts as long as
@@ -221,18 +224,22 @@ val DmPage =
                 // build/sign failure pushes it back, and only if no new message was started.
                 val sentText = text
                 val sentReply = replyingTo
+                val sentUploads = pendingUploads
                 setSending(true)
                 setText("")
                 setReplyingTo(null)
+                setPendingUploads(emptyList())
                 dmVm.send(
                     pubkey,
                     sentText,
                     replyToId = sentReply,
+                    uploads = sentUploads,
                     onSuccess = { setSending(false) },
                     onFailure = {
                         setSending(false)
                         setText { cur -> if (cur.isBlank()) sentText else cur }
                         setReplyingTo { cur -> cur ?: sentReply }
+                        setPendingUploads { cur -> if (cur.isEmpty()) sentUploads else cur }
                     },
                 )
             }
@@ -294,20 +301,22 @@ val DmPage =
 
         fun isMediaMime(type: String?): Boolean = type != null && (type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/"))
 
-        // Send a picked / pasted / dropped file as an encrypted kind:15 message. It is not appended
-        // to the draft as a url the way the group composer does: a DM attachment is encrypted
-        // before upload, so the server holds bytes nobody else can read.
-        fun sendMediaFile(picked: PickedFile) {
+        // Encrypt + upload a picked / pasted / dropped file and append its url to the draft
+        // (chat parity): nothing goes out until Enter, when each url becomes a kind:15 and the
+        // text a kind:14. The spinner sits on the attach icon for as long as the upload runs.
+        fun appendUploaded(file: DmOutgoingFile) {
+            setText { prev -> if (prev.isBlank()) file.url else "$prev ${file.url}" }
+            setPendingUploads { cur -> if (cur.any { it.url == file.url }) cur else cur + file }
+        }
+
+        fun uploadPicked(picked: PickedFile) {
             setUploadCount { it + 1 }
             launchApp {
                 try {
-                    dmVm.sendFile(
-                        recipientPubkey = pubkey,
-                        bytes = picked.bytes,
-                        filename = picked.name,
-                        mimeType = picked.mimeType,
-                        onFailure = { setUploadError(it) },
-                    )
+                    when (val r = dmVm.uploadFile(picked.bytes, picked.name, picked.mimeType)) {
+                        is Result.Success -> appendUploaded(r.data)
+                        is Result.Error -> setUploadError(r.error.message)
+                    }
                 } finally {
                     setUploadCount { it - 1 }
                 }
@@ -319,7 +328,7 @@ val DmPage =
             launchApp {
                 try {
                     when (val r = readPickedFile(file)) {
-                        is Result.Success -> sendMediaFile(r.data)
+                        is Result.Success -> uploadPicked(r.data)
                         is Result.Error -> setUploadError(r.error.message)
                     }
                 } finally {
@@ -794,7 +803,7 @@ val DmPage =
                         onBusyChange = { b -> setUploadCount { if (b) it + 1 else it - 1 } }
                         onPickerClosed = { composerInputRef.current?.focus() }
                         onUploaded = {}
-                        onPicked = { picked -> sendMediaFile(picked) }
+                        onPicked = { picked -> uploadPicked(picked) }
                         onError = { setUploadError(it) }
                     }
                     textarea {
