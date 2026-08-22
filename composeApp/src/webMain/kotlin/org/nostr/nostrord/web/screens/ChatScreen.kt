@@ -16,6 +16,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.ConnectionManager
 import org.nostr.nostrord.network.managers.GroupLoadingState
 import org.nostr.nostrord.network.managers.GroupManager
+import org.nostr.nostrord.network.sortedForDisplay
 import org.nostr.nostrord.network.toEventJson
 import org.nostr.nostrord.network.upload.UploadResult
 import org.nostr.nostrord.nostr.Nip19
@@ -1029,7 +1030,7 @@ val ChatScreen =
         // Memoized so the O(n log n) sort + index only re-run when THIS group's messages change,
         // not on every re-render (reactions, zaps, metadata and members each emit separately and
         // would otherwise re-sort the whole list 15+ times during a group switch).
-        val messages = useMemo(rawMessages) { rawMessages.sortedBy { it.createdAt } }
+        val messages = useMemo(rawMessages) { rawMessages.sortedForDisplay() }
         val messagesById = useMemo(messages) { messages.associateBy { it.id } }
         // Copied nevents and links embed the relay this group is open on. Scanning for "some relay
         // serving this id" would hand out the other relay's same-id group, and the link would open
