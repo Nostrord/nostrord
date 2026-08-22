@@ -1844,6 +1844,8 @@ class GroupManager(
         currentRelayUrl: String,
         signEvent: suspend (Event) -> Event,
         publishJoinedGroups: suspend () -> Unit,
+        /** Non-null flags the confirmed group id for the encrypted kind:10009 section. */
+        markListedPrivately: ((relayUrl: String, groupId: String) -> Unit)? = null,
     ): Result<String> {
         val currentClient = connectionManager.getFocusedClient()
             ?: return Result.Error(AppError.Network.Disconnected(currentRelayUrl))
@@ -1928,6 +1930,9 @@ class GroupManager(
             // #p sweep and registers a pending "invite" for our own group; settle it so
             // the creator never sees the accept/decline prompt.
             discardPendingInvite(confirmedGroupId)
+            // Before the list publish: flagged afterwards, the id would already have gone out
+            // in the clear once, and relays keep that version.
+            markListedPrivately?.invoke(normalizedCreateRelay, confirmedGroupId)
             publishJoinedGroups()
             currentClient.requestGroupMessages(confirmedGroupId)
             // Pull the kind:39000 produced by the edit-metadata above so name and parent land

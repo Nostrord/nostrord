@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -74,6 +75,7 @@ fun CreateGroupModal(
     var isClosed by remember { mutableStateOf(false) }
     var isRestricted by remember { mutableStateOf(false) }
     var isHidden by remember { mutableStateOf(false) }
+    var listPrivately by remember { mutableStateOf(false) }
     var isCreating by remember { mutableStateOf(false) }
     var creatingJob by remember { mutableStateOf<Job?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -400,6 +402,24 @@ fun CreateGroupModal(
                         onCheckedChange = { isHidden = it },
                     )
 
+                    Spacer(modifier = Modifier.height(Spacing.xxl))
+
+                    // Local-list setting, not a relay flag: encrypted NIP-51 entry from the start.
+                    Text(
+                        text = "YOUR LIST",
+                        style = NostrordTypography.SectionHeader,
+                        color = NostrordColors.TextMuted,
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+
+                    AccessToggleRow(
+                        icon = Icons.Default.Shield,
+                        label = GroupAccessCopy.LIST_PRIVATELY_LABEL,
+                        description = GroupAccessCopy.LIST_PRIVATELY_DESC,
+                        checked = listPrivately,
+                        onCheckedChange = { listPrivately = it },
+                    )
+
                     // Error message
                     if (errorMessage != null) {
                         Spacer(modifier = Modifier.height(Spacing.md))
@@ -493,6 +513,7 @@ fun CreateGroupModal(
                                                         isHidden = isHidden,
                                                         picture = picture.trim().ifBlank { null },
                                                         customGroupId = customGroupId.trim().ifBlank { null },
+                                                        listPrivately = listPrivately,
                                                     )
                                                 } else {
                                                     AppModule.nostrRepository.createGroup(
@@ -505,6 +526,7 @@ fun CreateGroupModal(
                                                         isHidden = isHidden,
                                                         picture = picture.trim().ifBlank { null },
                                                         customGroupId = customGroupId.trim().ifBlank { null },
+                                                        listPrivately = listPrivately,
                                                     )
                                                 }
                                             isCreating = false

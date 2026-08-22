@@ -536,6 +536,11 @@ interface NostrRepositoryApi {
     )
 
     // --- Group operations ---
+    /**
+     * Create a group. [listPrivately] puts it straight into the encrypted section of the
+     * kind:10009, so the membership is never advertised in the clear, not even by the
+     * creation-time list publish.
+     */
     suspend fun createGroup(
         name: String,
         about: String?,
@@ -546,6 +551,7 @@ interface NostrRepositoryApi {
         isHidden: Boolean = false,
         picture: String? = null,
         customGroupId: String? = null,
+        listPrivately: Boolean = false,
     ): Result<String>
 
     /**
@@ -563,6 +569,7 @@ interface NostrRepositoryApi {
         isHidden: Boolean = false,
         picture: String? = null,
         customGroupId: String? = null,
+        listPrivately: Boolean = false,
     ): Result<String>
 
     /**
