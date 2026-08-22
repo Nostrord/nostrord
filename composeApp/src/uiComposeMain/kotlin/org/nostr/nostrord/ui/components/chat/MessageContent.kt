@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
@@ -68,6 +69,7 @@ import org.nostr.nostrord.isLinuxDesktop
 import org.nostr.nostrord.network.CachedEvent
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip84
+import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.components.media.AudioPlayerContent
 import org.nostr.nostrord.ui.components.media.PlatformVideoPlayer
@@ -80,6 +82,7 @@ import org.nostr.nostrord.ui.navigation.GroupView
 import org.nostr.nostrord.ui.navigation.LocalFrameNavigator
 import org.nostr.nostrord.ui.screens.group.components.GroupHeaderIcon
 import org.nostr.nostrord.ui.text.BlockEmbedText
+import org.nostr.nostrord.ui.text.StandaloneRef
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.NostrordTypography
@@ -182,24 +185,35 @@ private fun AnnotatedString.Builder.appendWithEmojiFont(
     }
 }
 
-private fun isBlockPart(part: ContentPart): Boolean = when (part) {
+private fun isBlockPart(part: ContentPart, content: String? = null): Boolean = when (part) {
     is ImagePart -> true
     is CodeBlockPart -> true
     is BlockquotePart -> true
     is VideoPart -> true
     is AudioPart -> true
-    is RelayPart -> true
+    // A NIP-29 group address is the full card only when the message IS the link; mixed with text
+    // it flows as a chip. A bare relay url stays its own block.
+    is RelayPart -> !part.url.contains('\'') || content == null || content.trim() == part.url
     is CashuPart -> true
     is CashuRequestPart -> true
     is MentionPart -> {
-        // Quoted events (nevent, note, naddr) are block elements
-        when (part.reference.entity) {
-            is Nip19.Entity.Nevent, is Nip19.Entity.Note, is Nip19.Entity.Naddr -> true
+        // Quoted events are always blocks. A profile or group reference gets its card only when it
+        // stands alone on its line; inline with text it is a chip (web parity).
+        when (val entity = part.reference.entity) {
+            is Nip19.Entity.Nevent, is Nip19.Entity.Note -> true
+            is Nip19.Entity.Naddr ->
+                entity.kind != GROUP_METADATA_KIND || isStandaloneRef(part, content)
+            is Nip19.Entity.Npub, is Nip19.Entity.Nprofile -> isStandaloneRef(part, content)
             else -> false
         }
     }
     else -> false
 }
+
+/** kind:39000 — the NIP-29 group metadata a naddr points at. */
+private const val GROUP_METADATA_KIND = 39000
+
+private fun isStandaloneRef(part: MentionPart, content: String?): Boolean = content != null && StandaloneRef.isStandalone(content, part.reference.bech32)
 
 /**
  * Absorb the newline the author typed on either side of a block embed: the block already breaks
@@ -207,14 +221,14 @@ private fun isBlockPart(part: ContentPart): Boolean = when (part) {
  * media (rules in [BlockEmbedText]). Text parts left empty are dropped so they add no line of
  * their own.
  */
-private fun trimAroundBlocks(parts: List<ContentPart>): List<ContentPart> = parts
+private fun trimAroundBlocks(parts: List<ContentPart>, content: String? = null): List<ContentPart> = parts
     .mapIndexed { index, part ->
         if (part !is TextPart) {
             part
         } else {
             var text = part.content
-            if (parts.getOrNull(index - 1)?.let { isBlockPart(it) } == true) text = BlockEmbedText.trimAfter(text)
-            if (parts.getOrNull(index + 1)?.let { isBlockPart(it) } == true) text = BlockEmbedText.trimBefore(text)
+            if (parts.getOrNull(index - 1)?.let { isBlockPart(it, content) } == true) text = BlockEmbedText.trimAfter(text)
+            if (parts.getOrNull(index + 1)?.let { isBlockPart(it, content) } == true) text = BlockEmbedText.trimBefore(text)
             if (text == part.content) part else part.copy(content = text)
         }
     }.filter { it !is TextPart || it.content.isNotEmpty() }
@@ -283,12 +297,12 @@ fun MessageContent(
 
     // Group parts into inline sequences and block elements
     val groups =
-        remember(parts) {
+        remember(parts, content) {
             val result = mutableListOf<List<ContentPart>>()
             var currentInlineGroup = mutableListOf<ContentPart>()
 
-            trimAroundBlocks(parts).forEach { part ->
-                if (isBlockPart(part)) {
+            trimAroundBlocks(parts, content).forEach { part ->
+                if (isBlockPart(part, content)) {
                     // Flush current inline group if not empty
                     if (currentInlineGroup.isNotEmpty()) {
                         result.add(currentInlineGroup.toList())
@@ -333,7 +347,7 @@ fun MessageContent(
                 val firstPart = group.firstOrNull()
 
                 // Check if this is a block element group (single block element)
-                if (group.size == 1 && isBlockPart(firstPart!!)) {
+                if (group.size == 1 && isBlockPart(firstPart!!, content)) {
                     when (firstPart) {
                         is ImagePart -> {
                             // 4dp above and nothing below: the web's `.msg-image { margin-top: 4px }`,
@@ -461,22 +475,13 @@ fun MessageContent(
                             Spacer(modifier = Modifier.height(8.dp))
                             val apostrophe = firstPart.url.indexOf('\'')
                             if (apostrophe > 0) {
-                                // NIP-29 group address relay'groupId: the full card only when the
-                                // message IS the link; mixed with text it renders as the compact
-                                // chip (web parity).
-                                if (content.trim() == firstPart.url) {
-                                    GroupLinkCard(
-                                        groupId = firstPart.url.substring(apostrophe + 1),
-                                        relayUrl = firstPart.url.substring(0, apostrophe),
-                                        onNavigateToGroup = onNavigateToGroup,
-                                    )
-                                } else {
-                                    GroupMentionChip(
-                                        groupId = firstPart.url.substring(apostrophe + 1),
-                                        relayUrl = firstPart.url.substring(0, apostrophe),
-                                        onNavigateToGroup = onNavigateToGroup,
-                                    )
-                                }
+                                // NIP-29 group address relay'groupId: a block only when the message
+                                // IS the link, so it always reads as the full card here.
+                                GroupLinkCard(
+                                    groupId = firstPart.url.substring(apostrophe + 1),
+                                    relayUrl = firstPart.url.substring(0, apostrophe),
+                                    onNavigateToGroup = onNavigateToGroup,
+                                )
                             } else {
                                 RelayContent(
                                     url = firstPart.url,
@@ -519,6 +524,7 @@ fun MessageContent(
                         userMetadata = userMetadata,
                         onMentionClick = onMentionClick,
                         onHashtagClick = onHashtagClick,
+                        onNavigateToGroup = onNavigateToGroup,
                         textColor = textColor,
                     )
                 }
@@ -555,20 +561,23 @@ private fun InlineContentGroup(
     modifier: Modifier = Modifier,
     onMentionClick: (String) -> Unit = {},
     onHashtagClick: (String) -> Unit = {},
+    onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit = { _, _, _, _ -> },
     textColor: Color = NostrordColors.TextContent,
 ) {
-    // Check if this group contains any custom emojis
+    val chips = rememberInlineChips(parts, userMetadata, onMentionClick, onNavigateToGroup)
     val hasCustomEmojis =
         remember(parts) {
             parts.any { it is CustomEmojiPart }
         }
 
-    if (hasCustomEmojis) {
-        // Messages with emojis: disable selection to prevent crash, but show images
+    // Inline images (emoji, chip avatars) go through the placeholder renderer, which must run
+    // without selection: InlineTextContent inside a SelectionContainer crashes on Skiko.
+    if (hasCustomEmojis || chips.isNotEmpty()) {
         DisableSelection {
-            InlineContentWithEmojis(
+            InlineContentWithImages(
                 parts = parts,
                 userMetadata = userMetadata,
+                chips = chips,
                 modifier = modifier,
                 onMentionClick = onMentionClick,
                 onHashtagClick = onHashtagClick,
@@ -576,7 +585,7 @@ private fun InlineContentGroup(
             )
         }
     } else {
-        // Messages without emojis: full selection support
+        // Plain runs keep full selection support
         InlineContentTextOnly(
             parts = parts,
             userMetadata = userMetadata,
@@ -588,14 +597,213 @@ private fun InlineContentGroup(
     }
 }
 
+/** A user or group reference that flows inline as an avatar + name chip (web `.msg-mention-chip`). */
+private data class InlineChip(
+    /** Inline-content id and link tag; unique per reference. */
+    val key: String,
+    val imageUrl: String?,
+    val identifier: String,
+    val name: String,
+    /** Text for renderers that paint no avatar, where a bare name would not read as a mention. */
+    val plainName: String,
+    val isGroup: Boolean,
+    val onClick: () -> Unit,
+)
+
+/** The group a reference points at: `naddr` (kind:39000) and the `relay'groupId` link form. */
+private fun groupRefOf(part: ContentPart): Pair<String, String?>? = when (part) {
+    is MentionPart -> (part.reference.entity as? Nip19.Entity.Naddr)
+        ?.takeIf { it.kind == GROUP_METADATA_KIND }
+        ?.let { it.identifier to it.relays.firstOrNull() }
+    is RelayPart -> part.url.indexOf('\'').takeIf { it > 0 }
+        ?.let { part.url.substring(it + 1) to part.url.substring(0, it) }
+    else -> null
+}
+
+/** The chips for [parts], keyed by the token they were parsed from (bech32, or the relay link). */
+@Composable
+private fun rememberInlineChips(
+    parts: List<ContentPart>,
+    userMetadata: Map<String, org.nostr.nostrord.network.UserMetadata>,
+    onMentionClick: (String) -> Unit,
+    onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
+): Map<String, InlineChip> {
+    val userChips =
+        remember(parts, userMetadata) {
+            parts.filterIsInstance<MentionPart>().mapNotNull { part ->
+                val pubkey =
+                    when (val entity = part.reference.entity) {
+                        is Nip19.Entity.Npub -> entity.pubkey
+                        is Nip19.Entity.Nprofile -> entity.pubkey
+                        else -> null
+                    } ?: return@mapNotNull null
+                val meta = userMetadata[pubkey]
+                val name = meta?.displayName?.takeIf { it.isNotBlank() }
+                    ?: meta?.name?.takeIf { it.isNotBlank() }
+                    ?: shortNpub(pubkey)
+                part.reference.bech32 to
+                    InlineChip(
+                        key = "chip:${part.reference.bech32}",
+                        imageUrl = meta?.picture,
+                        identifier = pubkey,
+                        name = name,
+                        plainName = "@$name",
+                        isGroup = false,
+                        onClick = { onMentionClick(pubkey) },
+                    )
+            }.toMap()
+        }
+
+    // The group flows are collected only for a run that names a group: every message row with a
+    // mention would otherwise recompose on each group-list update.
+    val hasGroupRef = remember(parts) { parts.any { groupRefOf(it) != null } }
+    if (!hasGroupRef) return userChips
+    return userChips + rememberGroupChips(parts, onNavigateToGroup)
+}
+
+/** The group chips for [parts], resolved against the relay each reference points at. */
+@Composable
+private fun rememberGroupChips(
+    parts: List<ContentPart>,
+    onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
+): Map<String, InlineChip> {
+    val repo = AppModule.nostrRepository
+    val groups by repo.groups.collectAsState()
+    val groupsByRelay by repo.groupsByRelay.collectAsState()
+
+    // A group named by a reference is usually one the reader has not joined, so its kind:39000
+    // has to be fetched before the chip can show a name and an avatar.
+    LaunchedEffect(parts) {
+        parts.mapNotNull { groupRefOf(it) }.distinct().forEach { (groupId, relayUrl) ->
+            if (relayUrl != null && resolveGroupRef(groupsByRelay, groupId, relayUrl, fallback = groups)?.name == null) {
+                repo.fetchGroupPreview(groupId, relayUrl)
+            }
+        }
+    }
+
+    return remember(parts, groups, groupsByRelay) {
+        parts.mapNotNull { part ->
+            val (groupId, relayUrl) = groupRefOf(part) ?: return@mapNotNull null
+            val meta = resolveGroupRef(groupsByRelay, groupId, relayUrl, fallback = groups)
+            val name = meta?.name?.takeIf { it.isNotBlank() } ?: groupId
+            val token = if (part is MentionPart) part.reference.bech32 else (part as RelayPart).url
+            token to
+                InlineChip(
+                    key = "chip:$token",
+                    imageUrl = meta?.picture,
+                    identifier = groupId,
+                    name = name,
+                    plainName = name,
+                    isGroup = true,
+                    onClick = { onNavigateToGroup(groupId, meta?.name, relayUrl, null) },
+                )
+        }.toMap()
+    }
+}
+
+/** The inline-content entry that paints a chip's avatar, sized to sit on the text baseline. */
+private fun chipInlineContent(chip: InlineChip): InlineTextContent = InlineTextContent(
+    placeholder =
+    Placeholder(
+        // 4sp wider than the avatar: the trailing gap before the name (web chip `gap: 4px`).
+        width = 20.sp,
+        height = 16.sp,
+        placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
+    ),
+) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+        OptimizedSmallAvatar(
+            imageUrl = chip.imageUrl,
+            identifier = chip.identifier,
+            displayName = chip.name,
+            size = 16.dp,
+            shape = if (chip.isGroup) RoundedCornerShape(4.dp) else CircleShape,
+            isGroup = chip.isGroup,
+        )
+    }
+}
+
+/** Avatar + tinted name, the inline form of a user or group reference. */
+private fun AnnotatedString.Builder.appendChip(chip: InlineChip, inlineAvatars: Boolean) {
+    withLink(
+        LinkAnnotation.Clickable(
+            tag = chip.key,
+            // One chip style for people and groups (web `.msg-mention-chip`): mention text on a
+            // brand tint. The avatar shape is what tells the two apart.
+            styles =
+            TextLinkStyles(
+                style =
+                SpanStyle(
+                    color = NostrordColors.MentionText,
+                    fontWeight = FontWeight.Medium,
+                    background = NostrordColors.Primary.copy(alpha = 0.18f),
+                ),
+            ),
+            linkInteractionListener = { chip.onClick() },
+        ),
+    ) {
+        if (inlineAvatars) {
+            appendInlineContent(chip.key, " ")
+            append(chip.name)
+        } else {
+            append(chip.plainName)
+        }
+    }
+}
+
 /**
- * Renders inline content WITH custom emoji images.
+ * One reference run in the annotated string: the chip when the reference resolves to a person or
+ * a group, else the tinted link a quoted event keeps.
+ */
+private fun AnnotatedString.Builder.appendReference(
+    part: MentionPart,
+    chip: InlineChip?,
+    inlineAvatars: Boolean,
+    userMetadata: Map<String, org.nostr.nostrord.network.UserMetadata>,
+    onMentionClick: (String) -> Unit,
+) {
+    if (chip != null) {
+        appendChip(chip, inlineAvatars)
+        return
+    }
+    val displayText = getMentionDisplayText(part, userMetadata)
+    val style =
+        TextLinkStyles(
+            style =
+            SpanStyle(
+                color = NostrordColors.MentionText,
+                fontWeight = FontWeight.Medium,
+                background = NostrordColors.MentionText.copy(alpha = 0.15f),
+            ),
+        )
+    val pubkey =
+        when (val entity = part.reference.entity) {
+            is Nip19.Entity.Npub -> entity.pubkey
+            is Nip19.Entity.Nprofile -> entity.pubkey
+            else -> null
+        }
+    if (pubkey != null) {
+        withLink(
+            LinkAnnotation.Clickable(tag = "mention_$pubkey", styles = style, linkInteractionListener = { onMentionClick(pubkey) }),
+        ) {
+            append(displayText)
+        }
+    } else {
+        withLink(LinkAnnotation.Url(url = part.reference.uri, styles = style)) {
+            append(displayText)
+        }
+    }
+}
+
+/**
+ * Renders inline content WITH images (custom emoji, chip avatars).
  * Must be wrapped in DisableSelection to prevent crashes.
  */
 @Composable
-private fun InlineContentWithEmojis(
+private fun InlineContentWithImages(
     parts: List<ContentPart>,
     userMetadata: Map<String, org.nostr.nostrord.network.UserMetadata>,
+    chips: Map<String, InlineChip>,
     modifier: Modifier = Modifier,
     onMentionClick: (String) -> Unit = {},
     onHashtagClick: (String) -> Unit = {},
@@ -626,7 +834,7 @@ private fun InlineContentWithEmojis(
     // unique emoji, reused for every occurrence.  This avoids creating N separate
     // SafeEmojiImage composables when the same emoji appears N times.
     val inlineContentMap =
-        remember(parts) {
+        remember(parts, chips) {
             parts
                 .filterIsInstance<CustomEmojiPart>()
                 .distinctBy { it.shortcode }
@@ -645,7 +853,7 @@ private fun InlineContentWithEmojis(
                                 imageUrl = emoji.imageUrl,
                             )
                         }
-                }
+                } + chips.values.associate { chip -> chip.key to chipInlineContent(chip) }
         }
 
     // Build the annotated string — each emoji references its shortcode key
@@ -653,12 +861,13 @@ private fun InlineContentWithEmojis(
     // Spoilers start hidden; tapping one toggles its index here (Discord-style).
     var revealedSpoilers by remember(parts) { mutableStateOf(emptySet<Int>()) }
     val annotatedString =
-        remember(parts, userMetadata, emojiFontFamily, revealedSpoilers) {
+        remember(parts, userMetadata, chips, emojiFontFamily, revealedSpoilers) {
             var spoilerIndex = 0
             buildAnnotatedString {
                 parts.forEach { part ->
                     when (part) {
                         is TextPart -> appendWithEmojiFont(part.content, emojiFontFamily)
+                        is RelayPart -> chips[part.url]?.let { appendChip(it, inlineAvatars = true) } ?: append(part.url)
                         is LinkPart -> {
                             withLink(
                                 LinkAnnotation.Url(
@@ -672,58 +881,7 @@ private fun InlineContentWithEmojis(
                                 append(part.url)
                             }
                         }
-                        is MentionPart -> {
-                            val displayText = getMentionDisplayText(part, userMetadata)
-                            val entity = part.reference.entity
-                            // For user mentions (npub/nprofile), use clickable to open profile modal
-                            // For other mentions (nevent, note), use URL to open in external handler
-                            val pubkey =
-                                when (entity) {
-                                    is Nip19.Entity.Npub -> entity.pubkey
-                                    is Nip19.Entity.Nprofile -> entity.pubkey
-                                    else -> null
-                                }
-                            if (pubkey != null) {
-                                withLink(
-                                    LinkAnnotation.Clickable(
-                                        tag = "mention_$pubkey",
-                                        styles =
-                                        TextLinkStyles(
-                                            style =
-                                            SpanStyle(
-                                                color = NostrordColors.MentionText,
-                                                fontWeight = FontWeight.Medium,
-                                                // Tinted pill behind the @name approximates the web mention chip.
-                                                // (No inline avatar: InlineTextContent images crash on Skiko.)
-                                                background = NostrordColors.MentionText.copy(alpha = 0.15f),
-                                            ),
-                                        ),
-                                        linkInteractionListener = { onMentionClick(pubkey) },
-                                    ),
-                                ) {
-                                    append(displayText)
-                                }
-                            } else {
-                                withLink(
-                                    LinkAnnotation.Url(
-                                        url = part.reference.uri,
-                                        styles =
-                                        TextLinkStyles(
-                                            style =
-                                            SpanStyle(
-                                                color = NostrordColors.MentionText,
-                                                fontWeight = FontWeight.Medium,
-                                                // Tinted pill behind the @name approximates the web mention chip.
-                                                // (No inline avatar: InlineTextContent images crash on Skiko.)
-                                                background = NostrordColors.MentionText.copy(alpha = 0.15f),
-                                            ),
-                                        ),
-                                    ),
-                                ) {
-                                    append(displayText)
-                                }
-                            }
-                        }
+                        is MentionPart -> appendReference(part, chips[part.reference.bech32], inlineAvatars = true, userMetadata = userMetadata, onMentionClick = onMentionClick)
                         is CustomEmojiPart -> {
                             appendInlineContent(
                                 part.shortcode,
@@ -862,58 +1020,7 @@ private fun InlineContentTextOnly(
                                 append(part.url)
                             }
                         }
-                        is MentionPart -> {
-                            val displayText = getMentionDisplayText(part, userMetadata)
-                            val entity = part.reference.entity
-                            // For user mentions (npub/nprofile), use clickable to open profile modal
-                            // For other mentions (nevent, note), use URL to open in external handler
-                            val pubkey =
-                                when (entity) {
-                                    is Nip19.Entity.Npub -> entity.pubkey
-                                    is Nip19.Entity.Nprofile -> entity.pubkey
-                                    else -> null
-                                }
-                            if (pubkey != null) {
-                                withLink(
-                                    LinkAnnotation.Clickable(
-                                        tag = "mention_$pubkey",
-                                        styles =
-                                        TextLinkStyles(
-                                            style =
-                                            SpanStyle(
-                                                color = NostrordColors.MentionText,
-                                                fontWeight = FontWeight.Medium,
-                                                // Tinted pill behind the @name approximates the web mention chip.
-                                                // (No inline avatar: InlineTextContent images crash on Skiko.)
-                                                background = NostrordColors.MentionText.copy(alpha = 0.15f),
-                                            ),
-                                        ),
-                                        linkInteractionListener = { onMentionClick(pubkey) },
-                                    ),
-                                ) {
-                                    append(displayText)
-                                }
-                            } else {
-                                withLink(
-                                    LinkAnnotation.Url(
-                                        url = part.reference.uri,
-                                        styles =
-                                        TextLinkStyles(
-                                            style =
-                                            SpanStyle(
-                                                color = NostrordColors.MentionText,
-                                                fontWeight = FontWeight.Medium,
-                                                // Tinted pill behind the @name approximates the web mention chip.
-                                                // (No inline avatar: InlineTextContent images crash on Skiko.)
-                                                background = NostrordColors.MentionText.copy(alpha = 0.15f),
-                                            ),
-                                        ),
-                                    ),
-                                ) {
-                                    append(displayText)
-                                }
-                            }
-                        }
+                        is MentionPart -> appendReference(part, chip = null, inlineAvatars = false, userMetadata = userMetadata, onMentionClick = onMentionClick)
                         // Text formatting
                         is BoldPart -> {
                             withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
@@ -1348,8 +1455,10 @@ private fun QuotedEventBlock(
                 onMentionClick = onMentionClick,
             )
         }
+        is Nip19.Entity.Npub -> UserLinkCard(pubkey = entity.pubkey, onMentionClick = onMentionClick, modifier = modifier)
+        is Nip19.Entity.Nprofile -> UserLinkCard(pubkey = entity.pubkey, onMentionClick = onMentionClick, modifier = modifier)
         is Nip19.Entity.Naddr -> {
-            if (entity.kind == 39000) {
+            if (entity.kind == GROUP_METADATA_KIND) {
                 GroupLinkCard(
                     groupId = entity.identifier,
                     relayUrl = entity.relays.firstOrNull(),
@@ -1423,8 +1532,10 @@ private fun ThreadQuoteCard(
         Column(
             modifier =
             modifier
-                .fillMaxWidth()
+                // Cap first: fillMaxWidth expands to the capped constraint, not the row width
+                // (the web cards are a block box with `max-width: 380px`).
                 .widthIn(max = 380.dp)
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(NostrordColors.Surface)
                 .then(
@@ -2546,57 +2657,7 @@ private fun QuotedInlineContentGroup(
                                 append(part.url)
                             }
                         }
-                        is MentionPart -> {
-                            val displayText = getMentionDisplayText(part, userMetadata)
-                            // User mentions (npub/nprofile) open the profile; event/group refs have
-                            // no profile, so they keep the URL handler.
-                            val mentionPubkey =
-                                when (val mentionEntity = part.reference.entity) {
-                                    is Nip19.Entity.Npub -> mentionEntity.pubkey
-                                    is Nip19.Entity.Nprofile -> mentionEntity.pubkey
-                                    else -> null
-                                }
-                            if (mentionPubkey != null) {
-                                withLink(
-                                    LinkAnnotation.Clickable(
-                                        tag = "mention_$mentionPubkey",
-                                        styles =
-                                        TextLinkStyles(
-                                            style =
-                                            SpanStyle(
-                                                color = NostrordColors.MentionText,
-                                                fontWeight = FontWeight.Medium,
-                                                // Tinted pill behind the @name approximates the web mention chip.
-                                                // (No inline avatar: InlineTextContent images crash on Skiko.)
-                                                background = NostrordColors.MentionText.copy(alpha = 0.15f),
-                                            ),
-                                        ),
-                                        linkInteractionListener = { onMentionClick(mentionPubkey) },
-                                    ),
-                                ) {
-                                    append(displayText)
-                                }
-                            } else {
-                                withLink(
-                                    LinkAnnotation.Url(
-                                        url = part.reference.uri,
-                                        styles =
-                                        TextLinkStyles(
-                                            style =
-                                            SpanStyle(
-                                                color = NostrordColors.MentionText,
-                                                fontWeight = FontWeight.Medium,
-                                                // Tinted pill behind the @name approximates the web mention chip.
-                                                // (No inline avatar: InlineTextContent images crash on Skiko.)
-                                                background = NostrordColors.MentionText.copy(alpha = 0.15f),
-                                            ),
-                                        ),
-                                    ),
-                                ) {
-                                    append(displayText)
-                                }
-                            }
-                        }
+                        is MentionPart -> appendReference(part, chip = null, inlineAvatars = false, userMetadata = userMetadata, onMentionClick = onMentionClick)
                         is CustomEmojiPart -> {
                             appendInlineContent(
                                 "quoted_emoji_${emojiIndex++}_${part.shortcode}",
@@ -2898,9 +2959,10 @@ private fun GroupLinkCard(
         Row(
             modifier =
             modifier
-                .fillMaxWidth()
-                // Match the web group-link-card cap (.group-link-card max-width: 380px).
+                // Match the web group-link-card box (.group-link-card max-width: 380px): the
+                // cap comes first so fillMaxWidth expands to it.
                 .widthIn(max = 380.dp)
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(NostrordColors.Surface)
                 .clickable { onNavigateToGroup(groupId, groupMeta?.name, relayUrl, null) }
@@ -2945,62 +3007,6 @@ private fun GroupLinkCard(
                     )
                 }
             }
-        }
-    }
-}
-
-/**
- * Compact chip for a group reference mixed with running text (group avatar + name); the full
- * [GroupLinkCard] is reserved for a message that is only the group link. Mirrors the web
- * `.msg-mention-chip` rendering of inline group refs.
- */
-@Composable
-private fun GroupMentionChip(
-    groupId: String,
-    relayUrl: String?,
-    onNavigateToGroup: (groupId: String, groupName: String?, relayUrl: String?, messageId: String?) -> Unit,
-) {
-    val repo = AppModule.nostrRepository
-    val groups by repo.groups.collectAsState()
-    val groupsByRelay by repo.groupsByRelay.collectAsState()
-    // Same relay-scoped resolution as the full card: the chip's avatar must come from the
-    // relay the naddr points at.
-    val groupMeta = resolveGroupRef(groupsByRelay, groupId, relayUrl, fallback = groups)
-
-    LaunchedEffect(groupId, relayUrl) {
-        if (relayUrl != null && groupMeta?.name == null) {
-            repo.fetchGroupPreview(groupId, relayUrl)
-        }
-    }
-
-    val displayName = groupMeta?.name?.takeIf { it.isNotBlank() } ?: groupId
-    DisableSelection {
-        Row(
-            modifier =
-            Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(NostrordColors.PrimarySubtle)
-                .clickable { onNavigateToGroup(groupId, groupMeta?.name, relayUrl, null) }
-                .pointerHoverIcon(PointerIcon.Hand)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            GroupHeaderIcon(
-                pictureUrl = groupMeta?.picture,
-                groupId = groupId,
-                displayName = displayName,
-                size = 16.dp,
-                cornerRadius = 4.dp,
-            )
-            Text(
-                text = displayName,
-                color = NostrordColors.Primary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            )
         }
     }
 }
@@ -3219,6 +3225,32 @@ private fun AddressableEvent(
 }
 
 /**
+ * A user reference standing alone on its line: the same [ProfileCard] a kind:0 naddr gets, the
+ * native counterpart of the web `.user-link-card`.
+ */
+@Composable
+private fun UserLinkCard(
+    pubkey: String,
+    onMentionClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val userMetadata by AppModule.nostrRepository.userMetadata.collectAsState()
+
+    LaunchedEffect(pubkey) {
+        if (!userMetadata.containsKey(pubkey)) {
+            AppModule.nostrRepository.requestUserMetadata(setOf(pubkey))
+        }
+    }
+
+    ProfileCard(
+        metadata = userMetadata[pubkey],
+        pubkey = pubkey,
+        onClick = { onMentionClick(pubkey) },
+        modifier = modifier,
+    )
+}
+
+/**
  * Profile card for kind 0 (user metadata) naddr
  */
 @Composable
@@ -3231,21 +3263,24 @@ private fun ProfileCard(
     Row(
         modifier =
         modifier
+            // Same box as the web `.user-link-card`: capped at 380px, filling it.
+            .widthIn(max = 380.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(NostrordShapes.radiusMedium))
             .background(NostrordColors.Surface)
             .clickable(onClick = onClick)
-            .padding(Spacing.md),
+            .padding(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         // Avatar
         OptimizedUserAvatar(
             imageUrl = metadata?.picture,
             pubkey = pubkey,
             displayName = metadata?.displayName ?: metadata?.name ?: "Unknown",
-            size = 64.dp,
+            size = 36.dp,
         )
 
-        Spacer(modifier = Modifier.width(Spacing.md))
+        Spacer(modifier = Modifier.width(Spacing.sm))
 
         // Profile info
         Column(modifier = Modifier.weight(1f)) {
@@ -3256,21 +3291,14 @@ private fun ProfileCard(
                 fontWeight = FontWeight.Bold,
             )
 
+            // Name + nip05 only: an about paragraph turns a reference into a wall of text.
             if (metadata?.nip05 != null) {
                 Text(
                     text = metadata.nip05,
                     color = NostrordColors.TextSecondary,
                     style = NostrordTypography.Caption,
-                )
-            }
-
-            if (metadata?.about != null) {
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                Text(
-                    text = metadata.about,
-                    color = NostrordColors.TextContent,
-                    style = NostrordTypography.Caption,
-                    maxLines = 3,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

@@ -40,6 +40,7 @@ import org.nostr.nostrord.ui.scroll.JumpPillTarget
 import org.nostr.nostrord.ui.text.BlockEmbedText
 import org.nostr.nostrord.ui.text.MarkdownEmphasis
 import org.nostr.nostrord.ui.text.MarkdownMedia
+import org.nostr.nostrord.ui.text.StandaloneRef
 import org.nostr.nostrord.utils.ChatSearch
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.epochSeconds
@@ -3669,24 +3670,13 @@ private fun ChildrenBuilder.renderEntities(
             val apostrophe = token.indexOf('\'')
             groupRef(token.substring(apostrophe + 1), "wss://" + token.substring(0, apostrophe), asCard = content.trim() == token, onGroupRef)
         } else {
-            // A mention standing alone (on its own line) keeps the rich form (group card,
-            // @name); inline with other text it becomes a compact avatar+name chip, matching
-            // the prototype. Per-line, not whole-message, so an invite DM ("You've been
-            // added to X" + the naddr on the next line) still renders the group card.
-            val standalone = content.split('\n').any { it.trim() == token }
+            // A reference standing alone on its line gets the rich card (profile, group);
+            // inline with other text it becomes a compact avatar+name chip, matching the
+            // prototype.
+            val standalone = StandaloneRef.isStandalone(content, token)
             when (val entity = Nip19.decode(token.removePrefix("nostr:"))) {
-                is Nip19.Entity.Npub ->
-                    if (standalone) {
-                        mentionSpan(entity.pubkey, userMetadata, onUser)
-                    } else {
-                        userMentionChip(entity.pubkey, userMetadata, onUser)
-                    }
-                is Nip19.Entity.Nprofile ->
-                    if (standalone) {
-                        mentionSpan(entity.pubkey, userMetadata, onUser)
-                    } else {
-                        userMentionChip(entity.pubkey, userMetadata, onUser)
-                    }
+                is Nip19.Entity.Npub -> userRef(entity.pubkey, userMetadata, standalone, onUser)
+                is Nip19.Entity.Nprofile -> userRef(entity.pubkey, userMetadata, standalone, onUser)
                 is Nip19.Entity.Nevent ->
                     QuotedEvent {
                         eventId = entity.eventId
@@ -3766,10 +3756,11 @@ private fun isBlockEmbedToken(token: String, content: String): Boolean {
     // text it is an inline chip.
     if (token.contains('\'')) return content.trim() == token
     if (token.startsWith("wss://") || token.startsWith("ws://")) return false
-    val standalone = content.split('\n').any { it.trim() == token }
+    val standalone = StandaloneRef.isStandalone(content, token)
     return when (val entity = Nip19.decode(token.removePrefix("nostr:"))) {
         is Nip19.Entity.Nevent, is Nip19.Entity.Note -> true
         is Nip19.Entity.Naddr -> entity.kind == 39000 && standalone
+        is Nip19.Entity.Npub, is Nip19.Entity.Nprofile -> standalone
         else -> false
     }
 }
@@ -3803,13 +3794,68 @@ private fun ChildrenBuilder.renderFormattedText(text: String, emojiMap: Map<Stri
     if (last < text.length) renderTextWithEmojis(text.substring(last), emojiMap)
 }
 
-private fun ChildrenBuilder.mentionSpan(pubkey: String, userMetadata: Map<String, UserMetadata>, onUser: (String) -> Unit) {
-    span {
-        className = ClassName("msg-mention")
-        onClick = { onUser(pubkey) }
-        +"@${displayName(pubkey, userMetadata[pubkey])}"
+/** A user reference in message text: the full profile card when it stands alone, else the chip. */
+private fun ChildrenBuilder.userRef(
+    pubkey: String,
+    userMetadata: Map<String, UserMetadata>,
+    asCard: Boolean,
+    onUser: (String) -> Unit,
+) {
+    if (asCard) {
+        UserLinkCard {
+            this.pubkey = pubkey
+            meta = userMetadata[pubkey]
+            this.onUser = onUser
+        }
+    } else {
+        userMentionChip(pubkey, userMetadata, onUser)
     }
 }
+
+private external interface UserLinkCardProps : Props {
+    var pubkey: String
+    var meta: UserMetadata?
+    var onUser: (String) -> Unit
+}
+
+/**
+ * Standalone `npub` / `nprofile` reference: avatar + name + nip05 + about, the user counterpart of
+ * [GroupLinkCard] and of native `ProfileCard`. Tapping it opens the profile.
+ */
+private val UserLinkCard =
+    FC<UserLinkCardProps> { props ->
+        val name = displayName(props.pubkey, props.meta)
+
+        useEffect(props.pubkey, props.meta == null) {
+            if (props.meta == null) {
+                launchApp { AppModule.nostrRepository.requestUserMetadata(setOf(props.pubkey)) }
+            }
+        }
+
+        div {
+            className = ClassName("user-link-card")
+            onClick = { props.onUser(props.pubkey) }
+            WebAvatar {
+                url = props.meta?.picture
+                seed = props.pubkey
+                this.name = name
+                cls = "user-link-avatar"
+            }
+            div {
+                className = ClassName("user-link-meta")
+                div {
+                    className = ClassName("user-link-name")
+                    +name
+                }
+                props.meta?.nip05?.takeIf { it.isNotBlank() }?.let {
+                    div {
+                        className = ClassName("user-link-nip05")
+                        +it
+                    }
+                }
+            }
+        }
+    }
 
 /** Inline user mention chip (prototype): circular avatar + display name, tinted and tappable. */
 private fun ChildrenBuilder.userMentionChip(pubkey: String, userMetadata: Map<String, UserMetadata>, onUser: (String) -> Unit) {
