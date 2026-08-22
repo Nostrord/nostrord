@@ -7108,6 +7108,49 @@ body {
     text-overflow: ellipsis;
 }
 
+/* Standalone npub/nprofile reference: profile card, the user twin of .group-link-card. */
+.user-link-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 380px;
+    margin: 4px 0;
+    padding: 8px;
+    background: var(--color-surface);
+    border-radius: 12px;
+    cursor: pointer;
+}
+.user-link-card:hover {
+    background: var(--color-surface-variant);
+}
+.user-link-avatar {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    font-size: 16px;
+    font-weight: 700;
+}
+.user-link-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+.user-link-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.user-link-nip05 {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 /* "Test sound" link in notification settings */
 .settings-test-sound {
     margin-top: 8px;
