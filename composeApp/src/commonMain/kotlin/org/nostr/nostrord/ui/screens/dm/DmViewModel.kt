@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmMessage
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.Result
 
@@ -47,25 +48,6 @@ class DmViewModel(
 
     /** Reactions keyed by the message they target, then by emoji. */
     val reactions = repo.dmReactions
-
-    /**
-     * Send [bytes] as an encrypted kind:15 attachment. Unlike pasting a url into the text, the
-     * file is unreadable to anyone who has not been sent the key.
-     */
-    fun sendFile(
-        recipientPubkey: String,
-        bytes: ByteArray,
-        filename: String,
-        mimeType: String,
-        width: Int? = null,
-        height: Int? = null,
-        onFailure: (String) -> Unit = {},
-    ) {
-        viewModelScope.launch {
-            val result = repo.sendDmFile(recipientPubkey, bytes, filename, mimeType, width, height)
-            if (result is Result.Error) onFailure(result.error.message)
-        }
-    }
 
     /** React to [messageId] in the conversation with [peerPubkey]. */
     fun react(peerPubkey: String, messageId: String, emoji: String, emojiUrl: String? = null) {
@@ -179,17 +161,32 @@ class DmViewModel(
 
     fun getPublicKey(): String? = repo.getPublicKey()
 
+    /**
+     * Send the composer's draft. Every url in [uploads] that is still in [content] goes out as
+     * its own kind:15 (how NIP-17 clients send images), and whatever text is left as one
+     * kind:14, so a reader that renders kind:15 as media sees the picture and not a link.
+     */
     fun send(
         recipientPubkey: String,
         content: String,
         replyToId: String? = null,
+        uploads: List<DmOutgoingFile> = emptyList(),
         onSuccess: () -> Unit = {},
         onFailure: () -> Unit = {},
     ) {
-        val text = content.trim()
-        if (text.isEmpty()) return
+        val (files, text) = splitUploads(content, uploads)
+        if (text.isEmpty() && files.isEmpty()) return
         viewModelScope.launch {
-            val result = withMinDuration { repo.sendDm(recipientPubkey, text, replyToId) }
+            val result =
+                withMinDuration {
+                    var r: Result<Unit> = Result.Success(Unit)
+                    for (file in files) {
+                        r = repo.sendDmUploadedFile(recipientPubkey, file)
+                        if (r is Result.Error) break
+                    }
+                    if (r is Result.Success && text.isNotEmpty()) r = repo.sendDm(recipientPubkey, text, replyToId)
+                    r
+                }
             when (result) {
                 is Result.Error -> onFailure()
                 is Result.Success -> onSuccess()
@@ -202,6 +199,29 @@ class DmViewModel(
 
     /** Drop a refused message from the conversation (the Dismiss action). */
     fun dismiss(rumorId: String) = repo.dismissDm(rumorId)
+
+    /** Encrypt and upload a picked file; the composer keeps the result until Enter. */
+    suspend fun uploadFile(
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+    ): Result<DmOutgoingFile> = repo.uploadDmFile(bytes, filename, mimeType)
+
+    /** The uploads whose url is still in [content], in content order, and the text without them. */
+    internal fun splitUploads(
+        content: String,
+        uploads: List<DmOutgoingFile>,
+    ): Pair<List<DmOutgoingFile>, String> {
+        val byUrl = uploads.associateBy { it.url }
+        val files = mutableListOf<DmOutgoingFile>()
+        val words =
+            content.split(' ', '\n').filter { word ->
+                val upload = byUrl[word]
+                if (upload != null && files.none { it.url == word }) files += upload
+                upload == null
+            }
+        return files to words.joinToString(" ").trim()
+    }
 
     /** Clear the unread badge for a conversation when it is open on screen. */
     fun markRead(peerPubkey: String) {

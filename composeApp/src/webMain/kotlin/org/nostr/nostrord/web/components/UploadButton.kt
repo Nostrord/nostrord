@@ -75,6 +75,7 @@ external interface UploadButtonProps : Props {
     /**
      * Takes the validated bytes instead of uploading them. DMs use it: their attachments are
      * encrypted before they reach a media server, so the plain upload here would defeat the point.
+     * The caller owns the spinner through [busy] for as long as its upload runs.
      */
     var onPicked: ((PickedFile) -> Unit)?
 }

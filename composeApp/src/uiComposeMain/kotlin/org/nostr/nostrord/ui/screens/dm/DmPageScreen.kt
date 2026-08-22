@@ -49,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
@@ -62,6 +63,7 @@ import org.nostr.nostrord.network.UserMetadata
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.network.managers.previewText
 import org.nostr.nostrord.network.upload.mimeTypeForFilename
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.ui.components.ConfirmDialog
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.chat.DateSeparator
@@ -91,6 +93,7 @@ import org.nostr.nostrord.ui.screens.profile.ProfilePageViewModel
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
+import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.formatTime
 import org.nostr.nostrord.utils.rememberClipboardWriter
 
@@ -180,7 +183,6 @@ fun DmPageScreen(
         val myPubkey = remember { dmVm.getPublicKey() }
         // Message the emoji picker was opened for; null while it is closed.
         var reactingTo by remember { mutableStateOf<String?>(null) }
-        var uploadError by remember { mutableStateOf<String?>(null) }
         // Message being replied to; the composer shows its quote until it is sent or cancelled.
         var replyingTo by remember { mutableStateOf<String?>(null) }
         // Picking Reply puts the caret in the composer, ready to type (chat/web parity). Bumped per
@@ -266,6 +268,9 @@ fun DmPageScreen(
         // The message the composer is answering, if it is still in the thread.
         val replyParent = messages.firstOrNull { it.id == replyingTo }
 
+        // Uploads whose url sits in the draft; each goes out as its own kind:15 on send.
+        var pendingUploads by remember(pubkey) { mutableStateOf<List<DmOutgoingFile>>(emptyList()) }
+        var uploadError by remember { mutableStateOf<String?>(null) }
         val send = {
             val body = textFieldValue.text.trim()
             if (body.isNotBlank() && !isSending) {
@@ -274,13 +279,16 @@ fun DmPageScreen(
                 // takes, and a draft still sitting there reads as "not sent".
                 val sentValue = textFieldValue
                 val sentReply = replyParent?.id
+                val sentUploads = pendingUploads
                 isSending = true
                 textFieldValue = TextFieldValue("")
                 replyingTo = null
+                pendingUploads = emptyList()
                 dmVm.send(
                     pubkey,
                     body,
                     replyToId = sentReply,
+                    uploads = sentUploads,
                     onSuccess = { isSending = false },
                     onFailure = {
                         isSending = false
@@ -288,6 +296,7 @@ fun DmPageScreen(
                         if (textFieldValue.text.isBlank()) {
                             textFieldValue = sentValue
                             replyingTo = sentReply
+                            pendingUploads = sentUploads
                         }
                     },
                 )
@@ -678,22 +687,25 @@ fun DmPageScreen(
             replySnippet = replyParent?.previewText(),
             onCancelReply = { replyingTo = null },
             focusRequester = composerFocus,
-            // A DM attachment is encrypted before it reaches a media server, so the picked bytes
-            // go out as a kind:15 message instead of being uploaded and pasted as a url.
+            // A picked or pasted file is encrypted and uploaded here, and its url appended to the
+            // draft like any other upload; on send each url becomes its own kind:15.
             onFilePicked = { bytes, filename ->
-                dmVm.sendFile(
-                    recipientPubkey = pubkey,
-                    bytes = bytes,
-                    filename = filename,
-                    mimeType = mimeTypeForFilename(filename),
-                    onFailure = { uploadError = it },
-                )
+                when (val r = dmVm.uploadFile(bytes, filename, mimeTypeForFilename(filename))) {
+                    is Result.Success -> {
+                        val current = textFieldValue.text
+                        val sep = if (current.isNotEmpty() && !current.endsWith(" ") && !current.endsWith("\n")) " " else ""
+                        val newText = current + sep + r.data.url
+                        textFieldValue = TextFieldValue(newText, TextRange(newText.length))
+                        if (pendingUploads.none { it.url == r.data.url }) pendingUploads = pendingUploads + r.data
+                    }
+                    is Result.Error -> uploadError = r.error.message
+                }
             },
         )
 
         uploadError?.let { error ->
             ConfirmDialog(
-                title = "Could not send the file",
+                title = "Upload Failed",
                 message = error,
                 confirmLabel = "OK",
                 cancelLabel = null,

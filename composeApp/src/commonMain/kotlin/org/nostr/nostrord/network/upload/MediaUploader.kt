@@ -91,6 +91,35 @@ suspend fun uploadMedia(
 }
 
 /**
+ * Upload the ciphertext of a DM attachment. It keeps the original [filename] and goes out as
+ * `application/octet-stream` through the configured service first, like any other upload; a
+ * host that refuses it (nostr.build takes media only) is answered by [ENCRYPTED_DM_FALLBACK_BLOSSOM],
+ * which stores arbitrary blobs.
+ */
+suspend fun uploadEncryptedBlob(
+    bytes: ByteArray,
+    filename: String,
+): Result<UploadResult> {
+    val mime = "application/octet-stream"
+    val first = uploadMedia(bytes, filename, mime)
+    if (first is Result.Success) return first
+    val settings = AppModule.mediaServerSettings
+    val fallback =
+        MediaUploader.upload(
+            service = MediaUploadService.Blossom,
+            blossomServers = listOf(ENCRYPTED_DM_FALLBACK_BLOSSOM),
+            bytes = bytes,
+            filename = filename,
+            mimeType = mime,
+            buildNip98AuthHeader = AppModule.nostrRepository::buildNip98AuthHeader,
+            buildBlossomAuthHeader = AppModule.nostrRepository::buildBlossomAuthHeader,
+        )
+    if (fallback is Result.Success) return fallback
+    // Configured service's refusal is the one the user can act on (Settings → Media).
+    return if (settings.service.value is MediaUploadService.Nip96) first else fallback
+}
+
+/**
  * Mime type for an upload, derived from the filename extension. Blob refs
  * ("nostrord-blob|<mime>|…") carry their own mime because the bytes are already cached.
  */

@@ -15,6 +15,7 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17File
 import org.nostr.nostrord.nostr.Nip46Client
@@ -214,10 +215,7 @@ interface NostrRepositoryApi {
     /** Send status of our own DM messages, keyed by rumor id (Sending until a relay OKs). */
     val dmMessageStatus: StateFlow<Map<String, GroupManager.MessageStatus>>
 
-    /**
-     * Send a file as an encrypted kind:15 message: the bytes are encrypted before upload, so the
-     * media server holds ciphertext and only the recipient can read the file.
-     */
+    /** [uploadDmFile] followed by [sendDmUploadedFile], for a caller with nothing else to send. */
     suspend fun sendDmFile(
         recipientPubkey: String,
         bytes: ByteArray,
@@ -225,6 +223,21 @@ interface NostrRepositoryApi {
         mimeType: String,
         width: Int? = null,
         height: Int? = null,
+    ): Result<Unit>
+
+    /** Encrypt and upload a DM attachment; the result waits in the composer until Enter. */
+    suspend fun uploadDmFile(
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int? = null,
+        height: Int? = null,
+    ): Result<DmOutgoingFile>
+
+    /** Send an uploaded attachment as its own kind:15 (url as content, key/nonce/ox as tags). */
+    suspend fun sendDmUploadedFile(
+        recipientPubkey: String,
+        file: DmOutgoingFile,
     ): Result<Unit>
 
     /** React to a DM message with [emoji] (NIP-25 rumor); [emojiUrl] for a custom emoji. */

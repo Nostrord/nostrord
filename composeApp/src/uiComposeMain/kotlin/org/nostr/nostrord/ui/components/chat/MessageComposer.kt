@@ -115,8 +115,8 @@ fun MessageComposer(
     groupMentions: Map<String, GroupInfo> = emptyMap(),
     onGroupMentionsChange: (Map<String, GroupInfo>) -> Unit = {},
     // Set by callers that own the upload themselves (DMs encrypt the bytes first). Picked and
-    // pasted files are handed over raw instead of being uploaded and appended as a url.
-    onFilePicked: ((ByteArray, String) -> Unit)? = null,
+    // pasted files are handed over raw; the spinner stays up until the handler returns.
+    onFilePicked: (suspend (ByteArray, String) -> Unit)? = null,
     // Message being replied to. Non-null shows its quote above the input with a way out.
     replyAuthorName: String? = null,
     replySnippet: String? = null,
@@ -191,12 +191,11 @@ fun MessageComposer(
             pasteError = "This file is too large. The maximum upload size is 20 MB."
             return
         }
-        if (onFilePicked != null) {
-            isUploadingPaste = false
-            onFilePicked(bytes, filename)
-            return
-        }
         try {
+            if (onFilePicked != null) {
+                onFilePicked(bytes, filename)
+                return
+            }
             val mime = mimeTypeForFilename(filename)
             when (val result = uploadMedia(bytes, filename, mime)) {
                 is Result.Success -> appendUploadedUrl(result.data.url)

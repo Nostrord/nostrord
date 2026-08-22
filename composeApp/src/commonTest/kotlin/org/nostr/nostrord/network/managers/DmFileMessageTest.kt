@@ -109,6 +109,23 @@ class DmFileMessageTest {
         val file = Nip17File.fromRumor(rumor)
         assertNotNull(file)
         assertTrue(!file.isDecryptable)
+        assertTrue(!file.isReadable)
+    }
+
+    @Test
+    fun `a plain upload with no key is readable as-is`() {
+        val rumor =
+            fileRumor(
+                signer().pubkey,
+                signer().pubkey,
+                tags = listOf(listOf("file-type", "image/png"), listOf("x", "d".repeat(64)), listOf("size", "10")),
+            )
+        val file = Nip17File.fromRumor(rumor)
+        assertNotNull(file)
+        assertTrue(file.isPlain)
+        assertTrue(!file.isDecryptable)
+        assertTrue(file.isReadable)
+        assertEquals("d".repeat(64), file.encryptedHashHex)
     }
 
     @Test

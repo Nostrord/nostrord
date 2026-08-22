@@ -18,6 +18,7 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.network.managers.PendingGroupInvite
 import org.nostr.nostrord.network.managers.ZapManager
 import org.nostr.nostrord.network.outbox.Nip65Relay
+import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.nostr.Nip11RelayInfo
 import org.nostr.nostrord.nostr.Nip17File
 import org.nostr.nostrord.nostr.Nip46Client
@@ -178,6 +179,36 @@ class FakeNostrRepository : NostrRepositoryApi {
         height: Int?,
     ): Result<Unit> {
         sentDmFiles += Triple(recipientPubkey, mimeType, bytes.size)
+        return Result.Success(Unit)
+    }
+
+    override suspend fun uploadDmFile(
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        width: Int?,
+        height: Int?,
+    ): Result<DmOutgoingFile> = Result.Success(
+        DmOutgoingFile(
+            url = "https://fake/$filename",
+            mimeType = mimeType,
+            keyHex = "a".repeat(64),
+            nonceHex = "b".repeat(24),
+            originalHashHex = "c".repeat(64),
+            size = bytes.size.toLong(),
+            width = width,
+            height = height,
+        ),
+    )
+
+    /** Uploads sent through [sendDmUploadedFile], as (recipient, url). */
+    val sentDmUploads = mutableListOf<Pair<String, String>>()
+
+    override suspend fun sendDmUploadedFile(
+        recipientPubkey: String,
+        file: DmOutgoingFile,
+    ): Result<Unit> {
+        sentDmUploads += recipientPubkey to file.url
         return Result.Success(Unit)
     }
 
