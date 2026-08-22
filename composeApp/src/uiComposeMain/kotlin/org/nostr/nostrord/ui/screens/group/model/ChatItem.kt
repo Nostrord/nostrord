@@ -147,6 +147,10 @@ fun buildChatItems(
             flushPendingSystemEvent()
             items.add(ChatItem.NewMessagesDivider)
             newMessagesDividerInserted = true
+            // Reset grouping after the divider: a continuation row under it would lose its
+            // author header and read as coming from whoever posted above the divider.
+            lastMessagePubkey = null
+            lastMessageTime = null
         }
 
         when (message.kind) {
