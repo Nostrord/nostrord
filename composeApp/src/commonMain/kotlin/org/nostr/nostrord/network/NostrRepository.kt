@@ -4521,9 +4521,11 @@ class NostrRepository(
         isHidden: Boolean,
         picture: String?,
         customGroupId: String?,
+        listPrivately: Boolean,
     ): Result<String> = createGroupInternal(
         name, about, relayUrl, isPrivate, isClosed, isRestricted, isHidden, picture, customGroupId,
         parentGroupId = null,
+        listPrivately = listPrivately,
     )
 
     override suspend fun createSubgroup(
@@ -4537,11 +4539,13 @@ class NostrRepository(
         isHidden: Boolean,
         picture: String?,
         customGroupId: String?,
+        listPrivately: Boolean,
     ): Result<String> = createGroupInternal(
         name, about, relayUrl, isPrivate, isClosed, isRestricted, isHidden, picture, customGroupId,
         // The parent link rides the creation kind:9002: a follow-up parent-only 9002 is
         // rejected by relays as a moderation action with no metadata tags.
         parentGroupId = parentGroupId,
+        listPrivately = listPrivately,
     )
 
     private suspend fun createGroupInternal(
@@ -4555,6 +4559,7 @@ class NostrRepository(
         picture: String?,
         customGroupId: String?,
         parentGroupId: String?,
+        listPrivately: Boolean,
     ): Result<String> {
         val pubKey = sessionManager.getPublicKey()
             ?: return Result.Error(AppError.Auth.NotAuthenticated)
@@ -4580,6 +4585,14 @@ class NostrRepository(
             currentRelayUrl = connectionManager.currentRelayUrl.value,
             signEvent = { sessionManager.signEvent(it) },
             publishJoinedGroups = { publishJoinedGroupsList() },
+            // The relay confirms (and may replace) the group id inside createGroup, so the
+            // private flag can only be set there, right before the list publish — a group
+            // flagged private afterwards would already have gone out in the clear once.
+            markListedPrivately = if (listPrivately) {
+                { relay, groupId -> outboxManager.setGroupPrivate(relay, groupId, true) }
+            } else {
+                null
+            },
         )
         if (result is Result.Success) {
             scope.launch { ensureJoinedRelaysConnected(connectionManager.currentRelayUrl.value) }

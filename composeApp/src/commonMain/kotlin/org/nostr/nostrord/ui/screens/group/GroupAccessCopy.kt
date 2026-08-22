@@ -26,6 +26,14 @@ object GroupAccessCopy {
     const val HIDDEN_DESC = "Hidden from non-members, not discoverable"
 
     /**
+     * Not a NIP-29 flag: keeps the new group in the NIP-44-encrypted section of the user's
+     * kind:10009, so the membership is never advertised in the clear (same setting as the
+     * group-info toggle, offered at creation time so it never goes out public even once).
+     */
+    const val LIST_PRIVATELY_LABEL = "Private on my list"
+    const val LIST_PRIVATELY_DESC = "Kept encrypted in your group list so others can't see you joined"
+
+    /**
      * NIP-29 `livekit`. Not an access flag: it adds a relay-hosted audio/video room any member
      * can join. Only offered when the relay advertises support at `/.well-known/nip29/livekit`.
      */

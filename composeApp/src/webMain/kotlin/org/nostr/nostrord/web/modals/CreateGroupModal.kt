@@ -90,6 +90,7 @@ val CreateGroupModal =
         val (isClosed, setIsClosed) = useState { false }
         val (isRestricted, setIsRestricted) = useState { false }
         val (isHidden, setIsHidden) = useState { false }
+        val (listPrivately, setListPrivately) = useState { false }
         val (busy, setBusy) = useState { false }
         val (error, setError) = useState<String?> { null }
 
@@ -128,6 +129,7 @@ val CreateGroupModal =
                             isHidden = isHidden,
                             picture = picture.trim().ifBlank { null },
                             customGroupId = groupId.trim().ifBlank { null },
+                            listPrivately = listPrivately,
                         )
                     } else {
                         repo.createGroup(
@@ -140,6 +142,7 @@ val CreateGroupModal =
                             isHidden = isHidden,
                             picture = picture.trim().ifBlank { null },
                             customGroupId = groupId.trim().ifBlank { null },
+                            listPrivately = listPrivately,
                         )
                     }
                 setBusy(false)
@@ -323,6 +326,18 @@ val CreateGroupModal =
                     description = GroupAccessCopy.HIDDEN_DESC,
                     checked = isHidden,
                     onToggle = { setIsHidden(!isHidden) },
+                )
+                // Local-list setting, not a relay flag: encrypted NIP-51 entry from the start.
+                div {
+                    className = ClassName("access-section-title")
+                    +"YOUR LIST"
+                }
+                accessToggle(
+                    ic = Ic.Shield,
+                    label = GroupAccessCopy.LIST_PRIVATELY_LABEL,
+                    description = GroupAccessCopy.LIST_PRIVATELY_DESC,
+                    checked = listPrivately,
+                    onToggle = { setListPrivately(!listPrivately) },
                 )
 
                 if (error != null) {

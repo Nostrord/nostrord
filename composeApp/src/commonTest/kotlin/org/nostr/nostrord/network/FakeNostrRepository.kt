@@ -447,6 +447,7 @@ class FakeNostrRepository : NostrRepositoryApi {
         isHidden: Boolean,
         picture: String?,
         customGroupId: String?,
+        listPrivately: Boolean,
     ): Result<String> = Result.Success(customGroupId ?: "fake-group-id")
 
     override suspend fun createSubgroup(
@@ -460,6 +461,7 @@ class FakeNostrRepository : NostrRepositoryApi {
         isHidden: Boolean,
         picture: String?,
         customGroupId: String?,
+        listPrivately: Boolean,
     ): Result<String> = Result.Success(customGroupId ?: "fake-subgroup-id")
 
     override suspend fun joinGroup(
