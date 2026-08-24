@@ -109,7 +109,13 @@ object Nip27 {
     fun createNpubUri(pubkeyHex: String): String = "nostr:${Nip19.encodeNpub(pubkeyHex)}"
 
     /**
-     * Create a nostr: URI for an event
+     * Create a nostr: URI for an event. Always nevent: a bare note carries neither author nor
+     * relay, so NIP-29 events encoded that way are unfetchable elsewhere.
      */
-    fun createNoteUri(eventIdHex: String): String = "nostr:${Nip19.encodeNote(eventIdHex)}"
+    fun createEventUri(
+        eventIdHex: String,
+        relays: List<String> = emptyList(),
+        authorHex: String? = null,
+        kind: Int? = null,
+    ): String = "nostr:${Nip19.encodeNevent(eventIdHex, relays, authorHex, kind)}"
 }

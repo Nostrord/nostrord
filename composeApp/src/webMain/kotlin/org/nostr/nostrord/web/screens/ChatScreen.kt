@@ -4151,7 +4151,17 @@ private val QuotedEvent =
                     }
                     a {
                         className = ClassName("quoted-event-open")
-                        href = "https://jumble.social/notes/${Nip19.encodeNote(props.eventId)}"
+                        // nevent, never note: the bare id strands the event on a NIP-29 relay
+                        // the other client doesn't know about, and carries no author to fall
+                        // back on.
+                        href =
+                            "https://jumble.social/notes/" +
+                            Nip19.encodeNevent(
+                                props.eventId,
+                                relays = props.relays.ifEmpty { listOf(props.relayUrl) },
+                                authorHex = pubkey,
+                                kind = local?.kind ?: cachedEv?.kind ?: props.kind,
+                            )
                         asDynamic().target = "_blank"
                         rel = "noopener noreferrer"
                         title = "Open in another client"

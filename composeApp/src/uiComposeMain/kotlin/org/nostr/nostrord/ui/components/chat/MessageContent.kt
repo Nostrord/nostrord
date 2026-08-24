@@ -2255,7 +2255,17 @@ private fun QuotedEvent(
                             Modifier
                                 .size(16.dp)
                                 .clickable {
-                                    val url = "https://jumble.social/notes/${Nip19.encodeNote(event.id)}"
+                                    // nevent, never note: the bare id strands the event on a
+                                    // NIP-29 relay the other client doesn't know about, and
+                                    // carries no author to fall back on.
+                                    val nevent =
+                                        Nip19.encodeNevent(
+                                            event.id,
+                                            relays = relayHints.ifEmpty { listOfNotNull(currentRelayUrl) },
+                                            authorHex = event.pubkey,
+                                            kind = event.kind,
+                                        )
+                                    val url = "https://jumble.social/notes/$nevent"
                                     if (isLinuxDesktop) {
                                         copyToClipboard(url)
                                         AppModule.postSystemMessage("Link copied")
