@@ -195,6 +195,9 @@ val ChatVideo =
                     preload = "metadata"
                     controls = true
                     playsInline = true
+                    // Our button saves with the real extension; the browser's own download names
+                    // the file after whatever object the host serves.
+                    asDynamic().controlsList = "nodownload"
                     onLoadedMetadata = {
                         setMetaLoaded(true)
                         // Re-pinning the feed once the video's height is known is handled by the
@@ -202,6 +205,12 @@ val ChatVideo =
                         Unit
                     }
                     onError = { setFailed(true) }
+                }
+                MediaSaveButton {
+                    url = props.videoUrl
+                    fallbackBase = "video"
+                    label = "Save video"
+                    className = "msg-video-save"
                 }
             }
         }

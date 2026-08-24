@@ -72,7 +72,7 @@ import org.nostr.nostrord.nostr.Nip84
 import org.nostr.nostrord.ui.components.avatars.OptimizedSmallAvatar
 import org.nostr.nostrord.ui.components.avatars.OptimizedUserAvatar
 import org.nostr.nostrord.ui.components.media.AudioPlayerContent
-import org.nostr.nostrord.ui.components.media.PlatformVideoPlayer
+import org.nostr.nostrord.ui.components.media.InlineVideo
 import org.nostr.nostrord.ui.components.media.YouTubeLinkCard
 import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_HEIGHT
 import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_WIDTH
@@ -426,7 +426,7 @@ fun MessageContent(
                                     // falls back to the height cap, so a portrait
                                     // video stays contained instead of filling the
                                     // column.
-                                    PlatformVideoPlayer(
+                                    InlineVideo(
                                         url = firstPart.url,
                                         thumbnailUrl = imetaThumbnails[firstPart.url],
                                         aspectRatio = videoAspect,
@@ -2493,7 +2493,7 @@ private fun QuotedEventContent(
                                 },
                             )
                         } else {
-                            PlatformVideoPlayer(
+                            InlineVideo(
                                 url = firstPart.url,
                                 thumbnailUrl = null,
                                 aspectRatio = 16f / 9f,
