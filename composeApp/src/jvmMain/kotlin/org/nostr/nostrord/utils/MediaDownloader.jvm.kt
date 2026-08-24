@@ -6,19 +6,19 @@ import kotlinx.coroutines.withContext
 import org.nostr.nostrord.di.AppModule
 import java.io.File
 
-actual val supportsImageDownload: Boolean = true
+actual val supportsMediaDownload: Boolean = true
 
 @Composable
-actual fun rememberImageDownloader(): suspend (bytes: ByteArray, fileName: String, mimeType: String) -> Boolean = { bytes, fileName, _ ->
+actual fun rememberMediaDownloader(): suspend (bytes: ByteArray, fileName: String, mimeType: String) -> Boolean = { bytes, fileName, _ ->
     withContext(Dispatchers.IO) {
         try {
             val downloads = File(System.getProperty("user.home"), "Downloads").apply { if (!exists()) mkdirs() }
             val target = uniqueFile(downloads, fileName)
             target.writeBytes(bytes)
-            AppModule.postSystemMessage("Image saved to ${target.absolutePath}")
+            AppModule.postSystemMessage("Saved to ${target.absolutePath}")
             true
         } catch (_: Exception) {
-            AppModule.postSystemMessage("Couldn't save image")
+            AppModule.postSystemMessage("Couldn't save file")
             false
         }
     }
