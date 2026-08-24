@@ -3443,6 +3443,19 @@ body {
     justify-content: flex-end;
 }
 
+/* Reply-quote jump target: the whole row flashes as one band (native tints the row, not the
+   bubble), same keyframes as the group feed's .msg.highlight. */
+.dm-msg.highlight {
+    border-radius: var(--radius-sm);
+    animation: msg-flash 2.4s ease-out;
+}
+
+/* A quote whose answered message is not loaded has nowhere to jump, so it does not offer a tap
+   (.msg-reply carries cursor: pointer for the group feed, where the quote is always tappable). */
+.dm-msg .msg-reply:not(.tappable) {
+    cursor: default;
+}
+
 /* Bubble plus its "Not delivered" row stack vertically. The column carries the 75% cap so the
    bubble still measures against the thread width, not against itself. */
 .dm-msg-col {
