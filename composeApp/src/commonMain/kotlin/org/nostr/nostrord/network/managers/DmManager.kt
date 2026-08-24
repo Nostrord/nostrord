@@ -331,9 +331,9 @@ class DmManager(
 
         if (!markRumorSeen(rumorId)) {
             // Same rumor from another relay or the self-wrap echo of an optimistic send: nothing
-            // new to show, but the wrap round-tripped a relay, so an own message is now Delivered,
-            // and its relay still counts for "seen on".
-            markDelivered(rumorId)
+            // new to show, but its relay still counts for "seen on". Not Delivered, though: the
+            // echo is our own copy coming back from our own relays, which says nothing about the
+            // peer's wrap. Delivered is the send queue's call, on the recipient wrap's OK.
             linkWrapToRumor(giftWrap.id, rumorId, peer)
             return true
         }

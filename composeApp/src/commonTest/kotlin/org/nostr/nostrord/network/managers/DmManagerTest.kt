@@ -222,17 +222,18 @@ class DmManagerTest {
     }
 
     @Test
-    fun `own message is Sending then Delivered on the self-echo`() = runTest {
+    fun `own message stays Sending on the self-echo`() = runTest {
         val dm = DmManager(backgroundScope)
         val alice = signer()
         val rumor = Nip17.buildRumor(alice.pubkey, "bb".repeat(32), "hi")
         dm.addOptimistic(rumor, "bb".repeat(32), alice.pubkey)
         assertEquals(GroupManager.MessageStatus.Sending, dm.messageStatus.value[rumor.id])
 
-        // The self-copy echoes back through the inbox (deduped) -> Delivered.
+        // The self-copy echoing back through the inbox is our own relays returning our own copy:
+        // deduped, and not a word about the peer's wrap, so the status does not move.
         val selfWrap = Nip17.wrap(rumor, alice.pubkey, alice)
         dm.ingestGiftWrap(selfWrap, alice.pubkey, alice)
-        assertEquals(GroupManager.MessageStatus.Delivered, dm.messageStatus.value[rumor.id])
+        assertEquals(GroupManager.MessageStatus.Sending, dm.messageStatus.value[rumor.id])
     }
 
     @Test

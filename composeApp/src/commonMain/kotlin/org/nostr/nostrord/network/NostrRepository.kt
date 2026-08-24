@@ -2407,9 +2407,9 @@ class NostrRepository(
                 }
             val rumorId = rumor.id ?: return Result.Error(AppError.Unknown("Failed to build the message"))
             // Enqueue both wraps (recipient + self-copy) in the persisted send queue, then publish.
-            // The message shows as Sending and flips to Delivered on the first relay OK (or when the
-            // self-copy echoes back). The queue survives an app restart and never gives up, so a
-            // wrap that never reached a relay keeps retrying instead of being stranded local-only.
+            // The message shows as Sending and flips to Delivered when a relay OKs the recipient's
+            // wrap. The queue survives an app restart and never gives up, so a wrap that never
+            // reached a relay keeps retrying instead of being stranded local-only.
             //
             // Queue first, bubble second: both writes are durable, and this order means a crash
             // between them costs the bubble (which the self-copy repaints) rather than the retry.
@@ -2991,7 +2991,6 @@ class NostrRepository(
         DmSendQueue(
             scope = scope,
             publish = { relays, wrapJson, wrapId -> publishWrapJsonAwaitOk(relays, wrapJson, wrapId) },
-            isDelivered = { rumorId -> dmManager.messageStatus.value[rumorId] is GroupManager.MessageStatus.Delivered },
             onDelivered = { rumorId, relays ->
                 dmManager.markDelivered(rumorId)
                 dmManager.recordSentTo(rumorId, relays)

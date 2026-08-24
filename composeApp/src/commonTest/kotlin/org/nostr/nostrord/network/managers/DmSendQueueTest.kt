@@ -29,7 +29,6 @@ class DmSendQueueTest {
                     attempts++
                     if (attempts >= 20) DmPublishOutcome.Accepted(listOf("wss://dm.example")) else DmPublishOutcome.Retry
                 },
-                isDelivered = { false },
                 onDelivered = { rumorId, _ -> delivered += rumorId },
                 onRejected = { _, _ -> },
                 onQueued = {},
@@ -52,7 +51,6 @@ class DmSendQueueTest {
             DmSendQueue(
                 scope = backgroundScope,
                 publish = { _, _, _ -> DmPublishOutcome.Retry },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { _, _ -> },
                 onQueued = {},
@@ -81,7 +79,6 @@ class DmSendQueueTest {
                     attempts++
                     DmPublishOutcome.Accepted(listOf("wss://dm.example"))
                 },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { _, _ -> },
                 onQueued = { sending += it },
@@ -89,11 +86,13 @@ class DmSendQueueTest {
                 now = { testScheduler.currentTime },
             )
 
-        queue.resume("me", listOf(wrap("rumor1", "wrap1"), wrap("rumor1", "wrap2")))
+        queue.resume("me", listOf(wrap("rumor1", "wrap1"), wrap("rumor2", "wrap2"), wrap("rumor2", "wrap2-self", toSelf = true)))
         advanceTimeBy(10_000L)
 
-        assertEquals(listOf("rumor1", "rumor1"), sending)
-        assertEquals(2, attempts)
+        // A restored self-copy is sent but never reported: it must not put a message whose
+        // recipient wrap already landed back on Sending.
+        assertEquals(listOf("rumor1", "rumor2"), sending)
+        assertEquals(3, attempts)
         assertEquals(0, queue.size)
     }
 
@@ -108,7 +107,6 @@ class DmSendQueueTest {
                     attempts++
                     if (online) DmPublishOutcome.Accepted(listOf("wss://dm.example")) else DmPublishOutcome.Retry
                 },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { _, _ -> },
                 onQueued = {},
@@ -130,28 +128,54 @@ class DmSendQueueTest {
     }
 
     @Test
-    fun aWrapDeliveredByItsSelfCopyEchoLeavesTheQueueWithoutPublishing() = runTest {
-        var attempts = 0
+    fun theSelfCopyStillGoesOutAfterTheRecipientWrapIsAccepted() = runTest {
+        val published = mutableListOf<String>()
+        val delivered = mutableListOf<String>()
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ ->
-                    attempts++
-                    DmPublishOutcome.Retry
+                publish = { _, _, wrapId ->
+                    published += wrapId
+                    DmPublishOutcome.Accepted(listOf("wss://relay"))
                 },
-                isDelivered = { true },
-                onDelivered = { _, _ -> },
+                onDelivered = { rumorId, _ -> delivered += rumorId },
                 onRejected = { _, _ -> },
                 onQueued = {},
                 persist = { _, _ -> },
                 now = { testScheduler.currentTime },
             )
 
-        queue.enqueue("me", listOf(wrap("rumor1", "wrap1")))
+        queue.enqueue("me", listOf(wrap("rumor1", "wrap1"), wrap("rumor1", "wrap-self", toSelf = true)))
         advanceTimeBy(10_000L)
 
-        assertEquals(0, attempts)
+        assertEquals(listOf("wrap1", "wrap-self"), published)
+        // Delivered once, on the recipient's wrap; the self-copy landing is not delivery.
+        assertEquals(listOf("rumor1"), delivered)
         assertEquals(0, queue.size)
+    }
+
+    @Test
+    fun anAcceptedSelfCopyDoesNotMarkTheMessageDelivered() = runTest {
+        val delivered = mutableListOf<String>()
+        val queue =
+            DmSendQueue(
+                scope = backgroundScope,
+                publish = { _, _, wrapId ->
+                    if (wrapId == "wrap-self") DmPublishOutcome.Accepted(listOf("wss://relay")) else DmPublishOutcome.Retry
+                },
+                onDelivered = { rumorId, _ -> delivered += rumorId },
+                onRejected = { _, _ -> },
+                onQueued = {},
+                persist = { _, _ -> },
+                now = { testScheduler.currentTime },
+            )
+
+        queue.enqueue("me", listOf(wrap("rumor1", "wrap1"), wrap("rumor1", "wrap-self", toSelf = true)))
+        advanceTimeBy(10_000L)
+
+        assertEquals(emptyList(), delivered)
+        // The recipient wrap is still in flight; only the self-copy left the queue.
+        assertEquals(1, queue.size)
     }
 
     @Test
@@ -165,7 +189,6 @@ class DmSendQueueTest {
                     attempts++
                     DmPublishOutcome.Rejected("blocked: pubkey not allowed")
                 },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { rumorId, reason -> rejected += rumorId to reason },
                 onQueued = {},
@@ -189,7 +212,6 @@ class DmSendQueueTest {
             DmSendQueue(
                 scope = backgroundScope,
                 publish = { _, _, _ -> DmPublishOutcome.Rejected("invalid: too large") },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { rumorId, _ -> rejected += rumorId },
                 onQueued = {},
@@ -215,7 +237,6 @@ class DmSendQueueTest {
                 publish = { _, _, _ ->
                     if (refuse) DmPublishOutcome.Rejected("blocked: pubkey not allowed") else DmPublishOutcome.Accepted(listOf("wss://dm.example"))
                 },
-                isDelivered = { false },
                 onDelivered = { rumorId, _ -> delivered += rumorId },
                 onRejected = { _, _ -> },
                 onQueued = { queued += it },
@@ -242,7 +263,6 @@ class DmSendQueueTest {
             DmSendQueue(
                 scope = backgroundScope,
                 publish = { _, _, _ -> DmPublishOutcome.Retry },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { _, _ -> },
                 onQueued = {},
@@ -268,7 +288,6 @@ class DmSendQueueTest {
             DmSendQueue(
                 scope = backgroundScope,
                 publish = { _, _, _ -> DmPublishOutcome.Retry },
-                isDelivered = { false },
                 onDelivered = { _, _ -> },
                 onRejected = { rumorId, _ -> rejected += rumorId },
                 onQueued = { queued += it },
