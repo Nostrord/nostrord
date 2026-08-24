@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -32,12 +34,14 @@ import org.nostr.nostrord.ui.components.buttons.AppButton
 import org.nostr.nostrord.ui.components.buttons.AppButtonSize
 import org.nostr.nostrord.ui.components.buttons.AppButtonVariant
 import org.nostr.nostrord.ui.components.loading.shimmerEffect
+import org.nostr.nostrord.ui.components.media.MediaSaveButton
 import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_HEIGHT
 import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_WIDTH
 import org.nostr.nostrord.ui.media.INLINE_MEDIA_MIN_SIDE
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
+import org.nostr.nostrord.utils.downloadFileName
 
 /**
  * The body of a NIP-17 kind:15 message: an attachment whose bytes live encrypted on a media
@@ -112,13 +116,27 @@ private fun Attachment(
                     ImageViewerModal(
                         imageUrl = file.url,
                         imageBytes = state.bytes,
-                        fileName = "attachment" + extensionFor(state.mimeType ?: file.mimeType),
+                        fileName = downloadFileName(file.url, state.mimeType ?: file.mimeType, "attachment"),
                         mimeType = state.mimeType ?: file.mimeType,
                         onDismiss = { fullscreen = false },
                     )
                 }
             } else {
-                AttachmentNote(label(file) + " (" + readableSize(state.bytes.size.toLong()) + ")", textColor, modifier)
+                Row(
+                    modifier = modifier,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AttachmentNote(label(file) + " (" + readableSize(state.bytes.size.toLong()) + ")", textColor)
+                    MediaSaveButton(
+                        url = file.url,
+                        bytes = state.bytes,
+                        mimeType = state.mimeType ?: file.mimeType,
+                        fallbackBase = "attachment",
+                        tint = textColor,
+                        contentDescription = "Save attachment",
+                    )
+                }
             }
 
         is DmFileManager.FileState.Failed ->
@@ -171,14 +189,4 @@ private fun readableSize(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
     bytes >= 1024 -> "${bytes / 1024} KB"
     else -> "$bytes B"
-}
-
-/** File extension for a saved attachment, from its mime type. Empty when it is not an image. */
-private fun extensionFor(mimeType: String?): String = when (mimeType) {
-    "image/png" -> ".png"
-    "image/gif" -> ".gif"
-    "image/webp" -> ".webp"
-    "image/avif" -> ".avif"
-    "image/jpeg", "image/jpg" -> ".jpg"
-    else -> ""
 }

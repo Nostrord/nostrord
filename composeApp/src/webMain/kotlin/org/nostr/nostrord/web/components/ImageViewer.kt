@@ -1,6 +1,5 @@
 package org.nostr.nostrord.web.components
 
-import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,11 +60,11 @@ val ImageViewerHost =
                         onClick = { window.open(url, "_blank") }
                         icon(Ic.OpenInNew)
                     }
-                    button {
-                        className = ClassName("img-viewer-action")
-                        title = "Download"
-                        onClick = { downloadImage(url) }
-                        icon(Ic.Download)
+                    MediaSaveButton {
+                        this.url = current.url
+                        fallbackBase = "image"
+                        label = "Download"
+                        className = "img-viewer-action"
                     }
                     button {
                         className = ClassName("img-viewer-action")
@@ -109,23 +108,3 @@ private val ViewerImage =
             }
         }
     }
-
-/** Download [url] as a file. Fetches a blob (so cross-origin images save instead of opening); falls back to a new tab. */
-private fun downloadImage(url: String) {
-    val name = url.substringBefore('?').substringAfterLast('/').ifBlank { "image" }
-    val w = window.asDynamic()
-    w.fetch(url)
-        .then { resp: dynamic -> resp.blob() }
-        .then { blob: dynamic ->
-            val objectUrl = w.URL.createObjectURL(blob)
-            val anchor = document.createElement("a")
-            val a = anchor.asDynamic()
-            a.href = objectUrl
-            a.download = name
-            document.body?.appendChild(anchor)
-            a.click()
-            anchor.remove()
-            w.URL.revokeObjectURL(objectUrl)
-        }
-        .catch { _: dynamic -> w.open(url, "_blank") }
-}

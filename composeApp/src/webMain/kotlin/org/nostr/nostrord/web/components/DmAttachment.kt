@@ -81,30 +81,48 @@ val DmAttachment =
                     style = unsafeJso { asDynamic().aspectRatio = file.aspectRatioCss() }
                 }
 
-            file.isImage ->
-                ChatImage {
-                    imageUrl = objectUrl
-                    dimensions = file.dimensions
-                }
-
-            file.isVideo ->
-                react.dom.html.ReactHTML.video {
-                    className = ClassName("msg-video")
-                    src = objectUrl
-                    controls = true
-                }
-
-            file.isAudio ->
-                react.dom.html.ReactHTML.audio {
-                    className = ClassName("msg-audio")
-                    src = objectUrl
-                    controls = true
-                }
-
             else ->
                 div {
-                    className = ClassName("dm-attachment")
-                    +"File"
+                    className = ClassName("dm-attachment-wrap")
+                    when {
+                        file.isImage ->
+                            ChatImage {
+                                imageUrl = objectUrl
+                                dimensions = file.dimensions
+                            }
+
+                        file.isVideo ->
+                            react.dom.html.ReactHTML.video {
+                                className = ClassName("msg-video")
+                                src = objectUrl
+                                controls = true
+                                asDynamic().controlsList = "nodownload"
+                            }
+
+                        file.isAudio ->
+                            react.dom.html.ReactHTML.audio {
+                                className = ClassName("msg-audio")
+                                src = objectUrl
+                                controls = true
+                                asDynamic().controlsList = "nodownload"
+                            }
+
+                        else ->
+                            div {
+                                className = ClassName("dm-attachment")
+                                +"File"
+                            }
+                    }
+                    // The url only ever serves ciphertext, so the download takes the plaintext
+                    // this component already holds and the type the sender declared.
+                    MediaSaveButton {
+                        url = file.url
+                        bytes = (state as? DmFileManager.FileState.Ready)?.bytes
+                        mimeType = (state as? DmFileManager.FileState.Ready)?.mimeType ?: file.mimeType
+                        fallbackBase = "attachment"
+                        label = "Save attachment"
+                        className = "dm-attachment-save"
+                    }
                 }
         }
     }
