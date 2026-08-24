@@ -202,6 +202,7 @@ body {
    each variant only sets its own size and border colours below. */
 .app-loading-spinner,
 .btn-spinner,
+.media-save-spinner,
 .upload-spinner,
 .qr-spinner,
 .reaction-spinner,
@@ -6597,16 +6598,157 @@ body {
    browser controls give play/pause, seek and replay, and follow the active theme via
    the root color-scheme. Fixed width with max-width:100% (NOT a percentage width inside
    a fit-content wrap — that collapses the player to zero). */
-.msg-audio-wrap {
-    display: block;
+/* Chat audio: our own player chrome, mirroring the native AudioPlayerChrome.
+   The <audio> element is the engine only (.msg-audio-engine, never painted). */
+.msg-audio-player {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 360px;
+    max-width: 100%;
     margin-top: 4px;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--color-surface-variant);
 }
+.msg-audio-engine {
+    display: none;
+}
+.msg-audio-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+    color: var(--color-primary);
+    cursor: pointer;
+}
+.msg-audio-toggle .ico {
+    width: 18px;
+    height: 18px;
+}
+.msg-audio-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+}
+.msg-audio-name {
+    overflow: hidden;
+    color: var(--color-text-content);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Range input painted as the native progress bar: the filled half comes from --seek,
+   which the component updates as playback moves. */
+.msg-audio-seek {
+    width: 100%;
+    height: 4px;
+    margin: 0;
+    border-radius: 2px;
+    appearance: none;
+    -webkit-appearance: none;
+    background:
+        linear-gradient(
+            to right,
+            var(--color-primary) var(--seek, 0%),
+            color-mix(in srgb, var(--color-primary) 15%, transparent) var(--seek, 0%)
+        );
+    cursor: pointer;
+}
+.msg-audio-seek:disabled {
+    cursor: default;
+}
+.msg-audio-seek::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 10px;
+    height: 10px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-primary);
+}
+.msg-audio-seek::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-primary);
+}
+.msg-audio-times {
+    display: flex;
+    justify-content: space-between;
+    color: var(--color-text-muted);
+    font-size: 11px;
+}
+/* Native controls, kept for a decrypted DM attachment: it plays from a blob url this tab
+   already holds, so there is no host naming to fight. */
 .msg-audio {
     display: block;
     width: 360px;
     max-width: 100%;
     height: 40px;
     cursor: default;
+}
+.msg-audio-save,
+.msg-video-save,
+.dm-attachment-save,
+.media-save-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+.media-save-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    opacity: 0.7;
+}
+.msg-audio-save:hover,
+.media-save-btn:hover {
+    background: color-mix(in srgb, var(--color-text-muted) 20%, transparent);
+    color: var(--color-text-content);
+}
+/* Over a video frame or an image the button floats in the corner, so it needs its own
+   ground instead of the surface color. */
+.msg-video-save,
+.dm-attachment-save {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+.msg-video-wrap:hover .msg-video-save,
+.msg-video-save:focus-visible,
+.dm-attachment-wrap:hover .dm-attachment-save,
+.dm-attachment-save:focus-visible {
+    opacity: 1;
+}
+.dm-attachment-wrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
 }
 
 /* Tap-to-load placeholder shown in place of any inline media when
@@ -11634,7 +11776,9 @@ button.hierarchy-crumb-item:hover {
     position: fixed;
     left: 50%;
     bottom: 24px;
-    z-index: 200;
+    /* Above every overlay (the 200 family and the over-settings modal at 300): a confirmation
+       is useless under the surface whose button triggered it. */
+    z-index: 400;
     max-width: min(420px, calc(100vw - 32px));
     padding: 12px 16px;
     transform: translateX(-50%);

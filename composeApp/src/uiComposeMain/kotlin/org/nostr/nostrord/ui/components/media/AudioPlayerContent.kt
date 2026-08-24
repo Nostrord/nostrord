@@ -4,6 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -14,6 +18,8 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import org.nostr.nostrord.ui.media.INLINE_MEDIA_MAX_WIDTH
+import org.nostr.nostrord.ui.media.mediaDisplayName
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordTypography
 
@@ -31,10 +37,11 @@ expect fun AudioPlayerContent(
 )
 
 /**
- * Shared visual: play/pause button, filename, progress bar and the position/duration row.
- * Takes a normalized [progress] (0..1) and pre-formatted [positionText]/[durationText] so each
- * platform can source them from its own engine (the desktop player's own text avoids the raw,
- * sometimes-bogus, duration a streamed file reports). [durationText] null hides the duration.
+ * Shared visual: play/pause button, filename, progress bar, the position/duration row and the
+ * save-to-device button. Takes a normalized [progress] (0..1) and pre-formatted
+ * [positionText]/[durationText] so each platform can source them from its own engine (the desktop
+ * player's own text avoids the raw, sometimes-bogus, duration a streamed file reports).
+ * [durationText] null hides the duration.
  */
 @Composable
 internal fun AudioPlayerChrome(
@@ -42,7 +49,7 @@ internal fun AudioPlayerChrome(
     progress: Float,
     positionText: String,
     durationText: String?,
-    fileName: String,
+    url: String,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -51,6 +58,10 @@ internal fun AudioPlayerChrome(
     Row(
         modifier =
         modifier
+            // Cap before filling: fillMaxWidth pins min = max = the incoming width, and a later
+            // widthIn can no longer shrink below that pinned minimum. A chat clip is a widget,
+            // not a banner, so it gets the same 360dp box as the web player and inline images.
+            .widthIn(max = INLINE_MEDIA_MAX_WIDTH.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(NostrordColors.SurfaceVariant)
@@ -67,10 +78,11 @@ internal fun AudioPlayerChrome(
                 .pointerHoverIcon(PointerIcon.Hand),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = if (isPlaying) "⏸" else "▶",
-                style = NostrordTypography.MessageBody,
-                color = NostrordColors.Primary,
+            Icon(
+                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Pause" else "Play",
+                tint = NostrordColors.Primary,
+                modifier = Modifier.size(18.dp),
             )
         }
 
@@ -78,7 +90,7 @@ internal fun AudioPlayerChrome(
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = fileName,
+                text = mediaDisplayName(url),
                 style = NostrordTypography.MessageBody,
                 color = NostrordColors.TextContent,
                 maxLines = 1,
@@ -118,16 +130,8 @@ internal fun AudioPlayerChrome(
                 }
             }
         }
+
+        Spacer(Modifier.width(8.dp))
+        MediaSaveButton(url = url, fallbackBase = "audio", contentDescription = "Save audio")
     }
-}
-
-/** A short display name for an audio URL: last path segment, query stripped, capped. */
-internal fun audioFileName(url: String): String = url.substringAfterLast("/").substringBefore("?").take(40)
-
-internal fun formatDuration(ms: Long): String {
-    val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    val secStr = if (seconds < 10) "0$seconds" else "$seconds"
-    return "$minutes:$secStr"
 }

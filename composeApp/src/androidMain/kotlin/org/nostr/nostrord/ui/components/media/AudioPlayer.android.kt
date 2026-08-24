@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.nostr.nostrord.ui.media.formatDuration
 
 /** Android playback engine backing [AudioPlayerContent], built on android.media.MediaPlayer. */
 private class AndroidAudioPlayer {
@@ -131,7 +132,7 @@ actual fun AudioPlayerContent(
         progress = if (durationMs > 0) currentMs.toFloat() / durationMs.toFloat() else 0f,
         positionText = formatDuration(currentMs),
         durationText = if (durationMs > 0) formatDuration(durationMs) else null,
-        fileName = audioFileName(url),
+        url = url,
         onToggle = { if (isPlaying) player.pause() else player.play(url) },
         modifier = modifier,
     )
