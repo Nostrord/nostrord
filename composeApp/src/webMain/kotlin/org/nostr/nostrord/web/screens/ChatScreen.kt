@@ -159,6 +159,16 @@ external interface ChatScreenProps : Props {
  *  newlines flattened, trimmed, and capped at [max] chars. */
 private fun replyPreviewText(content: String, userMetadata: Map<String, UserMetadata>, max: Int): String = processMentions(content, userMetadata).replace('\n', ' ').trim().take(max)
 
+/** Cached event as a message, so the reply quote reads a parent outside the loaded window the same way. */
+private fun org.nostr.nostrord.network.CachedEvent.asMessage() = NostrGroupClient.NostrMessage(
+    id = id,
+    pubkey = pubkey,
+    content = content,
+    createdAt = createdAt,
+    kind = kind,
+    tags = tags,
+)
+
 /** Reply-preview payload: author name, plain-text body, and the parent event's tags for emoji resolution. */
 data class ReplyPreviewData(
     val author: String,
@@ -1169,15 +1179,27 @@ val ChatScreen =
         // @names and nevent/note quotes resolved to the referenced note's text (in-memory only).
         // It is the expensive step, so it memoizes on messages + metadata + cache (only while
         // search is open); the cheap per-keystroke match below then reuses it via the extractor.
-        val searchCachedEvents = useStateFlow(vm.cachedEvents)
-        val searchTextById = useMemo(messagesByGroup[group.id], userMetadata, searchCachedEvents, searchActive) {
+        val cachedEvents = useStateFlow(vm.cachedEvents)
+
+        // Parents of replies that are outside the loaded window: fetch them so their quotes fill in.
+        val missingReplyParents = useMemo(messages, cachedEvents) {
+            messages.mapNotNull { getReplyParentId(it) }
+                .filter { it !in messagesById && it !in cachedEvents }
+                .toSet()
+        }
+        useEffect(missingReplyParents) {
+            if (missingReplyParents.isNotEmpty()) {
+                launchApp { missingReplyParents.forEach { repo.requestEventById(it, listOf(hostRelay), null, group.id) } }
+            }
+        }
+        val searchTextById = useMemo(messagesByGroup[group.id], userMetadata, cachedEvents, searchActive) {
             if (!searchActive) {
                 emptyMap()
             } else {
                 ChatSearch.buildSearchTextById(
                     messages,
                     resolveMention = { pubkey -> userMetadata[pubkey]?.let { it.displayName ?: it.name }?.takeIf(String::isNotBlank) },
-                    resolveCachedQuote = { id -> searchCachedEvents[id]?.content },
+                    resolveCachedQuote = { id -> cachedEvents[id]?.content },
                 )
             }
         }
@@ -2120,14 +2142,20 @@ val ChatScreen =
                                         is WebChatItem.Message -> {
                                             val message = item.message
                                             val parentId = getReplyParentId(message)
-                                            val parent = parentId?.let { messagesById[it] }
+                                            val parent = parentId?.let { messagesById[it] ?: cachedEvents[it]?.asMessage() }
+                                            // The quote renders even before the parent arrives, so a reply to a
+                                            // message outside the loaded window still reads as a reply.
                                             val replyPreview =
-                                                parent?.let {
-                                                    ReplyPreviewData(
-                                                        author = displayName(it.pubkey, userMetadata[it.pubkey]),
-                                                        content = replyPreviewText(messageBody(it), userMetadata, 120),
-                                                        tags = it.tags,
-                                                    )
+                                                parentId?.let {
+                                                    if (parent == null) {
+                                                        ReplyPreviewData("", "Replying to a message...", emptyList())
+                                                    } else {
+                                                        ReplyPreviewData(
+                                                            author = displayName(parent.pubkey, userMetadata[parent.pubkey]),
+                                                            content = replyPreviewText(messageBody(parent), userMetadata, 120),
+                                                            tags = parent.tags,
+                                                        )
+                                                    }
                                                 }
                                             val authorMeta = userMetadata[message.pubkey]
                                             val zapInfo = zapsByMsg[message.id]
@@ -3081,9 +3109,11 @@ private val MessageRow =
                         div { className = ClassName("msg-reply-bar") }
                         div {
                             className = ClassName("msg-reply-content")
-                            div {
-                                className = ClassName("msg-reply-author")
-                                +reply.author
+                            if (reply.author.isNotEmpty()) {
+                                div {
+                                    className = ClassName("msg-reply-author")
+                                    +reply.author
+                                }
                             }
                             div {
                                 className = ClassName("msg-reply-text")
