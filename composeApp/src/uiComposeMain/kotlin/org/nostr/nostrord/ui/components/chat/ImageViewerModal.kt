@@ -39,21 +39,19 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Size
-import io.ktor.client.call.body
-import io.ktor.client.request.get
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.nostr.nostrord.network.createHttpClient
+import org.nostr.nostrord.ui.components.layout.SystemMessageHost
 import org.nostr.nostrord.ui.image.ImageBackdrop
 import org.nostr.nostrord.ui.image.decideImageBackdrop
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.utils.decodeDataImageUri
+import org.nostr.nostrord.utils.downloadFileName
+import org.nostr.nostrord.utils.fetchMediaForDownload
 import org.nostr.nostrord.utils.getImageUrl
 import org.nostr.nostrord.utils.isAnimatedImageUrl
 import org.nostr.nostrord.utils.isDataImageUri
-import org.nostr.nostrord.utils.rememberImageDownloader
-import org.nostr.nostrord.utils.supportsImageDownload
+import org.nostr.nostrord.utils.rememberMediaDownloader
+import org.nostr.nostrord.utils.supportsMediaDownload
 
 @Composable
 fun ImageViewerModal(
@@ -78,7 +76,7 @@ fun ImageViewerModal(
         remember(imageUrl, imageBytes) { imageBytes ?: decodeDataImageUri(imageUrl) ?: getImageUrl(imageUrl) }
 
     val scope = rememberCoroutineScope()
-    val downloadImage = rememberImageDownloader()
+    val downloadImage = rememberMediaDownloader()
     var isDownloading by remember { mutableStateOf(false) }
 
     var imageState by remember { mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty) }
@@ -208,7 +206,7 @@ fun ImageViewerModal(
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (supportsImageDownload) {
+                if (supportsMediaDownload) {
                     IconButton(
                         onClick = {
                             if (isDownloading) return@IconButton
@@ -298,6 +296,10 @@ fun ImageViewerModal(
                     )
                 }
             }
+
+            // The viewer is its own window on desktop, so the app's host would raise the
+            // "saved to" notice behind it. Collecting here puts it over the image.
+            SystemMessageHost()
         }
     }
 }
@@ -314,25 +316,18 @@ private suspend fun resolveDownloadableImage(url: String): Triple<ByteArray, Str
         return Triple(bytes, "nostrord_${url.hashCode().toUInt()}.$ext", mime)
     }
 
+    val (bytes, contentType) = fetchMediaForDownload(url) ?: return null
     val name = url.substringBefore('?').substringAfterLast('/').ifBlank { "image" }
-    val ext = name.substringAfterLast('.', "").lowercase()
+    // The server's own label wins; an image host that answers with octet-stream leaves only the
+    // path extension to go on.
     val mime =
-        when (ext) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "gif" -> "image/gif"
-            "webp" -> "image/webp"
-            "png" -> "image/png"
-            else -> "image/*"
-        }
-    val fileName = if ('.' in name) name else "$name.png"
-
-    val client = createHttpClient()
-    return try {
-        val bytes: ByteArray = withContext(Dispatchers.Default) { client.get(url).body() }
-        Triple(bytes, fileName, mime)
-    } catch (_: Exception) {
-        null
-    } finally {
-        client.close()
-    }
+        contentType?.substringBefore(';')?.trim()?.takeIf { it.startsWith("image/") }
+            ?: when (name.substringAfterLast('.', "").lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                "png" -> "image/png"
+                else -> "image/*"
+            }
+    return Triple(bytes, downloadFileName(url, mime, fallbackBase = "image"), mime)
 }
