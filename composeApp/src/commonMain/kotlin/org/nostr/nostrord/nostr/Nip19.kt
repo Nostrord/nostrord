@@ -156,7 +156,8 @@ object Nip19 {
     fun encodeNsec(privkeyHex: String): String = Bech32.encode("nsec", privkeyHex.hexToByteArray())
 
     /**
-     * Encode an event ID to note
+     * Encode an event ID to note. Decode-side fixtures only: links and references we generate
+     * use [encodeNevent], since a bare note carries neither author nor relay hint.
      */
     fun encodeNote(eventIdHex: String): String = Bech32.encode("note", eventIdHex.hexToByteArray())
 
