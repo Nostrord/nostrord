@@ -38,15 +38,20 @@ sealed interface DmPublishOutcome {
  * refused it for a reason that will not change, so it is parked (kept, but no longer swept) and
  * reported through [onRejected] for the UI to offer Retry / Dismiss. A rejected self-copy is
  * dropped quietly, since it says nothing about whether the peer got the message.
+ *
+ * The two wraps of one message are independent entries. The recipient's decides Delivered; the
+ * self-copy is what the account's other devices read the message from, so it goes out on its own
+ * terms and never on the recipient wrap's fate: nothing about one wrap having landed makes the
+ * other one unnecessary. A wrap a relay already holds costs nothing to send again ("duplicate"
+ * counts as accepted), so no shortcut is needed for that either.
  */
 class DmSendQueue(
     private val scope: CoroutineScope,
     /** Publishes a wrap to its relay set. */
     private val publish: suspend (relays: List<String>, wrapJson: String, wrapId: String) -> DmPublishOutcome,
-    /** True when the rumor already counts as delivered, e.g. its self-copy echoed back. */
-    private val isDelivered: (rumorId: String) -> Boolean,
-    /** Fires when a wrap is accepted, with the relays that took it, so the on-screen message
-     *  resolves to Delivered and can name where it landed. */
+    /** Fires when the recipient's wrap is accepted, with the relays that took it, so the on-screen
+     *  message resolves to Delivered and can name where it landed. The self-copy never fires it:
+     *  landing on our own relays says nothing about the peer. */
     private val onDelivered: (rumorId: String, relays: List<String>) -> Unit,
     /** Fires when the recipient's wrap is refused for good, so the bubble can offer Retry / Dismiss. */
     private val onRejected: (rumorId: String, reason: String) -> Unit,
@@ -102,9 +107,12 @@ class DmSendQueue(
             entries.value = queued.takeLast(MAX_QUEUE_SIZE)
         }
         if (queued.isEmpty()) return
-        queued.forEach { entry ->
+        // Only the recipient's wrap speaks for the bubble. A self-copy still queued next to a
+        // delivered message would otherwise put that message back on Sending, with nothing left
+        // to take it off again.
+        queued.filterNot { it.toSelf }.forEach { entry ->
             val parked = entry.parkedReason
-            if (parked != null && !entry.toSelf) onRejected(entry.rumorId, parked) else onQueued(entry.rumorId)
+            if (parked != null) onRejected(entry.rumorId, parked) else onQueued(entry.rumorId)
         }
         restartSweep()
     }
@@ -177,13 +185,9 @@ class DmSendQueue(
     }
 
     private suspend fun attempt(entry: PendingDmWrap) {
-        if (isDelivered(entry.rumorId)) {
-            remove(entry.wrapId)
-            return
-        }
         when (val outcome = publish(entry.relays, entry.wrapJson, entry.wrapId)) {
             is DmPublishOutcome.Accepted -> {
-                onDelivered(entry.rumorId, outcome.relays)
+                if (!entry.toSelf) onDelivered(entry.rumorId, outcome.relays)
                 remove(entry.wrapId)
             }
             is DmPublishOutcome.Rejected -> {
