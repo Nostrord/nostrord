@@ -42,7 +42,7 @@ actual fun AudioPlayerContent(
         progress = progress,
         positionText = state.positionText.ifBlank { "0:00" },
         durationText = if (durationValid) state.durationText.ifBlank { null } else null,
-        fileName = audioFileName(url),
+        url = url,
         onToggle = {
             if (state.isPlaying) {
                 state.pause()

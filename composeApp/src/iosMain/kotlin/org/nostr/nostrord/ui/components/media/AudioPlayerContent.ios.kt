@@ -17,7 +17,7 @@ actual fun AudioPlayerContent(
         progress = 0f,
         positionText = "0:00",
         durationText = null,
-        fileName = audioFileName(url),
+        url = url,
         onToggle = {},
         modifier = modifier,
     )

@@ -59,7 +59,9 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `IdentifierRow` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/IdentifierField.kt | Cycling identifier field (prototype IdentifierField): the swap button rotates |
 | `ImageViewerModal` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/ImageViewerModal.kt | — |
 | `InfoCard` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/cards/InfoCard.kt | — |
+| `InlineVideo` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/media/InlineVideo.kt | A chat video: the platform player plus the save button, overlaid in the corner so the file can |
 | `LiveSpaceSection` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/chat/LiveSpaceSection.kt | Live NIP-29 AV space banner for [groupId], opening the room dialog. |
+| `MediaSaveButton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/media/MediaSaveButton.kt | Saves an inline media file to the device. Renders nothing on a platform that has nowhere to |
 | `MemberSidebar` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/sidebars/MemberSidebar.kt | Enhanced member sidebar with online/offline status, avatars, role badges, and search. |
 | `MemberSkeleton` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/loading/SkeletonLoader.kt | Skeleton loader for member list items. |
 | `MeMenu` | uiComposeMain/kotlin/org/nostr/nostrord/ui/components/accounts/MeMenu.kt | Sheet/popup that opens from the user avatar. Lists every signed-in account |
@@ -117,7 +119,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `AvSpaceModalHost` | webMain/kotlin/org/nostr/nostrord/web/modals/AvSpaceModalHost.kt | The one place the AV room renders. |
 | `AvSpaceModal` | webMain/kotlin/org/nostr/nostrord/web/modals/AvSpaceModal.kt | The live audio/video room for a NIP-29 group (spec: relay-hosted LiveKit, kind 39004). |
 | `BunkerStatusBanner` | webMain/kotlin/org/nostr/nostrord/web/components/BunkerStatusBanner.kt | Floating banner shown when the active account signs through a NIP-46 bunker the |
-| `ChatAudio` | webMain/kotlin/org/nostr/nostrord/web/components/ChatAudio.kt | A chat inline audio clip. Renders the native <audio controls> element, which gives |
+| `ChatAudio` | webMain/kotlin/org/nostr/nostrord/web/components/ChatAudio.kt | A chat inline audio clip: play/pause, file name, seek bar, elapsed/total and the save button, |
 | `ChatImage` | webMain/kotlin/org/nostr/nostrord/web/components/ChatImage.kt | A chat inline image. Opens fullscreen on click. For images that have transparency it samples |
 | `ChatMessageList` | webMain/kotlin/org/nostr/nostrord/web/components/ChatMessageList.kt | Non-virtualized chat list: renders every row as real DOM (history is bounded). |
 | `ChatVideo` | webMain/kotlin/org/nostr/nostrord/web/components/ChatVideo.kt | A chat inline video. |
@@ -145,6 +147,7 @@ delete the old one in the same change so the catalogue never lists a dead screen
 | `JoinWithCodeModal` | webMain/kotlin/org/nostr/nostrord/web/modals/JoinWithCodeModal.kt | Join-with-invite-code modal — web port of the Compose InviteCodeJoinModal |
 | `LiveSpaceBar` | webMain/kotlin/org/nostr/nostrord/web/components/LiveSpaceBar.kt | In-chat banner for a NIP-29 AV space: participant count, a stack of the first few faces and |
 | `ManageGroupModal` | webMain/kotlin/org/nostr/nostrord/web/modals/ManageGroupModal.kt | Unified admin "Manage group" modal (port of the prototype GroupManage): a left tab |
+| `MediaSaveButton` | webMain/kotlin/org/nostr/nostrord/web/components/MediaSaveButton.kt | Saves an inline media file to the browser's downloads with the name and extension it really |
 | `MembersModal` | webMain/kotlin/org/nostr/nostrord/web/modals/MembersModal.kt | Read-only member roster (port of the prototype GroupPanels "Members" panel): avatar + |
 | `MentionPopup` | webMain/kotlin/org/nostr/nostrord/web/components/MentionPopup.kt | The `@user` / `%group` suggestion list. Absolutely positioned against the nearest positioned |
 | `PomegranateDisconnectModal` | webMain/kotlin/org/nostr/nostrord/web/modals/PomegranateDisconnectModal.kt | Confirmation for unlinking a Login-with-Google account from its central server. The |
