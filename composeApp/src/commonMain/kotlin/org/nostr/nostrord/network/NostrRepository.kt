@@ -309,6 +309,11 @@ class NostrRepository(
     // can't leak the publish job; delivery is best-effort and swallows failures anyway.
     private val PUBLISH_RELAY_TIMEOUT_MS = 8_000L
 
+    // How long a wrap refused with "auth-required" waits for the NIP-42 signature before it is sent
+    // again. Generous because a bunker or a signer app makes that a round-trip, not a formality, and
+    // the wait runs in the send queue's own scope: nothing on screen is blocked by it.
+    private val PUBLISH_AUTH_SIGN_BUDGET_MS = 20_000L
+
     // Budget for the relays to answer with this account's own kind:10044 before enabling acts on
     // local state. Short: it is paid on every Settings open and on a first enable.
     private val OWN_ANNOUNCEMENT_WAIT_MS = 2_500L
@@ -2923,6 +2928,26 @@ class NostrRepository(
         }
     }
 
+    /**
+     * Publish one gift wrap to a relay, once through AUTH if the relay asks for it.
+     *
+     * A DM inbox relay that gates writes (auth.nostr1.com, and any strfry with `auth_required`)
+     * answers the first EVENT with OK-false "auth-required" and issues its NIP-42 challenge in the
+     * same breath. The wrap only lands if it is sent AGAIN once the challenge is answered, so the
+     * publish waits out the signature here. Leaving it to the send queue's backoff instead loses:
+     * every later attempt reopens the same race, so the message sits on the Sending clock while the
+     * socket next to it is already authenticated.
+     */
+    private suspend fun sendWrapAwaitingAuth(client: NostrGroupClient, frame: String, wrapId: String): PublishResult {
+        val first = client.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
+        val reason = (first as? PublishResult.Rejected)?.reason ?: return first
+        if (classifyRejection(reason) != RelayRejection.Transient || !reason.trim().lowercase().startsWith("auth-required")) return first
+        // A challenge the relay already sent resolves this immediately; the budget is spent only on
+        // the signature itself.
+        if (!client.awaitAuthSigned(PUBLISH_AUTH_SIGN_BUDGET_MS)) return first
+        return client.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
+    }
+
     // Publish a pre-serialized gift wrap event and wait for a relay OK, so a DM has a real delivered
     // signal (not fire-and-forget). Accepted the moment any relay OKs it, carrying the relays that
     // took it so the message can name where it landed. Rejected only when every target answered
@@ -2942,14 +2967,15 @@ class NostrRepository(
                 targets.map { url ->
                     async {
                         try {
-                            val result =
+                            // Only the connect is bounded here: sendWrapAwaitingAuth carries its own
+                            // budget, and a relay that gates writes needs more than a connect's worth
+                            // of it.
+                            val client =
                                 withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
-                                    val client =
-                                        connectionManager.getClientForRelay(url)
-                                            ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-                                    client?.sendAndAwaitOk(frame, wrapId, PUBLISH_RELAY_TIMEOUT_MS)
+                                    connectionManager.getClientForRelay(url)
+                                        ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
                                 }
-                            url to result
+                            url to client?.let { sendWrapAwaitingAuth(it, frame, wrapId) }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Throwable) {
