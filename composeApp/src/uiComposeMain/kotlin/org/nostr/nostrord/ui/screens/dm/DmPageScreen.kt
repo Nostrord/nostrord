@@ -1,4 +1,7 @@
 package org.nostr.nostrord.ui.screens.dm
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -49,6 +52,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -57,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.nostr.nostrord.di.AppModule
 import org.nostr.nostrord.network.UserMetadata
@@ -96,6 +102,10 @@ import org.nostr.nostrord.ui.theme.Spacing
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.formatTime
 import org.nostr.nostrord.utils.rememberClipboardWriter
+
+// Breathing room above a message jumped to from a reply quote, so it does not sit glued to the
+// top edge of the feed.
+private const val JUMP_TOP_GAP_PX = 24f
 
 /**
  * Direct-message conversation page (NIP-17). Renders the decrypted thread and a composer that
@@ -474,6 +484,26 @@ fun DmPageScreen(
                         }
                     }
                     val chatItems = remember(messages) { buildDmChatItems(messages) }
+                    // Tapping a reply quote lands on the message it answers. The feed is a plain
+                    // scrolling Column, so every row reports its content offset here and the jump
+                    // scrolls straight to it. A plain map, not snapshot state: it is written on
+                    // every layout pass and only ever read inside a click handler.
+                    val messageOffsets = remember(pubkey) { mutableMapOf<String, Float>() }
+                    var highlightedId by remember(pubkey) { mutableStateOf<String?>(null) }
+                    val jumpToMessage: (String) -> Unit = { id ->
+                        messageOffsets[id]?.let { y ->
+                            scrollScope.launch {
+                                // The reader asked to be up in the history: nothing arriving below
+                                // may drag them back down.
+                                pinnedToBottom.value = false
+                                highlightedId = id
+                                messagesScroll.animateScrollTo((y - JUMP_TOP_GAP_PX).toInt().coerceAtLeast(0))
+                                delay(2500)
+                                if (highlightedId == id) highlightedId = null
+                            }
+                        }
+                        Unit
+                    }
                     var menuForId by remember { mutableStateOf<String?>(null) }
                     var menuAnchorPx by remember { mutableStateOf<Offset?>(null) }
                     var sourceForId by remember { mutableStateOf<String?>(null) }
@@ -490,12 +520,21 @@ fun DmPageScreen(
                             is DmChatItem.DateSeparator -> DateSeparator(item.label)
                             is DmChatItem.Message -> {
                                 val m = item.message
+                                // Flash after a reply-quote jump: snaps on, fades out, same cue as
+                                // the group feed's MessageItem.
+                                val highlighted = highlightedId == m.id
+                                val highlightColor by animateColorAsState(
+                                    targetValue = if (highlighted) NostrordColors.Primary.copy(alpha = 0.18f) else Color.Transparent,
+                                    animationSpec = if (highlighted) snap() else tween(durationMillis = 1200),
+                                )
                                 // WhatsApp/Telegram-style: a small clock inside every bubble,
                                 // bottom-right under the text.
                                 Row(
                                     modifier =
                                     Modifier
                                         .fillMaxWidth()
+                                        .onGloballyPositioned { messageOffsets[m.id] = it.positionInParent().y }
+                                        .background(highlightColor, NostrordShapes.shapeSmall)
                                         .padding(top = if (item.firstInGroup) Spacing.sm else Spacing.xxs)
                                         // Tap (mobile) / right-click (desktop) opens the context menu
                                         // at the pointer, same interaction as group chat rows.
@@ -544,6 +583,16 @@ fun DmPageScreen(
                                                         ReplyQuote(
                                                             authorName = replyAuthorName(parent, userMetadata, name, myPubkey),
                                                             snippet = parent?.previewText() ?: "Message not loaded",
+                                                            // Tappable only while the answered message is loaded; a
+                                                            // no-op click would still swallow the long-press that
+                                                            // opens the row menu, so the quote offers it back.
+                                                            onClick = parent?.let { p -> { jumpToMessage(p.id) } },
+                                                            onLongClick = parent?.let {
+                                                                {
+                                                                    menuAnchorPx = null
+                                                                    menuForId = m.id
+                                                                }
+                                                            },
                                                             modifier = Modifier.padding(bottom = Spacing.xxs),
                                                         )
                                                     }

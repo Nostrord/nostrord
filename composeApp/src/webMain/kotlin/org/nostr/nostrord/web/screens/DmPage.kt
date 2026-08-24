@@ -10,6 +10,7 @@ import org.nostr.nostrord.network.managers.previewText
 import org.nostr.nostrord.nostr.DmOutgoingFile
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.extractDmGroupInvite
+import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.navigation.DmRoute
 import org.nostr.nostrord.ui.navigation.GroupRoute
 import org.nostr.nostrord.ui.navigation.UserRoute
@@ -57,6 +58,7 @@ import react.useLayoutEffect
 import react.useRef
 import react.useState
 import web.cssom.ClassName
+import web.dom.ElementId
 import web.html.HTMLDivElement
 import web.html.HTMLTextAreaElement
 import kotlin.math.abs
@@ -137,6 +139,8 @@ val DmPage =
         val (replyingTo, setReplyingTo) = useState<String?> { null }
         // Bumped per Reply pick so replying twice to the same message re-focuses the composer.
         val (replyNonce, setReplyNonce) = useState { 0 }
+        // The message a reply quote jumped to, flashing until the animation is done.
+        val (highlightId, setHighlightId) = useState<String?> { null }
         // Second tick: the wrap reached every inbox relay this peer publishes.
         val fullyDelivered = useStateFlow(dmVm.fullyDelivered)
         // Resolve where this peer reads before the first message is written, not after their reply.
@@ -337,6 +341,17 @@ val DmPage =
             }
         }
 
+        // Tapping a reply quote lands on the message it answers and flashes it. Nothing else moves
+        // the feed for the reader, so the jump also unpins it: media loading in must not yank the
+        // view back to the bottom while they read up here.
+        fun jumpToMessage(id: String) {
+            val row = document.getElementById("dm-msg-$id") ?: return
+            pinnedToBottom.current = false
+            row.asDynamic().scrollIntoView(js("({ block: 'center', behavior: 'smooth' })"))
+            setHighlightId(id)
+            window.setTimeout({ setHighlightId(null) }, 2_600)
+        }
+
         fun insertAtCursor(s: String) {
             val ta = composerInputRef.current
             if (ta == null) {
@@ -487,12 +502,15 @@ val DmPage =
                                 val m = item.message
                                 div {
                                     key = m.id
+                                    // The reply-quote jump targets this row by id and flashes it.
+                                    id = ElementId("dm-msg-${m.id}")
                                     className =
                                         ClassName(
                                             buildString {
                                                 append("dm-msg")
                                                 if (m.mine) append(" mine")
                                                 if (!item.firstInGroup) append(" grouped")
+                                                if (m.id == highlightId) append(" highlight")
                                             },
                                         )
                                     // First right-click opens our menu at the cursor; with it open the
@@ -561,7 +579,10 @@ val DmPage =
                                             m.replyToId?.let { parentId ->
                                                 val parent = messages.firstOrNull { it.id == parentId }
                                                 div {
-                                                    className = ClassName("msg-reply")
+                                                    // Tappable only while the answered message is
+                                                    // loaded; otherwise there is nowhere to jump.
+                                                    className = ClassName(if (parent != null) "msg-reply tappable" else "msg-reply")
+                                                    if (parent != null) onClick = { jumpToMessage(parent.id) }
                                                     div { className = ClassName("msg-reply-bar") }
                                                     div {
                                                         className = ClassName("msg-reply-content")
@@ -767,10 +788,13 @@ val DmPage =
 
             div {
                 className = ClassName("dm-composer-wrap")
-                // Reply chip above the input, same markup as the group composer's.
+                // Reply chip above the input, same markup as the group composer's. Both children
+                // carry a stable key: without one React reconciles this list by index and rebuilds
+                // the textarea when the chip goes away on send, which drops the caret.
                 replyingTo?.let { targetId ->
                     val parent = messages.firstOrNull { it.id == targetId }
                     div {
+                        key = "composer-reply"
                         className = ClassName("composer-reply")
                         icon(Ic.Reply)
                         span {
@@ -795,6 +819,7 @@ val DmPage =
                     }
                 }
                 div {
+                    key = "dm-composer"
                     className = ClassName("dm-composer")
                     UploadButton {
                         cls = "dm-composer-btn"
@@ -854,7 +879,15 @@ val DmPage =
                         className = ClassName("dm-composer-btn send")
                         title = "Send"
                         disabled = (text.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
-                        onMouseDown = { e -> e.preventDefault() }
+                        // Keyboard-neutral tap: keep textarea focus (so the keyboard stays up)
+                        // only when it is already up; rules in VirtualKeyboardPolicy.
+                        onMouseDown = { e ->
+                            val keep = VirtualKeyboardPolicy.keepComposerFocusOnTap(
+                                keyboardOpen = VirtualKeyboard.isOpen,
+                                touchDevice = window.navigator.maxTouchPoints > 0,
+                            )
+                            if (keep) e.preventDefault()
+                        }
                         onClick = { send() }
                         if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
                     }

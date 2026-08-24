@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.launch
+import org.nostr.nostrord.autoFocusTextInput
 import org.nostr.nostrord.getPlatform
 import org.nostr.nostrord.network.upload.FileTooLargeException
 import org.nostr.nostrord.network.upload.MAX_UPLOAD_BYTES
@@ -178,6 +179,14 @@ fun MessageComposer(
 
     val canSend = value.text.isNotBlank() && !isSending && !isUploadingPaste
 
+    // Sending is not the end of the writing session: hand the caret straight back so the next
+    // message can be typed without clicking the field again (group MessageInput does the same).
+    // Gated on autoFocusTextInput, since on mobile a refocus would force the keyboard back up.
+    fun submit() {
+        onSend()
+        if (autoFocusTextInput) runCatching { focusRequester?.requestFocus() }
+    }
+
     fun appendUploadedUrl(url: String) {
         val current = value.text
         val sep = if (current.isNotEmpty() && !current.endsWith(" ") && !current.endsWith("\n")) " " else ""
@@ -282,14 +291,14 @@ fun MessageComposer(
                 if (sendLabel != null) {
                     AppButton(
                         text = sendLabel,
-                        onClick = onSend,
+                        onClick = { submit() },
                         enabled = canSend,
                         loading = isSending,
                         size = AppButtonSize.Small,
                     )
                 } else {
                     IconButton(
-                        onClick = onSend,
+                        onClick = { submit() },
                         enabled = canSend,
                         modifier = Modifier.size(width = 26.dp, height = 32.dp),
                     ) {
@@ -379,7 +388,7 @@ fun MessageComposer(
                                         ctrlOrMeta = event.isCtrlPressed || event.isMetaPressed,
                                         shift = event.isShiftPressed,
                                     )
-                                    if (submits && canSend) onSend()
+                                    if (submits && canSend) submit()
                                     submits
                                 }
                                 event.type == KeyEventType.KeyDown && event.key == Key.Enter && event.isShiftPressed -> {
@@ -390,7 +399,7 @@ fun MessageComposer(
                                     true
                                 }
                                 event.type == KeyEventType.KeyDown && event.key == Key.Enter && !event.isShiftPressed -> {
-                                    if (canSend) onSend()
+                                    if (canSend) submit()
                                     true
                                 }
                                 else -> false
