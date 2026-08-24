@@ -24,6 +24,8 @@ import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.nostr.Nip57
 import org.nostr.nostrord.nostr.Nip68
 import org.nostr.nostrord.nostr.Nip84
+import org.nostr.nostrord.ui.chat.getReplyParentId
+import org.nostr.nostrord.ui.chat.messageBody
 import org.nostr.nostrord.ui.components.emoji.QuickReactions
 import org.nostr.nostrord.ui.keyboard.VirtualKeyboardPolicy
 import org.nostr.nostrord.ui.mentions.MentionAutocomplete
@@ -151,21 +153,6 @@ external interface ChatScreenProps : Props {
 
     /** Opens the groups-sidebar drawer (mobile only — the chat header hamburger). */
     var onOpenDrawer: () -> Unit
-}
-
-/**
- * Parent message id of a reply (kind 9 only). Nostrord tags replies with "q"; other clients
- * may use the NIP-10 reply marker ["e", id, relay?, "reply"], which native also honors
- * (getReplyParentId). The plain unmarked "e" fallback is intentionally not used here — it is
- * ambiguous (root vs mention vs inline quote) without the content embed-check native does.
- */
-private fun parentMessageOf(message: org.nostr.nostrord.network.NostrGroupClient.NostrMessage): String? {
-    if (message.kind != 9) return null
-    fun isHexId(s: String) = s.length == 64 && s.all { it.isLetterOrDigit() }
-    message.tags.firstOrNull { it.size >= 2 && it[0] == "q" && isHexId(it[1]) }?.let { return it[1] }
-    return message.tags
-        .firstOrNull { it.size >= 4 && it[0] == "e" && it[3] == "reply" && isHexId(it[1]) }
-        ?.get(1)
 }
 
 /** Plain-text preview of a parent message for a reply chip/banner: mentions resolved,
@@ -2132,12 +2119,13 @@ val ChatScreen =
 
                                         is WebChatItem.Message -> {
                                             val message = item.message
-                                            val parent = parentMessageOf(message)?.let { messagesById[it] }
+                                            val parentId = getReplyParentId(message)
+                                            val parent = parentId?.let { messagesById[it] }
                                             val replyPreview =
                                                 parent?.let {
                                                     ReplyPreviewData(
                                                         author = displayName(it.pubkey, userMetadata[it.pubkey]),
-                                                        content = replyPreviewText(it.content, userMetadata, 120),
+                                                        content = replyPreviewText(messageBody(it), userMetadata, 120),
                                                         tags = it.tags,
                                                     )
                                                 }
@@ -2155,7 +2143,8 @@ val ChatScreen =
                                                 name = displayName(message.pubkey, userMetadata[message.pubkey])
                                                 avatarUrl = userMetadata[message.pubkey]?.picture
                                                 time = formatTime(message.createdAt)
-                                                content = message.content
+                                                // A NIP-C7 reply opens its body with a pointer to the parent the reply quote shows.
+                                                content = messageBody(message.content, parentId)
                                                 this.tags = message.tags
                                                 this.firstInGroup = item.firstInGroup
                                                 isAuthorAdmin = message.pubkey in admins
@@ -2297,7 +2286,7 @@ val ChatScreen =
                             replyingToId?.let { id -> messagesById[id]?.let { p -> displayName(p.pubkey, userMetadata[p.pubkey]) } }
                         this.replyParentContent =
                             replyingToId?.let { id ->
-                                messagesById[id]?.let { p -> replyPreviewText(p.content, userMetadata, 80) }
+                                messagesById[id]?.let { p -> replyPreviewText(messageBody(p), userMetadata, 80) }
                             }
                         this.onCancelReply = { setReplyingToId(null) }
                         this.onSent = {

@@ -55,6 +55,8 @@ import org.nostr.nostrord.network.managers.GroupManager
 import org.nostr.nostrord.nostr.Nip19
 import org.nostr.nostrord.nostr.Nip27
 import org.nostr.nostrord.nostr.Nip57
+import org.nostr.nostrord.ui.chat.getReplyParentId
+import org.nostr.nostrord.ui.chat.messageBody
 import org.nostr.nostrord.ui.components.ReportUserModal
 import org.nostr.nostrord.ui.components.avatars.ProfileAvatar
 import org.nostr.nostrord.ui.components.zap.ZapBadge
@@ -145,7 +147,10 @@ fun MessageItem(
         }
 
     // Check if this message is a reply and find the parent message
-    val replyParentId = remember(message.tags) { getReplyParentId(message) }
+    val replyParentId = remember(message.tags, message.content) { getReplyParentId(message) }
+
+    // A NIP-C7 reply opens its body with a pointer to the parent the reply quote already shows.
+    val body = remember(message.content, replyParentId) { messageBody(message.content, replyParentId) }
 
     // Collect cached events from repository for parent message lookup
     val cachedEvents by AppModule.nostrRepository.cachedEvents.collectAsState()
@@ -456,7 +461,7 @@ fun MessageItem(
                     Row(verticalAlignment = Alignment.Bottom) {
                         Box(modifier = Modifier.weight(1f, fill = false)) {
                             MessageContent(
-                                content = message.content,
+                                content = body,
                                 tags = message.tags,
                                 onMentionClick = currentOnUsernameClick,
                                 onHashtagClick = { hashtag ->
