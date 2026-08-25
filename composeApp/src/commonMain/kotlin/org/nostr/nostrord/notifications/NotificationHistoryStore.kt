@@ -152,6 +152,28 @@ class NotificationHistoryStore {
     }
 
     /**
+     * Drop entries about events that no longer exist: [eventIds] were deleted, or a relay's answer
+     * no longer serves them. An entry matches on its own event, its chat message, or its thread
+     * root - a deleted kind:11 orphans every kind:1111 reply notification under it, and those
+     * would otherwise sit in the feed forever pointing at a thread that cannot open.
+     *
+     * The announced ids stay: a deleted event must not be announced again if the relay replays it.
+     */
+    fun removeForEvents(eventIds: Set<String>) {
+        if (eventIds.isEmpty()) return
+        var changed = false
+        _entries.update { current ->
+            val filtered = current.filterNot {
+                it.id in eventIds || it.messageId in eventIds || it.threadRootId in eventIds
+            }
+            if (filtered.size == current.size) return@update current
+            changed = true
+            filtered
+        }
+        if (changed) persist()
+    }
+
+    /**
      * Drop every entry from the in-memory feed and erase the persisted blob. The announced ids
      * stay: emptying the feed is not a request to be told about those events again.
      */

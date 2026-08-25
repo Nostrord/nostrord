@@ -53,6 +53,35 @@ class NotificationHistoryStoreTest {
     }
 
     @Test
+    fun `deleting a thread root drops the notifications for its replies`() {
+        val store = store()
+        store.add(entry("reply1"))
+        store.add(entry("reply2"))
+        store.add(entry("other", rootId = "root2"))
+
+        store.removeForEvents(setOf("root1"))
+
+        assertEquals(listOf("other"), store.entries.value.map { it.id })
+    }
+
+    @Test
+    fun `deleting an event drops its own notification`() {
+        val store = store()
+        store.add(entry("e1"))
+        store.removeForEvents(setOf("e1"))
+        assertTrue(store.entries.value.isEmpty())
+    }
+
+    @Test
+    fun `a removed event re-served does not come back`() {
+        val store = store()
+        store.add(entry("e1"))
+        store.removeForEvents(setOf("e1"))
+        store.add(entry("e1"))
+        assertTrue(store.entries.value.isEmpty())
+    }
+
+    @Test
     fun `clearing the feed does not re-open the gate`() {
         val store = store()
         store.add(entry("e1"))
