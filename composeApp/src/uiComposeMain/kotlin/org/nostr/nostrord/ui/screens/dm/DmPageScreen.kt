@@ -617,6 +617,11 @@ fun DmPageScreen(
                                                             // hints that pre-size an inline image, same as chat.
                                                             tags = m.tags,
                                                             onMentionClick = { onOpenProfile(UserRoute(it)) },
+                                                            // A quoted group event forwards here (a DM is in no
+                                                            // group), so its header has to open the source group.
+                                                            onNavigateToGroup = { groupId, _, relayUrl, _ ->
+                                                                relayUrl?.let { onOpenGroup(it, groupId) }
+                                                            },
                                                             textColor = if (m.mine) Color.White else NostrordColors.TextPrimary,
                                                         )
                                                     }
