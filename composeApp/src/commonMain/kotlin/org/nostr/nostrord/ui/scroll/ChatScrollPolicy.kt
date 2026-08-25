@@ -124,6 +124,23 @@ object ChatScrollPolicy {
     }
 
     /**
+     * Whether a content change ABOVE the viewport must be compensated so the rows being
+     * read stay put. False while following the feed or inside the open settle window: the
+     * bottom pin owns positioning there and an anchor hold would fight it. A reader who
+     * deliberately scrolled up always holds, even while the latch still reads bottom
+     * (content growth can flip that reading a frame late).
+     *
+     * Native gets the hold for free: LazyListState anchors on the KEY of the first visible
+     * item and re-derives its index when older messages land in front. Web applies it as a
+     * scrollTop correction on browsers that ship no CSS scroll anchoring.
+     */
+    fun shouldHoldAnchor(
+        atBottom: Boolean,
+        settling: Boolean,
+        userScrolledUp: Boolean,
+    ): Boolean = userScrolledUp || !(atBottom || settling)
+
+    /**
      * Jump-to-bottom affordance (FAB) visibility. Driven by whether the newest message
      * is on screen, NOT by the pin latch: opening at a divider that sits within the
      * bottom tolerance leaves [ChatScrollState.atBottom] false (so streaming chunks

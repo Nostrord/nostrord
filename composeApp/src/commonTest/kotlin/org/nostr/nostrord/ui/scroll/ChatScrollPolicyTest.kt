@@ -157,4 +157,28 @@ class ChatScrollPolicyTest {
             ChatScrollPolicy.onJumpPillTap(hasDivider = false, dividerSeen = false, unreadFromOthers = 3),
         )
     }
+
+    @Test
+    fun anchorHeldOnlyWhileReadingHistory() {
+        // Following the feed: the bottom pin owns the position, no anchor hold.
+        assertEquals(
+            false,
+            ChatScrollPolicy.shouldHoldAnchor(atBottom = true, settling = false, userScrolledUp = false),
+        )
+        // Open settle window: still pinning, even with the latch briefly false mid-reflow.
+        assertEquals(
+            false,
+            ChatScrollPolicy.shouldHoldAnchor(atBottom = false, settling = true, userScrolledUp = false),
+        )
+        // Reading history: an out-of-order older message must not drag the view.
+        assertEquals(
+            true,
+            ChatScrollPolicy.shouldHoldAnchor(atBottom = false, settling = false, userScrolledUp = false),
+        )
+        // A deliberate scroll-up wins over a stale bottom reading and over the settle window.
+        assertEquals(
+            true,
+            ChatScrollPolicy.shouldHoldAnchor(atBottom = true, settling = true, userScrolledUp = true),
+        )
+    }
 }
