@@ -9,10 +9,15 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 
 /**
- * Desktop implementation: Detects right-click via secondary button press
+ * Desktop implementation: Detects right-click via secondary button press.
+ *
+ * Keyed on [onRightClick], as the Android and iOS actuals are: a `Unit` key pins the gesture
+ * loop to the callback captured the first time this slot composed. A chat list composed
+ * positionally (the DM page's plain forEach) then reports the message that USED to sit in the
+ * row, and the menu opens on someone else's bubble.
  */
 @OptIn(ExperimentalComposeUiApi::class)
-actual fun rightClickContextMenuModifier(onRightClick: (Offset) -> Unit): Modifier = Modifier.pointerInput(Unit) {
+actual fun rightClickContextMenuModifier(onRightClick: (Offset) -> Unit): Modifier = Modifier.pointerInput(onRightClick) {
     awaitEachGesture {
         val event = awaitPointerEvent()
         // Check if secondary (right) mouse button is pressed
