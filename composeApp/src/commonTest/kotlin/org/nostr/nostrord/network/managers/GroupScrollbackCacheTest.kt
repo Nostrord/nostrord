@@ -60,4 +60,45 @@ class GroupScrollbackCacheTest {
 
         scope.cancel()
     }
+
+    @Test
+    fun `an older page brings its cached reactions with it`() = runTest {
+        val scope = TestScope(testScheduler)
+        val cache = InMemoryCacheStore()
+        val manager = GroupManager(connectionManager = ConnectionManager(scope), scope = scope, cacheStore = cache)
+        manager.setCurrentPubkey(SB_PUBKEY)
+        manager.setGroupRelayHint(SB_GROUP, "wss://cache.relay")
+
+        cache.upsertMessages(SB_PUBKEY, slot, (1L..10L).map { cached("m$it", it) })
+        val reactionSlot = "$slot|reactions"
+        cache.upsertMessages(
+            SB_PUBKEY,
+            reactionSlot,
+            listOf(
+                CachedMsg(
+                    "r-m3",
+                    reactionSlot,
+                    "reactor",
+                    createdAt = 4,
+                    kind = 7,
+                    content = "+",
+                    tagsJson = """[["e","m3"],["p","p"],["h","$SB_GROUP"]]""",
+                ),
+            ),
+        )
+        SecureStorage.saveMessagesForGroup(
+            SB_PUBKEY,
+            SB_GROUP,
+            (8..10).joinToString(prefix = "[", postfix = "]") {
+                """{"id":"m$it","pubkey":"p","content":"c","createdAt":$it,"kind":9,"tags":[]}"""
+            },
+        )
+        manager.loadMessagesFromStorage(SB_GROUP)
+
+        assertTrue(manager.loadMoreMessages(SB_GROUP), "disk-first scroll-back should report a loaded page")
+        // The chip for the restored older message is there on the same paint as the page.
+        assertEquals(listOf("reactor"), manager.reactions.value["m3"]?.get("+")?.reactors)
+
+        scope.cancel()
+    }
 }

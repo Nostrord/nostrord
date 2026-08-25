@@ -960,6 +960,9 @@ class GroupManager(
         // history still hydrates every chip it holds.
         const val REACTION_CACHE_HYDRATE_LIMIT = 600
 
+        // Reactions restored alongside one older page of scroll-back history.
+        const val REACTION_CACHE_PAGE_SIZE = 200
+
         // Threads hydration budget: one roots page + the reply batch the live subs would fetch.
         const val THREAD_CACHE_HYDRATE_LIMIT = THREAD_PAGE_SIZE + THREAD_REPLY_BATCH
 
@@ -3537,14 +3540,13 @@ class GroupManager(
             } catch (_: Exception) {
                 return
             }
-        for (row in cached) {
-            // The slot holds the thread's reactions alongside its events; a kind:7 must rebuild
-            // a reaction, not be filed as a reply.
-            if (row.kind == 7) {
-                row.toNostrReaction()?.let { handleReaction(it) }
-            } else {
-                applyThreadEvent(groupId, row.toNostrMessage().withOriginRelay(relay), persist = false)
-            }
+        // The slot holds the thread's reactions alongside its events; a kind:7 must rebuild a
+        // reaction, not be filed as a reply. Reactions go in first so the cards paint with their
+        // chips already on them.
+        val (reactionRows, eventRows) = cached.partition { it.kind == 7 }
+        applyCachedReactions(reactionRows)
+        for (row in eventRows) {
+            applyThreadEvent(groupId, row.toNostrMessage().withOriginRelay(relay), persist = false)
         }
     }
 
@@ -4230,6 +4232,7 @@ class GroupManager(
                 return false
             }
         if (olderPage.isEmpty()) return false
+        hydrateReactionsBefore(account, groupId, relay, oldestInMemory)
         val restored = olderPage.map { it.toNostrMessage().withOriginRelay(relay) }
         var added = false
         _messages.update { current ->
@@ -5242,13 +5245,50 @@ class GroupManager(
                 return
             }
         if (rows.isEmpty()) return
+        applyCachedReactions(rows)
+    }
+
+    /**
+     * Replay cached reaction rows and emit them at once. The debounce is skipped on purpose: a
+     * staged batch would land after the messages it decorates and grow their rows under the
+     * reader, which is the jump the disk cache exists to avoid.
+     */
+    private fun applyCachedReactions(rows: List<CachedMsg>) {
         for (row in rows) {
             row.toNostrReaction()?.let { handleReaction(it) }
         }
-        // The staged batch would otherwise wait out the debounce and land after the messages.
         reactionFlushJob?.cancel()
         reactionFlushJob = null
         flushPendingReactions()
+    }
+
+    /**
+     * Restore the cached reactions that target an older page, so a scroll-back into disk history
+     * brings its chips along instead of letting the relay's kind:7 answer shift the rows the
+     * reader just scrolled to. Reaction rows are timestamped like the events they follow, so the
+     * page boundary selects them.
+     */
+    private suspend fun hydrateReactionsBefore(
+        account: String,
+        groupId: String,
+        relay: String,
+        beforeCreatedAt: Long,
+    ) {
+        val rows =
+            try {
+                cacheStore.loadBefore(
+                    account,
+                    chatReactionCacheSlot(relay, groupId),
+                    beforeCreatedAt,
+                    REACTION_CACHE_PAGE_SIZE,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                return
+            }
+        if (rows.isEmpty()) return
+        applyCachedReactions(rows)
     }
 
     /**
