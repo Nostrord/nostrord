@@ -210,9 +210,8 @@ val ChatMessageList =
         // Stay glued to the bottom when content grows there WITHOUT an items.size
         // change — an image/video/reply-preview resolving height, a reaction landing
         // on the newest message (issue #74). Those don't trip the layout effect, so a
-        // ResizeObserver on the inner content re-pins to the bottom. Guarded to ONLY
-        // act while following (at bottom, not paginating); when reading history,
-        // overflow-anchor handles above-viewport growth instead.
+        // ResizeObserver on the inner content re-pins to the bottom while following, and
+        // restores the anchor row while reading history.
         useEffect(Unit) {
             val inner = innerEl.current ?: return@useEffect
             val onResize: () -> Unit = {
