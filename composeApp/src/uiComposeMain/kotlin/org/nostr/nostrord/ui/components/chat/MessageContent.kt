@@ -1618,6 +1618,7 @@ fun ForwardedEventCard(
     val userMetadata by AppModule.nostrRepository.userMetadata.collectAsState()
     val cachedEvents by AppModule.nostrRepository.cachedEvents.collectAsState()
     val copyToClipboard = rememberClipboardWriter()
+    val uriHandler = LocalUriHandler.current
     var showMenu by remember { mutableStateOf(false) }
 
     val authorMetadata = userMetadata[event.pubkey]
@@ -1759,6 +1760,23 @@ fun ForwardedEventCard(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Open in another client") },
+                                onClick = {
+                                    // nevent, never note: a bare id strands the event on a NIP-29
+                                    // relay the other client doesn't know, and carries no author to
+                                    // fall back on. Same link the web card's icon opens.
+                                    val nevent =
+                                        Nip19.encodeNevent(
+                                            event.id,
+                                            relays = listOfNotNull(sourceRelayUrl),
+                                            authorHex = event.pubkey,
+                                            kind = event.kind,
+                                        )
+                                    uriHandler.openUri("https://jumble.social/notes/$nevent")
+                                    showMenu = false
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("Copy Event JSON") },
                                 onClick = {
@@ -2005,9 +2023,11 @@ private fun QuotedEvent(
             // "nostrord" must open 0xchat's, not silently stay here.
             val isFromDifferentGroup =
                 when {
-                    currentGroupId != null && sourceGroupId != currentGroupId -> true
+                    // No group context at all - a DM, a notification - so a group event can only
+                    // have come from somewhere else. The web card forwards on the same rule.
+                    currentGroupId == null -> true
+                    sourceGroupId != currentGroupId -> true
                     hostRelay != null && sourceRelayUrl != null && sourceRelayUrl != hostRelay -> true
-                    // If no current context provided, assume it's a quote from same group (not forwarded)
                     else -> false
                 }
 
