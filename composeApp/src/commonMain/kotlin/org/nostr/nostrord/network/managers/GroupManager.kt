@@ -956,6 +956,10 @@ class GroupManager(
         // live subscription refreshes the tail.
         const val CACHE_HYDRATE_LIMIT = 300
 
+        // Reactions restored on group open. Above the message page so a heavily reacted-to
+        // history still hydrates every chip it holds.
+        const val REACTION_CACHE_HYDRATE_LIMIT = 600
+
         // Threads hydration budget: one roots page + the reply batch the live subs would fetch.
         const val THREAD_CACHE_HYDRATE_LIMIT = THREAD_PAGE_SIZE + THREAD_REPLY_BATCH
 
@@ -3436,24 +3440,29 @@ class GroupManager(
     ): String = "${relayUrl.normalizeRelayUrl()}|$groupId|threads"
 
     /**
-     * Write a thread event through to the persistent cache (fire-and-forget). Relay-less
-     * events (the optimistic insert before the relay echo) are skipped: hydration is
-     * relay-scoped and a send that never echoes must not rehydrate as a ghost.
+     * Disk-cache slot for a group's chat reactions on one relay. Kept out of the chat history
+     * slot so a burst of kind:7 rows never eats into the message page [loadLatest]/[loadBefore]
+     * return, and pagination never has to skip them.
      */
+    private fun chatReactionCacheSlot(
+        relayUrl: String,
+        groupId: String,
+    ): String = "${relayUrl.normalizeRelayUrl()}|$groupId|reactions"
+
     /**
-     * Persist a reaction that targets a thread event into that thread's cache slot, so reopening
-     * the pane shows its chips from disk instead of a bare card until the relay answers. Chat
-     * reactions are not cached (their slot is the chat history and nothing rehydrates them).
+     * Persist a reaction so reopening shows its chips from disk instead of appending them a beat
+     * after the cached messages painted (the chip growing a row is what makes the list jump).
+     * A thread reaction goes to that thread's slot, a chat reaction to the group's reaction slot.
      *
      * The tags are rebuilt from the parsed reaction rather than kept raw: only e/p/h/E/emoji
      * matter to [toNostrReaction], and this keeps the row the same shape a thread event has.
      */
-    private fun cacheThreadReaction(reaction: NostrGroupClient.NostrReaction, relayUrl: String) {
+    private fun cacheReaction(reaction: NostrGroupClient.NostrReaction, relayUrl: String) {
         val account = currentPubkey ?: return
         val groupId = reaction.groupId ?: return
-        val rootId = reaction.threadRootId ?: threadRootForEvent(reaction.targetEventId) ?: return
-        val slot = threadCacheSlot(relayUrl, groupId)
-        val tags = threadReactionCacheTags(reaction, groupId, rootId)
+        val rootId = reaction.threadRootId ?: threadRootForEvent(reaction.targetEventId)
+        val slot = if (rootId != null) threadCacheSlot(relayUrl, groupId) else chatReactionCacheSlot(relayUrl, groupId)
+        val tags = reactionCacheTags(reaction, groupId, rootId)
         scope.launch {
             try {
                 cacheStore.upsertMessages(
@@ -3488,6 +3497,11 @@ class GroupManager(
         return reactionFromCacheRow(id, pubkey, createdAt, content, tags)
     }
 
+    /**
+     * Write a thread event through to the persistent cache (fire-and-forget). Relay-less
+     * events (the optimistic insert before the relay echo) are skipped: hydration is
+     * relay-scoped and a send that never echoes must not rehydrate as a ghost.
+     */
     private fun cacheThreadEvent(groupId: String, message: NostrGroupClient.NostrMessage) {
         val account = currentPubkey ?: return
         val relay = message.relayUrl ?: return
@@ -3780,24 +3794,29 @@ class GroupManager(
             val eventId = signedEvent.id
                 ?: return Result.Error(AppError.Group.SendFailed(groupId, Exception("Event ID not generated")))
 
-            // Optimistic update: show reaction in UI immediately (no debounce)
-            handleReaction(
-                NostrGroupClient.NostrReaction(
-                    id = eventId,
-                    pubkey = pubKey,
-                    emoji = emoji,
-                    emojiUrl = null,
-                    targetEventId = targetEventId,
-                    createdAt = event.createdAt,
-                ),
-                immediate = true,
+            val ownReaction = NostrGroupClient.NostrReaction(
+                id = eventId,
+                pubkey = pubKey,
+                emoji = emoji,
+                emojiUrl = null,
+                targetEventId = targetEventId,
+                createdAt = event.createdAt,
+                targetAuthorPubkey = targetPubkey,
+                groupId = groupId,
+                threadRootId = threadRootId,
             )
+            // Optimistic update: show reaction in UI immediately (no debounce)
+            handleReaction(ownReaction, immediate = true)
 
             // Send to group relay
             val publishResult = currentClient.sendAndAwaitOk(message, eventId)
 
             when (publishResult) {
                 is org.nostr.nostrord.network.PublishResult.Success -> {
+                    // The relay echo is deduped by the optimistic insert above, so this is the
+                    // only chance to persist an own reaction: without it the chip pops in from
+                    // the relay after the cached history painted.
+                    if (groupRelayUrl.isNotBlank()) cacheReaction(ownReaction, groupRelayUrl)
                     Result.Success(Unit)
                 }
                 is org.nostr.nostrord.network.PublishResult.Rejected -> {
@@ -5192,6 +5211,9 @@ class GroupManager(
                 return
             }
         if (cached.isEmpty()) return
+        // Reactions first: they emit before the messages land, so the frame that paints the
+        // cached history already carries its chips and no row grows under the reader.
+        hydrateReactionsFromCache(account, groupId, relay)
         val restored = cached.map { it.toNostrMessage().withOriginRelay(relay) }
         _messages.update { current ->
             val existing = current[groupId] ?: emptyList()
@@ -5201,6 +5223,32 @@ class GroupManager(
             current + (groupId to (existing + fresh).sortedForDisplay())
         }
         touchGroupRecency(groupId)
+    }
+
+    /**
+     * Restore a group's cached chat reactions in one emission. Rows replay through
+     * [handleReaction] (deduped by id, so the live kind:7 REQ that follows is a no-op) with no
+     * relay attributed, since they are already on disk.
+     */
+    private suspend fun hydrateReactionsFromCache(
+        account: String,
+        groupId: String,
+        relay: String,
+    ) {
+        val rows =
+            try {
+                cacheStore.loadLatest(account, chatReactionCacheSlot(relay, groupId), REACTION_CACHE_HYDRATE_LIMIT)
+            } catch (_: Exception) {
+                return
+            }
+        if (rows.isEmpty()) return
+        for (row in rows) {
+            row.toNostrReaction()?.let { handleReaction(it) }
+        }
+        // The staged batch would otherwise wait out the debounce and land after the messages.
+        reactionFlushJob?.cancel()
+        reactionFlushJob = null
+        flushPendingReactions()
     }
 
     /**
@@ -5370,7 +5418,7 @@ class GroupManager(
             return null
         }
 
-        if (relayUrl != null) cacheThreadReaction(reaction, relayUrl)
+        if (relayUrl != null) cacheReaction(reaction, relayUrl)
 
         // Check pending (staged) reactions first, then committed state.
         val currentReactions = _pendingReactions[messageId]
@@ -5838,23 +5886,23 @@ internal fun staleThreadEventIds(
 }
 
 /**
- * Tags a cached thread reaction keeps. Only what [reactionFromCacheRow] needs to rebuild it:
- * the target (`e`), its author (`p`), the group (`h`), the thread root (`E`) and the custom
- * emoji URL. Written instead of the raw event tags so the row shape stays stable.
+ * Tags a cached reaction keeps. Only what [reactionFromCacheRow] needs to rebuild it: the target
+ * (`e`), its author (`p`), the group (`h`), the thread root (`E`, absent on a chat reaction) and
+ * the custom emoji URL. Written instead of the raw event tags so the row shape stays stable.
  */
-internal fun threadReactionCacheTags(
+internal fun reactionCacheTags(
     reaction: NostrGroupClient.NostrReaction,
     groupId: String,
-    rootId: String,
+    rootId: String?,
 ): List<List<String>> = buildList {
     add(listOf("e", reaction.targetEventId))
     reaction.targetAuthorPubkey?.let { add(listOf("p", it)) }
     add(listOf("h", groupId))
-    add(listOf("E", rootId))
+    rootId?.let { add(listOf("E", it)) }
     reaction.emojiUrl?.let { add(listOf("emoji", reaction.emoji.trim(':'), it)) }
 }
 
-/** Inverse of [threadReactionCacheTags]; null when the row carries no target to react to. */
+/** Inverse of [reactionCacheTags]; null when the row carries no target to react to. */
 internal fun reactionFromCacheRow(
     id: String,
     pubkey: String,

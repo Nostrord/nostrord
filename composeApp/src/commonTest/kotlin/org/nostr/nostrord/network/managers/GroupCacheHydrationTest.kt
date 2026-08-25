@@ -43,4 +43,44 @@ class GroupCacheHydrationTest {
 
         scope.cancel()
     }
+
+    @Test
+    fun `opening a group renders its cached chat reactions with the messages`() = runTest {
+        val scope = TestScope(testScheduler)
+        val cache = InMemoryCacheStore()
+        val slot = "wss://cache.relay|$HYDRATE_GROUP"
+        cache.upsertMessages(
+            HYDRATE_PUBKEY,
+            slot,
+            listOf(CachedMsg("m1", slot, "p", createdAt = 100, kind = 9, content = "hi", tagsJson = "[]")),
+        )
+        // Reactions live in their own slot so they never eat into the message page.
+        val reactionSlot = "wss://cache.relay|$HYDRATE_GROUP|reactions"
+        cache.upsertMessages(
+            HYDRATE_PUBKEY,
+            reactionSlot,
+            listOf(
+                CachedMsg(
+                    "r1",
+                    reactionSlot,
+                    "reactor",
+                    createdAt = 150,
+                    kind = 7,
+                    content = "\uD83D\uDD25",
+                    tagsJson = """[["e","m1"],["p","p"],["h","$HYDRATE_GROUP"]]""",
+                ),
+            ),
+        )
+        val manager = GroupManager(connectionManager = ConnectionManager(scope), scope = scope, cacheStore = cache)
+        manager.setCurrentPubkey(HYDRATE_PUBKEY)
+        manager.setGroupRelayHint(HYDRATE_GROUP, "wss://cache.relay")
+
+        manager.setActiveGroupId(HYDRATE_GROUP)
+        advanceUntilIdle()
+
+        // The chip is there on the same paint as the message, so no row grows after the fact.
+        assertEquals(listOf("reactor"), manager.reactions.value["m1"]?.get("\uD83D\uDD25")?.reactors)
+
+        scope.cancel()
+    }
 }
