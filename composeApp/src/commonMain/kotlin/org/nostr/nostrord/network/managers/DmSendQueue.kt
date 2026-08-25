@@ -2,6 +2,9 @@ package org.nostr.nostrord.network.managers
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -47,8 +50,14 @@ sealed interface DmPublishOutcome {
  */
 class DmSendQueue(
     private val scope: CoroutineScope,
-    /** Publishes a wrap to its relay set. */
-    private val publish: suspend (relays: List<String>, wrapJson: String, wrapId: String) -> DmPublishOutcome,
+    /** Publishes a wrap to its relay set. Returns on the first relay that takes it; relays that
+     *  take it later are reported through the callback, after the entry is already gone. */
+    private val publish: suspend (
+        relays: List<String>,
+        wrapJson: String,
+        wrapId: String,
+        onLateAccept: (List<String>) -> Unit,
+    ) -> DmPublishOutcome,
     /** Fires when the recipient's wrap is accepted, with the relays that took it, so the on-screen
      *  message resolves to Delivered and can name where it landed. The self-copy never fires it:
      *  landing on our own relays says nothing about the peer. */
@@ -173,10 +182,11 @@ class DmSendQueue(
         while (true) {
             val active = entries.value.filter { it.parkedReason == null }
             if (active.isEmpty()) return
-            for (entry in active) {
-                if (now() < nextAttemptAt(entry)) continue
-                attempt(entry)
-            }
+            // Every due entry at once: the two wraps of a message are independent, and the
+            // self-copy waiting behind the recipient's wrap is exactly the delay the other devices
+            // would feel.
+            val due = active.filter { now() >= nextAttemptAt(it) }
+            coroutineScope { due.map { async { attempt(it) } }.awaitAll() }
             val remaining = entries.value.filter { it.parkedReason == null }
             if (remaining.isEmpty()) return
             val wait = remaining.minOf { nextAttemptAt(it) } - now()
@@ -185,7 +195,10 @@ class DmSendQueue(
     }
 
     private suspend fun attempt(entry: PendingDmWrap) {
-        when (val outcome = publish(entry.relays, entry.wrapJson, entry.wrapId)) {
+        // Relays that take the wrap after the first one keep feeding "seen on"; markDelivered
+        // is idempotent, so repeating onDelivered is the whole point rather than a hazard.
+        val onLateAccept: (List<String>) -> Unit = { if (!entry.toSelf) onDelivered(entry.rumorId, it) }
+        when (val outcome = publish(entry.relays, entry.wrapJson, entry.wrapId, onLateAccept)) {
             is DmPublishOutcome.Accepted -> {
                 if (!entry.toSelf) onDelivered(entry.rumorId, outcome.relays)
                 remove(entry.wrapId)
