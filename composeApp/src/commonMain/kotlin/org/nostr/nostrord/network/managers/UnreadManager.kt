@@ -310,7 +310,7 @@ class UnreadManager(
      * No lastRead/high-water anchor either, unlike chat: those track chat reading, so a group
      * whose chat was just opened would silently swallow every thread reply that follows within
      * the same second. Re-announcing is handled where it belongs - the feed dedupes by event id,
-     * and AppModule gates sound and popup on the event being realtime.
+     * and AppModule gates sound, popup and the unread flag on the event being realtime.
      */
     fun onThreadEventReceived(
         groupId: String,

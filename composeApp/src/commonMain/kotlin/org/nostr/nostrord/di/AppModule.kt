@@ -277,8 +277,8 @@ object AppModule {
     /**
      * Notify an externally granted membership. Only the kind:9000 path carries an actor;
      * 39002-inferred invites (the user opened the group link and is looking at it) stay
-     * silent. Catch-up adds (offline at put time) enter the feed but skip sound/popup via
-     * [isRealtime], like every other notification type.
+     * silent. Catch-up adds (offline at put time) enter the feed already read and skip
+     * sound/popup via [isRealtime], like every other notification type.
      */
     // Feed-entry age cap for external adds, matching the put-user watch's own 7-day
     // catch-up lookback. The no-since 39002 membership sweep has no such bound: on a
@@ -311,6 +311,7 @@ object AppModule {
         // user already decided): a notification for it would be noise.
         if (add.groupId !in groupManager.pendingGroupInvites.value) return
         val groupName = groupDisplayName(add.relayUrl, add.groupId)
+        val realtime = isRealtime(add.createdAtSeconds)
         notificationHistoryStore.add(
             NotificationEntry(
                 id = add.eventId ?: "gadd_${add.groupId}",
@@ -322,12 +323,12 @@ object AppModule {
                 preview = "",
                 groupName = groupName,
                 relayName = relayDisplayName(add.relayUrl),
+                read = !realtime,
             ),
         )
         if (displayLabelFor(actor, prefixAt = false) == null) {
             appScope.launch { nostrRepository.requestUserMetadata(setOf(actor)) }
         }
-        val realtime = isRealtime(add.createdAtSeconds)
         if (realtime && notificationSettings.soundEnabled.value) {
             playNotificationSound()
         }
@@ -372,9 +373,10 @@ object AppModule {
 
     val notificationHistoryStore: NotificationHistoryStore by lazy { NotificationHistoryStore() }
 
-    // Events predating the current session's activation are catch-up: they
-    // enter the in-app feed but do NOT play sound or fire OS popups. Armed on
-    // every session activation, disarmed on logout.
+    // Events predating the current session's activation are catch-up: they land
+    // in the in-app feed already read, and play no sound and fire no OS popup.
+    // The history stays browsable without the badge counting what happened while
+    // the user was away. Armed on every session activation, disarmed on logout.
     private val realtimeCutoff = RealtimeCutoff()
 
     private fun isRealtime(eventCreatedAt: Long): Boolean = realtimeCutoff.isRealtime(eventCreatedAt)
@@ -407,6 +409,7 @@ object AppModule {
                     val preview = notificationPreview(message.content)
                     val groupName = groupDisplayName(relayUrl, groupId)
                     val relayName = relayDisplayName(relayUrl)
+                    val realtime = isRealtime(message.createdAt)
                     notificationHistoryStore.add(
                         NotificationEntry(
                             id = message.id,
@@ -419,9 +422,9 @@ object AppModule {
                             messageId = message.id,
                             groupName = groupName,
                             relayName = relayName,
+                            read = !realtime,
                         ),
                     )
-                    val realtime = isRealtime(message.createdAt)
                     // Sound — gated by the user-facing toggle in Settings → Notifications,
                     // and suppressed for catch-up events (older than the current activation)
                     // so a switch-in doesn't trigger a burst of sounds.
@@ -454,6 +457,7 @@ object AppModule {
                 val preview = notificationPreview(message.content)
                 val groupName = groupDisplayName(relayUrl, groupId)
                 val relayName = relayDisplayName(relayUrl)
+                val realtime = isRealtime(message.createdAt)
                 notificationHistoryStore.add(
                     NotificationEntry(
                         id = message.id,
@@ -466,9 +470,9 @@ object AppModule {
                         messageId = message.id,
                         groupName = groupName,
                         relayName = relayName,
+                        read = !realtime,
                     ),
                 )
-                val realtime = isRealtime(message.createdAt)
                 if (realtime && notificationSettings.soundEnabled.value) {
                     playNotificationSound()
                 }
@@ -497,6 +501,7 @@ object AppModule {
                 // The E tag is the thread root; without it the entry would open the chat, where a
                 // kind:1111 does not exist. Falls back to the reply itself so the pane still opens.
                 val rootId = reply.tags.firstOrNull { it.size >= 2 && it[0] == "E" }?.get(1) ?: reply.id
+                val realtime = isRealtime(reply.createdAt)
                 notificationHistoryStore.add(
                     NotificationEntry(
                         id = reply.id,
@@ -510,9 +515,9 @@ object AppModule {
                         threadRootId = rootId,
                         groupName = groupName,
                         relayName = relayName,
+                        read = !realtime,
                     ),
                 )
-                val realtime = isRealtime(reply.createdAt)
                 if (realtime && notificationSettings.soundEnabled.value) {
                     playNotificationSound()
                 }
@@ -538,6 +543,7 @@ object AppModule {
                 val preview = notificationPreview(message.content)
                 val groupName = groupDisplayName(relayUrl, groupId)
                 val relayName = relayDisplayName(relayUrl)
+                val realtime = isRealtime(message.createdAt)
                 notificationHistoryStore.add(
                     NotificationEntry(
                         id = message.id,
@@ -550,9 +556,9 @@ object AppModule {
                         messageId = message.id,
                         groupName = groupName,
                         relayName = relayName,
+                        read = !realtime,
                     ),
                 )
-                val realtime = isRealtime(message.createdAt)
                 if (realtime && notificationSettings.soundEnabled.value) {
                     playNotificationSound()
                 }
@@ -580,6 +586,7 @@ object AppModule {
                     val emoji = reaction.emoji.ifBlank { "+" }
                     val groupName = groupDisplayName(relayUrl, groupId)
                     val relayName = relayDisplayName(relayUrl)
+                    val realtime = isRealtime(reaction.createdAt)
                     notificationHistoryStore.add(
                         NotificationEntry(
                             id = reaction.id,
@@ -599,9 +606,9 @@ object AppModule {
                             emoji = emoji,
                             groupName = groupName,
                             relayName = relayName,
+                            read = !realtime,
                         ),
                     )
-                    val realtime = isRealtime(reaction.createdAt)
                     if (realtime && notificationSettings.soundEnabled.value) {
                         playNotificationSound()
                     }
