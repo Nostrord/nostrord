@@ -1594,6 +1594,9 @@ private fun ThreadQuoteCard(
     }
 }
 
+/** Web parity (`.quoted-event { max-width: 420px }`): a quote card never spans the whole bubble. */
+private val QUOTED_CARD_MAX_WIDTH = 420.dp
+
 /**
  * Forwarded event card - displays an event that originated from a different group.
  * Shows "forwarded from [group name]" header with group info, author info,
@@ -1617,9 +1620,7 @@ fun ForwardedEventCard(
 ) {
     val userMetadata by AppModule.nostrRepository.userMetadata.collectAsState()
     val cachedEvents by AppModule.nostrRepository.cachedEvents.collectAsState()
-    val copyToClipboard = rememberClipboardWriter()
     val uriHandler = LocalUriHandler.current
-    var showMenu by remember { mutableStateOf(false) }
 
     val authorMetadata = userMetadata[event.pubkey]
     val authorName = authorMetadata?.displayName ?: authorMetadata?.name ?: shortNpub(event.pubkey)
@@ -1648,6 +1649,7 @@ fun ForwardedEventCard(
     Column(
         modifier =
         modifier
+            .widthIn(max = QUOTED_CARD_MAX_WIDTH)
             .fillMaxWidth()
             .clip(RoundedCornerShape(NostrordShapes.radiusMedium))
             .background(NostrordColors.Surface)
@@ -1692,14 +1694,6 @@ fun ForwardedEventCard(
                 style = NostrordTypography.Caption,
                 fontWeight = FontWeight.Medium,
             )
-            // Relay indicator if available
-            if (sourceRelayUrl != null) {
-                Text(
-                    text = "@ ${sourceRelayUrl.removePrefix("wss://").removePrefix("ws://").take(20)}",
-                    color = NostrordColors.TextMuted,
-                    style = NostrordTypography.Caption,
-                )
-            }
         }
 
         // Divider
@@ -1738,74 +1732,33 @@ fun ForwardedEventCard(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    text = formatTime(event.createdAt),
+                    text = formatDateTime(event.createdAt),
                     color = NostrordColors.TextMuted,
                     style = NostrordTypography.Caption,
                 )
                 Spacer(modifier = Modifier.width(Spacing.xs))
-                // 3-dot menu button
+                // The card's only action, as on the web: open the event in a client that can
+                // reach it. nevent, never note - a bare id strands the event on a NIP-29 relay
+                // the other client doesn't know, and carries no author to fall back on.
                 DisableSelection {
-                    Box {
-                        Icon(
-                            imageVector = Icons.Outlined.MoreVert,
-                            contentDescription = "More options",
-                            tint = NostrordColors.TextMuted,
-                            modifier =
-                            Modifier
-                                .size(20.dp)
-                                .clickable { showMenu = true }
-                                .pointerHoverIcon(PointerIcon.Hand),
-                        )
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Open in another client") },
-                                onClick = {
-                                    // nevent, never note: a bare id strands the event on a NIP-29
-                                    // relay the other client doesn't know, and carries no author to
-                                    // fall back on. Same link the web card's icon opens.
-                                    val nevent =
-                                        Nip19.encodeNevent(
-                                            event.id,
-                                            relays = listOfNotNull(sourceRelayUrl),
-                                            authorHex = event.pubkey,
-                                            kind = event.kind,
-                                        )
-                                    uriHandler.openUri("https://jumble.social/notes/$nevent")
-                                    showMenu = false
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Copy Event JSON") },
-                                onClick = {
-                                    val json =
-                                        buildJsonObject {
-                                            put("id", event.id)
-                                            put("pubkey", event.pubkey)
-                                            put("created_at", event.createdAt)
-                                            put("kind", event.kind)
-                                            put(
-                                                "tags",
-                                                buildJsonArray {
-                                                    event.tags.forEach { tag ->
-                                                        add(
-                                                            buildJsonArray {
-                                                                tag.forEach { add(JsonPrimitive(it)) }
-                                                            },
-                                                        )
-                                                    }
-                                                },
-                                            )
-                                            put("content", event.content)
-                                        }.toString()
-                                    copyToClipboard(json)
-                                    showMenu = false
-                                },
-                            )
-                        }
-                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = "Open in another client",
+                        tint = NostrordColors.TextMuted,
+                        modifier =
+                        Modifier
+                            .size(16.dp)
+                            .clickable {
+                                val nevent =
+                                    Nip19.encodeNevent(
+                                        event.id,
+                                        relays = listOfNotNull(sourceRelayUrl),
+                                        authorHex = event.pubkey,
+                                        kind = event.kind,
+                                    )
+                                uriHandler.openUri("https://jumble.social/notes/$nevent")
+                            }.pointerHoverIcon(PointerIcon.Hand),
+                    )
                 }
             }
 

@@ -572,7 +572,10 @@ fun DmPageScreen(
                                         Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
                                             Surface(
                                                 shape = NostrordShapes.shapeMedium,
-                                                color = if (m.mine) NostrordColors.Primary else NostrordColors.BackgroundFloating,
+                                                // Web parity (.dm-bubble): the received bubble sits on
+                                                // surface-variant, a step above the page, not on the
+                                                // near-black floating tone.
+                                                color = if (m.mine) NostrordColors.Primary else NostrordColors.SurfaceVariant,
                                             ) {
                                                 Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
                                                     // A group naddr on its own line renders as the prototype
