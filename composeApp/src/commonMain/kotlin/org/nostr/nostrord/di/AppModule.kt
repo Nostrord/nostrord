@@ -40,6 +40,7 @@ import org.nostr.nostrord.notifications.NotificationPermission
 import org.nostr.nostrord.notifications.NotificationRequest
 import org.nostr.nostrord.notifications.NotificationService
 import org.nostr.nostrord.notifications.NotificationType
+import org.nostr.nostrord.notifications.RealtimeCutoff
 import org.nostr.nostrord.notifications.playNotificationSound
 import org.nostr.nostrord.settings.AppearanceSettings
 import org.nostr.nostrord.settings.DmSettings
@@ -371,15 +372,12 @@ object AppModule {
 
     val notificationHistoryStore: NotificationHistoryStore by lazy { NotificationHistoryStore() }
 
-    // Unix-seconds timestamp of the most recent account activation. Events
-    // with `createdAt < switchInstantSeconds` are catch-up: they predate the
-    // user's current session of this account, so they enter the in-app feed
-    // but do NOT play sound or fire OS popups. Set on every activation in
-    // [applyActiveAccountChange].
-    @kotlin.concurrent.Volatile
-    private var switchInstantSeconds: Long = 0L
+    // Events predating the current session's activation are catch-up: they
+    // enter the in-app feed but do NOT play sound or fire OS popups. Armed on
+    // every session activation, disarmed on logout.
+    private val realtimeCutoff = RealtimeCutoff()
 
-    private fun isRealtime(eventCreatedAt: Long): Boolean = eventCreatedAt >= switchInstantSeconds
+    private fun isRealtime(eventCreatedAt: Long): Boolean = realtimeCutoff.isRealtime(eventCreatedAt)
 
     val unreadManager: UnreadManager by lazy {
         UnreadManager(
@@ -697,6 +695,10 @@ object AppModule {
         if (ActiveAccountManager.session.value?.accountId?.value == account.id) return
         val session = accountSessionFactory.build(account, authManager) ?: return
         ActiveAccountManager.activate(session)
+        // Cold start restores a session without ever passing through
+        // applyActiveAccountChange, so the cutoff has to be armed here too or
+        // the whole relay backlog would arrive as realtime.
+        realtimeCutoff.arm(epochSeconds())
     }
 
     /**
@@ -711,9 +713,9 @@ object AppModule {
      */
     suspend fun applyActiveAccountChange(account: Account?) {
         // Record the activation instant before any state is cleared. Events
-        // with createdAt < this value are treated as catch-up (feed only,
-        // no sound/popup). Set to 0 on logout so realtime gating is moot.
-        switchInstantSeconds = if (account != null) epochSeconds() else 0L
+        // older than it are catch-up (feed only, no sound/popup). Logout
+        // disarms so a logged-out app announces nothing.
+        if (account != null) realtimeCutoff.arm(epochSeconds()) else realtimeCutoff.disarm()
         // Cancel any OS popups still in flight from the previous account so a
         // notification scheduled for A doesn't surface after B is active.
         try {
