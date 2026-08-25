@@ -11,10 +11,10 @@ import react.Props
 import react.dom.html.ReactHTML.div
 import react.useEffect
 import react.useLayoutEffect
+import react.useMemo
 import react.useRef
 import web.cssom.ClassName
 import web.html.HTMLDivElement
-import kotlin.math.abs
 
 // How long after opening a group the view is kept pinned to the bottom unconditionally and
 // auto-pagination is suppressed. Covers the window where late media decode / streaming system
@@ -104,60 +104,13 @@ val ChatMessageList =
         // pagination so the open lands at the true bottom and entry never auto-loads history.
         val settling = { window.performance.now() - (openedAt.current ?: 0.0) < SETTLE_MS }
 
-        // Anchor row for reading history: the id of the first row intersecting the viewport and its
-        // distance from the viewport top. Recorded on every scroll, restored whenever content changes
-        // while reading history, so an out-of-order older message merged into the middle of the list
-        // (GroupManager re-sorts every batch by created_at) can never drag the view up. CSS scroll
-        // anchoring does this on Chromium/Firefox but WebKit shipped it only in Safari 27, so the
-        // correction is applied on every browser; where the browser already held the anchor it
-        // resolves to the same scrollTop and is a no-op.
-        val anchorId = useRef<String>(null)
-        val anchorDist = useRef(0.0)
-
-        // First row intersecting the viewport, by binary search over the rows' offsetTop (they are
-        // siblings in document order, so offsetTop is monotonic). O(log n) instead of walking every
-        // row on each scroll event.
-        val firstVisibleRow = {
-            val node = el.current
-            val kids = innerEl.current?.asDynamic()?.children
-            if (node == null || kids == null || (kids.length as Int) == 0) {
-                null
-            } else {
-                val top = node.scrollTop.toDouble()
-                var lo = 0
-                var hi = (kids.length as Int) - 1
-                while (lo < hi) {
-                    val mid = (lo + hi) / 2
-                    val child = kids[mid]
-                    val bottom = (child.offsetTop as Number).toDouble() + (child.offsetHeight as Number).toDouble()
-                    if (bottom <= top) lo = mid + 1 else hi = mid
-                }
-                kids[lo]
-            }
-        }
-
-        val recordAnchor = {
-            val node = el.current
-            val row = firstVisibleRow()
-            val id = row?.id as? String
-            if (node != null && !id.isNullOrEmpty()) {
-                anchorId.current = id
-                anchorDist.current = (row.offsetTop as Number).toDouble() - node.scrollTop.toDouble()
-            }
-        }
-
-        // Put the anchor row back at the distance from the viewport top it was recorded at. Runs
-        // after the DOM changed (layout effect / ResizeObserver) and before paint, so the shift is
-        // never visible.
-        val restoreAnchor = {
-            val node = el.current
-            val id = anchorId.current
-            val row = if (id.isNullOrEmpty()) null else document.getElementById(id)
-            if (node != null && row != null) {
-                val target = (row.asDynamic().offsetTop as Number).toDouble() - (anchorDist.current ?: 0.0)
-                if (abs(target - node.scrollTop.toDouble()) > 0.5) node.scrollTop = target
-            }
-        }
+        // Holds the rows being read in place when content changes above them: a prepended page,
+        // or an out-of-order older event merged into the middle (GroupManager re-sorts every batch
+        // by created_at). Recorded on every scroll, restored on every content change while reading
+        // history.
+        val anchor = useMemo { ScrollAnchor() }
+        val recordAnchor = { anchor.record(el.current, innerEl.current) }
+        val restoreAnchor = { anchor.restore(el.current) }
 
         // Report the "New messages" divider as seen whenever its row is within the viewport.
         // Called from the scroll handler AND from an entry effect, so the small-unread case
@@ -193,7 +146,7 @@ val ChatMessageList =
                 jumpingToBottom.current = false
                 lastScrollTop.current = node.scrollTop.toDouble()
                 distFromBottom.current = 0.0
-                anchorId.current = null
+                anchor.clear()
                 if (atBottom.current != true) {
                     atBottom.current = true
                     props.onAtBottomChange(true)

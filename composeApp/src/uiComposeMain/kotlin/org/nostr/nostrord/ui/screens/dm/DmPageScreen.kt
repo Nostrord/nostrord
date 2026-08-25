@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,6 +97,7 @@ import org.nostr.nostrord.ui.extractDmGroupInvite
 import org.nostr.nostrord.ui.navigation.DmRoute
 import org.nostr.nostrord.ui.navigation.UserRoute
 import org.nostr.nostrord.ui.screens.profile.ProfilePageViewModel
+import org.nostr.nostrord.ui.scroll.ChatScrollPolicy
 import org.nostr.nostrord.ui.theme.NostrordColors
 import org.nostr.nostrord.ui.theme.NostrordShapes
 import org.nostr.nostrord.ui.theme.Spacing
@@ -226,9 +228,36 @@ fun DmPageScreen(
             messagesScroll.scrollTo(messagesScroll.maxValue)
             pinnedToBottom.value = true
         }
+        // Every message row reports its content offset here on each layout pass. Read by the
+        // reply-quote jump and by the scroll anchor below. A plain map, not snapshot state: it is
+        // written on every layout pass and only ever read from a click handler or an effect.
+        val messageOffsets = remember(pubkey) { mutableMapOf<String, Float>() }
+        // The row the reader is looking at, and how far it sits from the viewport top. The feed is
+        // a plain scrolling Column, so nothing anchors on its own: a message inserted above the
+        // reading position (a decrypted older message, an out-of-order one landing mid-thread)
+        // moves every row below it and the thread appears to scroll itself.
+        var anchorId by remember(pubkey) { mutableStateOf<String?>(null) }
+        var anchorDist by remember(pubkey) { mutableStateOf(0f) }
+        val recordAnchor = {
+            val top = messagesScroll.value.toFloat()
+            val row =
+                messageOffsets.entries.filter { it.value <= top }.maxByOrNull { it.value }
+                    ?: messageOffsets.entries.minByOrNull { it.value }
+            if (row != null) {
+                anchorId = row.key
+                anchorDist = row.value - top
+            }
+        }
+        val restoreAnchor: suspend () -> Unit = {
+            messageOffsets[anchorId]?.let { y ->
+                messagesScroll.scrollTo((y - anchorDist).toInt().coerceIn(0, messagesScroll.maxValue))
+            }
+            Unit
+        }
         LaunchedEffect(messagesScroll.isScrollInProgress) {
             if (!messagesScroll.isScrollInProgress) {
                 pinnedToBottom.value = messagesScroll.value >= messagesScroll.maxValue - 40
+                recordAnchor()
             }
         }
         // Inline images in a message body report their tap through LocalImageViewerUrl. Its default
@@ -254,24 +283,29 @@ fun DmPageScreen(
                 messagesScroll.scrollTo(messagesScroll.maxValue)
             }
         }
-        // The oldest message on screen: it changes exactly when the backlog inserts something
-        // ABOVE what is rendered, which is the case the reader must not be dragged through.
-        val oldestId = messages.firstOrNull()?.id
-        val prependPending = remember { mutableStateOf(false) }
-        LaunchedEffect(oldestId) { prependPending.value = true }
         // Growth from inline media loading, a new message, or the backlog filling in. Pinned to
-        // the bottom means follow it. Reading further up means hold the reading position: when
-        // the growth was above (a decrypted older message), the content the reader was on has
-        // moved down by exactly that much, so compensating puts it back under their eyes.
-        var lastMax by remember { mutableStateOf(0) }
+        // the bottom means follow it; reading further up means put the anchored row back where it
+        // was. Anchoring on a row covers growth anywhere above the reading position, which a
+        // height delta cannot: an out-of-order older event merges into the MIDDLE of the thread
+        // and the oldest message on screen never changes.
         LaunchedEffect(messagesScroll.maxValue) {
-            val delta = messagesScroll.maxValue - lastMax
-            lastMax = messagesScroll.maxValue
-            when {
-                pinnedToBottom.value -> messagesScroll.scrollTo(messagesScroll.maxValue)
-                delta > 0 && prependPending.value -> messagesScroll.scrollTo(messagesScroll.value + delta)
+            if (ChatScrollPolicy.shouldHoldAnchor(
+                    atBottom = pinnedToBottom.value,
+                    settling = false,
+                    userScrolledUp = false,
+                )
+            ) {
+                // Twice: once with the offsets as they stand, once after the frame that places the
+                // inserted rows, since which of the two carries the fresh offsets depends on where
+                // in the frame this effect was dispatched. The second is a no-op when the first
+                // already landed.
+                restoreAnchor()
+                withFrameNanos { }
+                restoreAnchor()
+            } else {
+                messagesScroll.scrollTo(messagesScroll.maxValue)
+                recordAnchor()
             }
-            prependPending.value = false
         }
 
         // The message the composer is answering, if it is still in the thread.
@@ -481,11 +515,8 @@ fun DmPageScreen(
                         }
                     }
                     val chatItems = remember(messages) { buildDmChatItems(messages) }
-                    // Tapping a reply quote lands on the message it answers. The feed is a plain
-                    // scrolling Column, so every row reports its content offset here and the jump
-                    // scrolls straight to it. A plain map, not snapshot state: it is written on
-                    // every layout pass and only ever read inside a click handler.
-                    val messageOffsets = remember(pubkey) { mutableMapOf<String, Float>() }
+                    // Tapping a reply quote lands on the message it answers, straight to the
+                    // offset the row reported into messageOffsets.
                     var highlightedId by remember(pubkey) { mutableStateOf<String?>(null) }
                     val jumpToMessage: (String) -> Unit = { id ->
                         messageOffsets[id]?.let { y ->
@@ -495,6 +526,7 @@ fun DmPageScreen(
                                 pinnedToBottom.value = false
                                 highlightedId = id
                                 messagesScroll.animateScrollTo((y - JUMP_TOP_GAP_PX).toInt().coerceAtLeast(0))
+                                recordAnchor()
                                 delay(2500)
                                 if (highlightedId == id) highlightedId = null
                             }

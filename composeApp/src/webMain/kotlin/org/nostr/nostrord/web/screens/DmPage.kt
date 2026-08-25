@@ -20,6 +20,7 @@ import org.nostr.nostrord.ui.screens.dm.buildDmChatItems
 import org.nostr.nostrord.ui.screens.dm.eventJson
 import org.nostr.nostrord.ui.screens.dm.prettyEventJson
 import org.nostr.nostrord.ui.screens.profile.ProfilePageViewModel
+import org.nostr.nostrord.ui.scroll.ChatScrollPolicy
 import org.nostr.nostrord.utils.Result
 import org.nostr.nostrord.utils.formatDateTime
 import org.nostr.nostrord.utils.formatTime
@@ -33,6 +34,7 @@ import org.nostr.nostrord.web.components.EmojiPicker
 import org.nostr.nostrord.web.components.GroupInviteCard
 import org.nostr.nostrord.web.components.Ic
 import org.nostr.nostrord.web.components.PickedFile
+import org.nostr.nostrord.web.components.ScrollAnchor
 import org.nostr.nostrord.web.components.UploadButton
 import org.nostr.nostrord.web.components.WebAvatar
 import org.nostr.nostrord.web.components.copyToClipboard
@@ -55,6 +57,7 @@ import react.dom.html.ReactHTML.span
 import react.dom.html.ReactHTML.textarea
 import react.useEffect
 import react.useLayoutEffect
+import react.useMemo
 import react.useRef
 import react.useState
 import web.cssom.ClassName
@@ -156,6 +159,16 @@ val DmPage =
         val pinnedToBottom = useRef(true)
         // Same fact as the ref, in state: the jump pill has to re-render when it changes.
         val (atBottom, setAtBottom) = useState { true }
+        // Holds the rows being read in place when the backlog inserts a message above them. Rows
+        // are the scroll container's own children here (there is no inner wrapper).
+        val anchor = useMemo { ScrollAnchor() }
+        val holdAnchor = {
+            ChatScrollPolicy.shouldHoldAnchor(
+                atBottom = pinnedToBottom.current == true,
+                settling = false,
+                userScrolledUp = false,
+            )
+        }
         // Messages FROM THE PEER that landed while the reader was up in the history. Reported on
         // the pill so going back down is their decision with the count in hand. Own messages are
         // never counted: the reader wrote them, and writing already returns the view to the bottom.
@@ -170,16 +183,20 @@ val DmPage =
                 el.scrollTop = el.scrollHeight.toDouble()
             }
             pinnedToBottom.current = true
+            anchor.clear()
         }
-        // Following the feed: pinned to the bottom, anchoring off. Reading further up: anchoring
-        // on and scrollTop untouched, so the browser holds the reading position when the backlog
-        // inserts an older message above (same trick the group list uses). Dragging the reader to
-        // the bottom for a message they did not send is what makes a backfill feel like a bug.
+        // Following the feed: pinned to the bottom. Reading further up: put the anchored row back
+        // where it was, so a message the backlog inserts above (or an out-of-order older one
+        // landing mid-thread) leaves the reading position alone. Dragging the reader to the bottom
+        // for a message they did not send is what makes a backfill feel like a bug.
         useLayoutEffect(messages.size) {
             val el = messagesRef.current ?: return@useLayoutEffect
-            // Reading further up: nothing to do. The anchor is already "auto" (set the moment the
-            // reader left the bottom), so the browser has held their position through the insert.
-            if (pinnedToBottom.current == true) el.scrollTop = el.scrollHeight.toDouble()
+            if (holdAnchor()) {
+                anchor.restore(el)
+            } else {
+                el.scrollTop = el.scrollHeight.toDouble()
+                anchor.record(el, el)
+            }
         }
         useEffect(peerCount, atBottom) {
             if (atBottom) {
@@ -206,7 +223,14 @@ val DmPage =
         useEffect(pubkey) {
             val el = messagesRef.current ?: return@useEffect
             val onMediaLoad: (dynamic) -> Unit = {
-                if (pinnedToBottom.current == true) el.scrollTop = el.scrollHeight.toDouble()
+                // Media above the fold decodes and pushes the thread down; media below it grows the
+                // tail. Following means follow, reading history means stay put.
+                if (holdAnchor()) {
+                    anchor.restore(el)
+                } else {
+                    el.scrollTop = el.scrollHeight.toDouble()
+                    anchor.record(el, el)
+                }
             }
             el.asDynamic().addEventListener("load", onMediaLoad, true)
             el.asDynamic().addEventListener("loadedmetadata", onMediaLoad, true)
@@ -454,6 +478,9 @@ val DmPage =
                             // (from an effect) arrives one mutation too late and the message that
                             // arrived still moves the page.
                             el.asDynamic().style.overflowAnchor = if (nowAtBottom) "none" else "auto"
+                            // Re-anchor to what the reader is looking at now; the next content
+                            // change restores it.
+                            anchor.record(el, el)
                         }
                     }
                     // Sitting above the thread, so older messages landing in are expected rather than
