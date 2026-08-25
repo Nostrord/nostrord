@@ -132,7 +132,7 @@ class ThreadReactionCacheTest {
 
     @Test
     fun `the cached row round-trips back into the same reaction`() {
-        val tags = threadReactionCacheTags(reaction, groupId = "g1", rootId = "root1")
+        val tags = reactionCacheTags(reaction, groupId = "g1", rootId = "root1")
         val restored = reactionFromCacheRow(reaction.id, reaction.pubkey, reaction.createdAt, reaction.emoji, tags)
         assertEquals(reaction, restored)
     }
@@ -140,10 +140,18 @@ class ThreadReactionCacheTest {
     @Test
     fun `a plain reaction keeps its root so the chip and the notification agree`() {
         val plain = reaction.copy(emojiUrl = null, targetAuthorPubkey = null)
-        val tags = threadReactionCacheTags(plain, groupId = "g1", rootId = "root1")
+        val tags = reactionCacheTags(plain, groupId = "g1", rootId = "root1")
         val restored = reactionFromCacheRow(plain.id, plain.pubkey, plain.createdAt, plain.emoji, tags)
         assertEquals("root1", restored?.threadRootId)
         assertEquals("reply1", restored?.targetEventId)
+    }
+
+    @Test
+    fun `a chat reaction round-trips without a thread root`() {
+        val chat = reaction.copy(threadRootId = null)
+        val tags = reactionCacheTags(chat, groupId = "g1", rootId = null)
+        val restored = reactionFromCacheRow(chat.id, chat.pubkey, chat.createdAt, chat.emoji, tags)
+        assertEquals(chat, restored)
     }
 
     @Test
