@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -2949,53 +2950,64 @@ class NostrRepository(
     }
 
     // Publish a pre-serialized gift wrap event and wait for a relay OK, so a DM has a real delivered
-    // signal (not fire-and-forget). Accepted the moment any relay OKs it, carrying the relays that
-    // took it so the message can name where it landed. Rejected only when every target answered
-    // OK-false for a reason retrying cannot fix: one unreachable relay keeps the whole send
-    // retryable, since it might be the one that would have taken it.
-    private suspend fun publishWrapJsonAwaitOk(relays: List<String>, wrapJson: String, wrapId: String): DmPublishOutcome {
+    // signal (not fire-and-forget). Accepted the moment the FIRST relay OKs it, naming that relay;
+    // the other targets keep going and report through [onLateAccept] as they land, so the bubble
+    // resolves at the speed of the fastest relay while "seen on" and the second tick still fill in
+    // from the slow ones. Rejected only when every target answered OK-false for a reason retrying
+    // cannot fix: one unreachable relay keeps the whole send retryable, since it might be the one
+    // that would have taken it.
+    private suspend fun publishWrapJsonAwaitOk(
+        relays: List<String>,
+        wrapJson: String,
+        wrapId: String,
+        onLateAccept: (List<String>) -> Unit = {},
+    ): DmPublishOutcome {
         if (wrapId.isBlank()) return DmPublishOutcome.Retry
         val frame = """["EVENT",$wrapJson]"""
         val targets = relays.distinct()
         if (targets.isEmpty()) return DmPublishOutcome.Retry
-        // Concurrent for the same reason as publishEventToRelays: a relay that never answers OK
-        // costs the full timeout, and serially those stack into a send that looks hung. Every
-        // target is tried rather than stopping at the first acceptance, because the peer reads
-        // from whichever of their DM relays they happen to be on.
-        val results =
-            coroutineScope {
-                targets.map { url ->
-                    async {
-                        try {
-                            // Only the connect is bounded here: sendWrapAwaitingAuth carries its own
-                            // budget, and a relay that gates writes needs more than a connect's worth
-                            // of it.
-                            val client =
-                                withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
-                                    connectionManager.getClientForRelay(url)
-                                        ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
-                                }
-                            url to client?.let { sendWrapAwaitingAuth(it, frame, wrapId) }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (_: Throwable) {
-                            url to null
-                        }
+        // Every target is tried, concurrently, because the peer reads from whichever of their DM
+        // relays they happen to be on. The attempts run on the repository scope, not the caller's:
+        // an early return below must not cancel the relays still working, and the buffered channel
+        // lets each of them finish and report even if nobody is listening any more.
+        val settled = Channel<Pair<String, PublishResult?>>(targets.size)
+        targets.forEach { url ->
+            scope.launch {
+                val result =
+                    try {
+                        // Only the connect is bounded here: sendWrapAwaitingAuth carries its own
+                        // budget, and a relay that gates writes needs more than a connect's worth
+                        // of it.
+                        val client =
+                            withTimeoutOrNull(PUBLISH_RELAY_TIMEOUT_MS) {
+                                connectionManager.getClientForRelay(url)
+                                    ?: connectionManager.getOrConnectRelay(url) { m, c -> enqueueToRelayPipeline(m, c) }
+                            }
+                        client?.let { sendWrapAwaitingAuth(it, frame, wrapId) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        null
                     }
-                }.awaitAll()
+                settled.send(url to result)
             }
-        // "duplicate" counts as acceptance: the relay is telling us it already holds this wrap,
-        // which is exactly what the retry wanted. Anything else keeps its OK-false meaning.
-        val acceptedBy =
-            results.mapNotNull { (url, result) ->
-                when (result) {
-                    is PublishResult.Success -> url
-                    is PublishResult.Rejected ->
-                        url.takeIf { classifyRejection(result.reason) == RelayRejection.AlreadyStored }
-                    else -> null
+        }
+        val results = mutableListOf<Pair<String, PublishResult?>>()
+        repeat(targets.size) {
+            val entry = settled.receive()
+            results += entry
+            if (!wrapAccepted(entry.second)) return@repeat
+            val pending = targets.size - results.size
+            if (pending > 0) {
+                scope.launch {
+                    repeat(pending) {
+                        val (url, result) = settled.receive()
+                        if (wrapAccepted(result)) onLateAccept(listOf(url))
+                    }
                 }
             }
-        if (acceptedBy.isNotEmpty()) return DmPublishOutcome.Accepted(acceptedBy)
+            return DmPublishOutcome.Accepted(listOf(entry.first))
+        }
         // A stated rejection is worth more than a timeout, which only says nobody answered, so a
         // send is final only when every target refused it outright.
         val refusals =
@@ -3009,6 +3021,14 @@ class NostrRepository(
         return DmPublishOutcome.Rejected("${relayHost(url)} refused it: $why")
     }
 
+    // "duplicate" counts as acceptance: the relay is telling us it already holds this wrap, which
+    // is exactly what the retry wanted. Anything else keeps its OK-false meaning.
+    private fun wrapAccepted(result: PublishResult?): Boolean = when (result) {
+        is PublishResult.Success -> true
+        is PublishResult.Rejected -> classifyRejection(result.reason) == RelayRejection.AlreadyStored
+        else -> false
+    }
+
     private fun relayHost(url: String): String = url.removePrefix("wss://").removePrefix("ws://").trimEnd('/')
 
     // Persisted DM send queue: undelivered wraps by account, mirrored to SecureStorage. Retries
@@ -3016,7 +3036,7 @@ class NostrRepository(
     private val dmSendQueue by lazy {
         DmSendQueue(
             scope = scope,
-            publish = { relays, wrapJson, wrapId -> publishWrapJsonAwaitOk(relays, wrapJson, wrapId) },
+            publish = { relays, wrapJson, wrapId, onLateAccept -> publishWrapJsonAwaitOk(relays, wrapJson, wrapId, onLateAccept) },
             onDelivered = { rumorId, relays ->
                 dmManager.markDelivered(rumorId)
                 dmManager.recordSentTo(rumorId, relays)

@@ -25,7 +25,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ ->
+                publish = { _, _, _, _ ->
                     attempts++
                     if (attempts >= 20) DmPublishOutcome.Accepted(listOf("wss://dm.example")) else DmPublishOutcome.Retry
                 },
@@ -50,7 +50,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ -> DmPublishOutcome.Retry },
+                publish = { _, _, _, _ -> DmPublishOutcome.Retry },
                 onDelivered = { _, _ -> },
                 onRejected = { _, _ -> },
                 onQueued = {},
@@ -75,7 +75,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ ->
+                publish = { _, _, _, _ ->
                     attempts++
                     DmPublishOutcome.Accepted(listOf("wss://dm.example"))
                 },
@@ -103,7 +103,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ ->
+                publish = { _, _, _, _ ->
                     attempts++
                     if (online) DmPublishOutcome.Accepted(listOf("wss://dm.example")) else DmPublishOutcome.Retry
                 },
@@ -134,7 +134,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, wrapId ->
+                publish = { _, _, wrapId, _ ->
                     published += wrapId
                     DmPublishOutcome.Accepted(listOf("wss://relay"))
                 },
@@ -155,12 +155,40 @@ class DmSendQueueTest {
     }
 
     @Test
+    fun aRelayThatTakesTheWrapLateStillReportsThroughOnDelivered() = runTest {
+        val delivered = mutableListOf<Pair<String, List<String>>>()
+        var lateAccept: ((List<String>) -> Unit)? = null
+        val queue =
+            DmSendQueue(
+                scope = backgroundScope,
+                publish = { _, _, wrapId, onLateAccept ->
+                    if (wrapId == "wrap1") lateAccept = onLateAccept
+                    DmPublishOutcome.Accepted(listOf("wss://fast"))
+                },
+                onDelivered = { rumorId, relays -> delivered += rumorId to relays },
+                onRejected = { _, _ -> },
+                onQueued = {},
+                persist = { _, _ -> },
+                now = { testScheduler.currentTime },
+            )
+
+        queue.enqueue("me", listOf(wrap("rumor1", "wrap1"), wrap("rumor1", "wrap-self", toSelf = true)))
+        advanceTimeBy(10_000L)
+        assertEquals(0, queue.size)
+        assertEquals(listOf("rumor1" to listOf("wss://fast")), delivered)
+
+        // The slow relay answers after the entry is gone: still counts for "seen on".
+        lateAccept!!(listOf("wss://slow"))
+        assertEquals(listOf("rumor1" to listOf("wss://fast"), "rumor1" to listOf("wss://slow")), delivered)
+    }
+
+    @Test
     fun anAcceptedSelfCopyDoesNotMarkTheMessageDelivered() = runTest {
         val delivered = mutableListOf<String>()
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, wrapId ->
+                publish = { _, _, wrapId, _ ->
                     if (wrapId == "wrap-self") DmPublishOutcome.Accepted(listOf("wss://relay")) else DmPublishOutcome.Retry
                 },
                 onDelivered = { rumorId, _ -> delivered += rumorId },
@@ -185,7 +213,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ ->
+                publish = { _, _, _, _ ->
                     attempts++
                     DmPublishOutcome.Rejected("blocked: pubkey not allowed")
                 },
@@ -211,7 +239,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ -> DmPublishOutcome.Rejected("invalid: too large") },
+                publish = { _, _, _, _ -> DmPublishOutcome.Rejected("invalid: too large") },
                 onDelivered = { _, _ -> },
                 onRejected = { rumorId, _ -> rejected += rumorId },
                 onQueued = {},
@@ -234,7 +262,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ ->
+                publish = { _, _, _, _ ->
                     if (refuse) DmPublishOutcome.Rejected("blocked: pubkey not allowed") else DmPublishOutcome.Accepted(listOf("wss://dm.example"))
                 },
                 onDelivered = { rumorId, _ -> delivered += rumorId },
@@ -262,7 +290,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ -> DmPublishOutcome.Retry },
+                publish = { _, _, _, _ -> DmPublishOutcome.Retry },
                 onDelivered = { _, _ -> },
                 onRejected = { _, _ -> },
                 onQueued = {},
@@ -287,7 +315,7 @@ class DmSendQueueTest {
         val queue =
             DmSendQueue(
                 scope = backgroundScope,
-                publish = { _, _, _ -> DmPublishOutcome.Retry },
+                publish = { _, _, _, _ -> DmPublishOutcome.Retry },
                 onDelivered = { _, _ -> },
                 onRejected = { rumorId, _ -> rejected += rumorId },
                 onQueued = { queued += it },
