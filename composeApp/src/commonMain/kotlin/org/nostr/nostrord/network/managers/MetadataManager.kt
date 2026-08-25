@@ -37,6 +37,9 @@ private const val EVENT_FETCH_AUTH_TIMEOUT_MS = 8_000L
 /** How long a by-id fetch blocks an identical one. Must stay under the UI's give-up window. */
 private const val EVENT_FETCH_RETRY_AFTER_MS = 4_000L
 
+/** Cap on the `#h`-scoped lookups a by-id fetch fans out when the reference carries no group. */
+private const val MAX_UNSCOPED_GROUP_LOOKUPS = 12
+
 class MetadataManager(
     private val connectionManager: ConnectionManager,
     private val outboxManager: OutboxManager,
@@ -44,6 +47,9 @@ class MetadataManager(
     private val cacheStore: CacheStore = InMemoryCacheStore(),
     // Active account (pubkey hex) for scoping the event cache; null/blank skips persistence.
     private val accountProvider: () -> String? = { null },
+    /** Groups joined on a relay. Scopes a by-id lookup with `#h` when the reference itself carries
+     *  no group, which is every quote pasted into a DM. */
+    private val joinedGroupsForRelay: (String) -> Set<String> = { emptySet() },
 ) {
     /** Set by NostrRepository so batchFetch can reconnect bootstrap relays when all are offline. */
     var messageHandler: ((String, NostrGroupClient) -> Unit)? = null
@@ -418,7 +424,17 @@ class MetadataManager(
             // The #h lookup is additive, and a separate subscription rather than a second filter
             // on the same REQ: a strict NIP-29 relay CLOSEs a REQ whose filter omits `#h`, which
             // would take the group lookup down with it.
-            if (groupId != null) requestGroupMessageById(groupId, eventId)
+            //
+            // With no group of its own the reference falls back to the groups joined on this
+            // relay: a nevent quoted in a DM carries only id + relay hint, and a strict NIP-29
+            // relay answers its ids-only REQ with nothing.
+            val scopes =
+                if (groupId != null) {
+                    listOf(groupId)
+                } else {
+                    joinedGroupsForRelay(getRelayUrl()).take(MAX_UNSCOPED_GROUP_LOOKUPS)
+                }
+            scopes.forEach { requestGroupMessageById(it, eventId) }
         }
         // Skip if already cached or already in-flight
         if (_cachedEvents.value.containsKey(eventId)) return
@@ -494,7 +510,23 @@ class MetadataManager(
                     try {
                         val existing = connectionManager.getClientForRelay(hint)
                         if (existing == null || !existing.isConnected()) {
-                            connectionManager.getOrConnectRelay(hint, messageHandler)?.reqEvent()
+                            val dialed = connectionManager.getOrConnectRelay(hint, messageHandler)
+                            dialed?.reqEvent()
+                            // A relay dialed just now answers this REQ before its NIP-42 completes,
+                            // so a gated group event (the common case for a hint) comes back empty.
+                            // Same second chance the pooled clients above get once AUTH lands.
+                            if (dialed != null && dialed.requiresAuth() && !dialed.hasAuthSucceeded()) {
+                                scope.launch {
+                                    if (dialed.awaitAuthOrTimeout(EVENT_FETCH_AUTH_TIMEOUT_MS) &&
+                                        !_cachedEvents.value.containsKey(eventId)
+                                    ) {
+                                        try {
+                                            dialed.reqEvent()
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } catch (_: Exception) {
                     }
