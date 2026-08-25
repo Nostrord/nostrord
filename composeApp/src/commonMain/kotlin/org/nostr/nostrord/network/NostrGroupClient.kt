@@ -214,6 +214,13 @@ suspend fun NostrGroupClient.sendAndAwaitOkOrError(eventJson: String, eventId: S
 /** [NostrGroupClient.diagRole] for the sockets the NIP-46 client owns. */
 const val SIGNER_DIAG_ROLE = "signer"
 
+/**
+ * True for the one-shot by-id fetches that feed the quote cache: [NostrGroupClient.requestEventById]
+ * (`e_`), its `#h`-scoped twin [NostrGroupClient.requestGroupMessageById] (`eh_`), and the legacy
+ * `event_` prefix. `eh_` does not start with `e_`, so every dispatch site has to test all three.
+ */
+fun isQuoteFetchSubId(subId: String): Boolean = subId.startsWith("e_") || subId.startsWith("eh_") || subId.startsWith("event_")
+
 class NostrGroupClient(
     private val relayUrl: String = "wss://groups.fiatjaf.com",
     diagRole: String? = null,

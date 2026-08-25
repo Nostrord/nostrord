@@ -361,6 +361,7 @@ object AppModule {
             scope = appScope,
             cacheStore = cacheStore,
             accountProvider = { sessionManager.getPublicKey() },
+            joinedGroupsForRelay = { relay -> groupManager.joinedGroupsByRelay.value[relay.normalizeRelayUrl()].orEmpty() },
         )
     }
 

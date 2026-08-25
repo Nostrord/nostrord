@@ -6722,8 +6722,8 @@ class NostrRepository(
                 val event = arr[2].jsonObject
                 val kind = event["kind"]?.jsonPrimitive?.int
 
-                // Handle event subscriptions (event_* or e_*) for quotes
-                if (subId.startsWith("event_") || subId.startsWith("e_")) {
+                // Handle event subscriptions (event_*, e_* or the #h-scoped eh_*) for quotes
+                if (isQuoteFetchSubId(subId)) {
                     metadataManager.parseAndCacheEvent(event, client.getRelayUrl())?.let { cachedEvent ->
                         if (!metadataManager.hasMetadata(cachedEvent.pubkey)) {
                             scope.launch {
@@ -6868,12 +6868,11 @@ class NostrRepository(
             subId.startsWith("metadata_") ||
             subId.startsWith("msg_") ||
             subId.startsWith("gapfill_") ||
-            subId.startsWith("e_") ||
+            isQuoteFetchSubId(subId) ||
             subId.startsWith("a_") ||
             subId.startsWith("reactions_") ||
             subId.startsWith("zaps_") ||
             subId.startsWith("threadfocus_") ||
-            subId.startsWith("event_") ||
             // requestSelfPutUser's actor-enrichment fetch (distinct from the live mux_padd_ watch).
             subId.startsWith("padd_one_")
         ) {
@@ -6905,8 +6904,8 @@ class NostrRepository(
                 val event = arr[2].jsonObject
                 val kind = event["kind"]?.jsonPrimitive?.int
 
-                // Handle event subscriptions (event_* or e_*)
-                if (subId.startsWith("event_") || subId.startsWith("e_")) {
+                // Handle event subscriptions (event_*, e_* or the #h-scoped eh_*)
+                if (isQuoteFetchSubId(subId)) {
                     metadataManager.parseAndCacheEvent(event, client.getRelayUrl())?.let { cachedEvent ->
                         if (!metadataManager.hasMetadata(cachedEvent.pubkey)) {
                             scope.launch {
