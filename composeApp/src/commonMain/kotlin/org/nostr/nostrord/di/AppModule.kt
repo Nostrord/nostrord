@@ -271,6 +271,11 @@ object AppModule {
             appScope.launch {
                 gm.externalAddPending.collect { add -> onExternalGroupAdd(add) }
             }
+            // Prune notifications whose event is gone. A deleted thread root orphans the
+            // entries for every reply under it: they point at a thread that cannot open.
+            appScope.launch {
+                gm.deletedEventIds.collect { ids -> notificationHistoryStore.removeForEvents(ids) }
+            }
         }
     }
 

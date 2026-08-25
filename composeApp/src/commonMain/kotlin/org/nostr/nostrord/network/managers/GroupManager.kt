@@ -3383,6 +3383,9 @@ class GroupManager(
             current + (groupId to list.filterNot { it.id in stale })
         }
         if (removed.isEmpty()) return
+        // Deleted on another device: the kind:5/9005 is never replayed here, so this EOSE
+        // comparison is the only signal the notification feed gets.
+        _deletedEventIds.tryEmit(removed)
         val account = currentPubkey ?: return
         scope.launch {
             try {
@@ -4364,6 +4367,14 @@ class GroupManager(
     private val _externalAddPending = MutableSharedFlow<ExternalGroupAdd>(extraBufferCapacity = 64)
     val externalAddPending: SharedFlow<ExternalGroupAdd> = _externalAddPending.asSharedFlow()
 
+    /**
+     * Ids of events that no longer exist: a kind:5/9005 removed them, or a relay's answer dropped
+     * them at EOSE. AppModule prunes the notification feed from this, so an entry never outlives
+     * the event it points at. Buffered for a reconcile burst; tryEmit drops what doesn't fit.
+     */
+    private val _deletedEventIds = MutableSharedFlow<Set<String>>(extraBufferCapacity = 64)
+    val deletedEventIds: SharedFlow<Set<String>> = _deletedEventIds.asSharedFlow()
+
     init {
         // This init block sits AFTER _pendingGroupInvites' declaration on purpose: init
         // blocks run in declaration order, and the collector reads the field from another
@@ -5236,6 +5247,8 @@ class GroupManager(
             .toSet()
 
         if (eventIdsToDelete.isEmpty()) return
+
+        _deletedEventIds.tryEmit(eventIdsToDelete)
 
         // Remove deleted messages from the list
         _messages.update { currentMap ->
