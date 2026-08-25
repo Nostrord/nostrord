@@ -336,6 +336,12 @@ class NostrRepository(
     // never answers, or genuinely malformed ones.
     private val DM_MAX_DECRYPT_ATTEMPTS = 10
 
+    // Parked (given-up) wraps get a fresh run on this cadence, doubling up to the cap. A signer
+    // that is still down must not have every backlog wrap's ten attempts re-burned every pass,
+    // but a session that never unparks leaves those DMs missing until the app is restarted.
+    private val DM_GIVEN_UP_RETRY_MIN_MS = 2 * 60_000L
+    private val DM_GIVEN_UP_RETRY_MAX_MS = 30 * 60_000L
+
     // How long the full-sync latch waits for a subscribed DM relay to EOSE before treating it as
     // settled. Generous: it only has to outlast a slow backlog delivery, and latching early on a
     // relay still streaming would advance the cursor past undelivered wraps.
@@ -3164,9 +3170,19 @@ class NostrRepository(
         // Registered as a dmPersistenceJob so it's cancelled on logout / account switch.
         dmPersistenceJobs +=
             scope.launch {
+                // Parked wraps are excluded from `pending` below, so without this the pass that
+                // parks the last one is the last pass that re-streams anything: the DMs stay
+                // missing until the next launch. Unparking hands them back to the same resend.
+                var givenUpRetryAtMs = 0L
+                var givenUpBackoffMs = DM_GIVEN_UP_RETRY_MIN_MS
                 while (true) {
                     delay(120_000)
                     val pub = sessionManager.getPublicKey() ?: break
+                    val nowMs = org.nostr.nostrord.utils.epochMillis()
+                    if (nowMs >= givenUpRetryAtMs && unparkGivenUpDmWraps()) {
+                        givenUpRetryAtMs = nowMs + givenUpBackoffMs
+                        givenUpBackoffMs = minOf(givenUpBackoffMs * 2, DM_GIVEN_UP_RETRY_MAX_MS)
+                    }
                     val pending = dmReceivedWrapIds.count { it !in dmProcessedWrapIds && it !in dmGivenUpWrapIds }
                     if (pending > 0) {
                         resendDmInboxReq(pub)
@@ -3191,13 +3207,23 @@ class NostrRepository(
                     .drop(1)
                     .collect { connected ->
                         if (!connected) return@collect
-                        if (dmGivenUpWrapIds.isEmpty() && dmFailCounts.isEmpty()) return@collect
-                        dmGivenUpWrapIds = emptySet()
-                        dmGivenUpOldestAt = 0L
-                        dmFailCounts = emptyMap()
+                        if (!unparkGivenUpDmWraps()) return@collect
                         sessionManager.getPublicKey()?.let { resendDmInboxReq(it) }
                     }
             }
+    }
+
+    /**
+     * Clear the parked (given-up) wraps and their failure counts so the inbox resend re-attempts
+     * them. False when there was nothing parked, so callers can skip the resend.
+     */
+    private fun unparkGivenUpDmWraps(): Boolean {
+        if (dmGivenUpWrapIds.isEmpty() && dmFailCounts.isEmpty()) return false
+        dmGivenUpWrapIds = emptySet()
+        dmGivenUpOldestAt = 0L
+        dmFailCounts = emptyMap()
+        refreshDmSyncing()
+        return true
     }
 
     /**
