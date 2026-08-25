@@ -105,7 +105,9 @@ class AdaptiveConfig(
             mutex.withLock {
                 val window = relayLatencies.getOrPut(relayUrl) { mutableListOf() }
                 window.add(latencyMs)
-                if (window.size > LATENCY_WINDOW_SIZE) window.removeFirst()
+                // removeAt(0), not removeFirst(): the latter binds to java.util.List.removeFirst,
+                // which only exists on Android API 35+ and throws NoSuchMethodError below it.
+                if (window.size > LATENCY_WINDOW_SIZE) window.removeAt(0)
             }
         }
     }
