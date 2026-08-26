@@ -218,18 +218,17 @@ val DmPage =
             }
         }
         val (text, setText) = useState { "" }
-        val (sending, setSending) = useState { false }
         // Uploads whose url sits in the draft; each goes out as its own kind:15 on send.
         val (pendingUploads, setPendingUploads) = useState<List<DmOutgoingFile>> { emptyList() }
         val send = {
-            if (text.isNotBlank() && !sending) {
-                // Clear in the same gesture that sent: the publish round-trip lasts as long as
-                // the signer takes, and a draft still sitting there reads as "not sent". Only a
-                // build/sign failure pushes it back, and only if no new message was started.
+            if (text.isNotBlank()) {
+                // Clear in the same gesture that sent, and take the next message right away: the
+                // message is already in the thread with its own Sending clock, and the round-trip
+                // lasts as long as the signer takes. Only a build/sign failure pushes the draft
+                // back, and only if no new message was started.
                 val sentText = text
                 val sentReply = replyingTo
                 val sentUploads = pendingUploads
-                setSending(true)
                 setText("")
                 setReplyingTo(null)
                 setPendingUploads(emptyList())
@@ -238,9 +237,7 @@ val DmPage =
                     sentText,
                     replyToId = sentReply,
                     uploads = sentUploads,
-                    onSuccess = { setSending(false) },
                     onFailure = {
-                        setSending(false)
                         setText { cur -> if (cur.isBlank()) sentText else cur }
                         setReplyingTo { cur -> cur ?: sentReply }
                         setPendingUploads { cur -> if (cur.isEmpty()) sentUploads else cur }
@@ -878,7 +875,7 @@ val DmPage =
                     button {
                         className = ClassName("dm-composer-btn send")
                         title = "Send"
-                        disabled = (text.isBlank() && uploadCount == 0) || uploadCount > 0 || sending
+                        disabled = (text.isBlank() && uploadCount == 0) || uploadCount > 0
                         // Keyboard-neutral tap: keep textarea focus (so the keyboard stays up)
                         // only when it is already up; rules in VirtualKeyboardPolicy.
                         onMouseDown = { e ->
@@ -889,7 +886,7 @@ val DmPage =
                             if (keep) e.preventDefault()
                         }
                         onClick = { send() }
-                        if (sending) span { className = ClassName("btn-spinner") } else icon(Ic.Send)
+                        icon(Ic.Send)
                     }
                     if (emojiOpen) {
                         div {

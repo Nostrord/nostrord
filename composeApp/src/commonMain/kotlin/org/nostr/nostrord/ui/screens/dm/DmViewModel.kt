@@ -12,7 +12,6 @@ import org.nostr.nostrord.network.NostrRepositoryApi
 import org.nostr.nostrord.network.managers.DmConversation
 import org.nostr.nostrord.network.managers.DmMessage
 import org.nostr.nostrord.nostr.DmOutgoingFile
-import org.nostr.nostrord.ui.screens.withMinDuration
 import org.nostr.nostrord.utils.Result
 
 /**
@@ -165,6 +164,14 @@ class DmViewModel(
      * Send the composer's draft. Every url in [uploads] that is still in [content] goes out as
      * its own kind:15 (how NIP-17 clients send images), and whatever text is left as one
      * kind:14, so a reader that renders kind:15 as media sees the picture and not a link.
+     *
+     * The message goes into the thread with its own Sending clock right away and the send runs
+     * on the session's serialized queue, so the composer clears and takes the next message
+     * immediately: a NIP-17 round-trip lasts as long as the signer takes, and a composer that
+     * waits for it leaves what was typed sitting in the field as if it had never been sent.
+     * [onFailure] reports a local build/sign failure, where the message is taken back off the
+     * thread and the caller restores its draft; a wrap that no relay accepted stays with the
+     * send queue and shows on the message itself.
      */
     fun send(
         recipientPubkey: String,
@@ -176,20 +183,14 @@ class DmViewModel(
     ) {
         val (files, text) = splitUploads(content, uploads)
         if (text.isEmpty() && files.isEmpty()) return
-        viewModelScope.launch {
-            val result =
-                withMinDuration {
-                    var r: Result<Unit> = Result.Success(Unit)
-                    for (file in files) {
-                        r = repo.sendDmUploadedFile(recipientPubkey, file)
-                        if (r is Result.Error) break
-                    }
-                    if (r is Result.Success && text.isNotEmpty()) r = repo.sendDm(recipientPubkey, text, replyToId)
-                    r
+        repo.submitDm(recipientPubkey, files, text, replyToId) { result ->
+            // Back on the VM's scope: the callback lands on whatever thread finished the send,
+            // and a composer that is already gone wants no callback at all.
+            viewModelScope.launch {
+                when (result) {
+                    is Result.Error -> onFailure()
+                    is Result.Success -> onSuccess()
                 }
-            when (result) {
-                is Result.Error -> onFailure()
-                is Result.Success -> onSuccess()
             }
         }
     }

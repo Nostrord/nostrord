@@ -1,9 +1,14 @@
 package org.nostr.nostrord.network
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.nostr.nostrord.auth.Account
 import org.nostr.nostrord.network.RoleDefinition
 import org.nostr.nostrord.network.livekit.LiveKitCredentials
@@ -660,9 +665,41 @@ class FakeNostrRepository : NostrRepositoryApi {
     /** Reply targets passed to [sendDm], in call order (null when the message starts a thread). */
     val sentDmReplyTargets = mutableListOf<String?>()
 
+    /** Held here, a test keeps a send in flight and drives what the next one is allowed to do. */
+    var sendDmGate: CompletableDeferred<Unit>? = null
+
     override suspend fun sendDm(recipientPubkey: String, content: String, replyToId: String?): Result<Unit> {
+        sendDmGate?.await()
         sentDmReplyTargets += replyToId
         return sendDmAction(recipientPubkey, content)
+    }
+
+    // Mirrors the real repository: its own scope, one submit at a time, so a test sees the same
+    // ordering and the same survival of a cleared ViewModel.
+    private val submitScope by lazy { CoroutineScope(Dispatchers.Main) }
+    private val submitMutex = Mutex()
+
+    override fun submitDm(
+        recipientPubkey: String,
+        files: List<DmOutgoingFile>,
+        text: String,
+        replyToId: String?,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        if (files.isEmpty() && text.isEmpty()) return
+        submitScope.launch {
+            val result =
+                submitMutex.withLock {
+                    var r: Result<Unit> = Result.Success(Unit)
+                    for (file in files) {
+                        r = sendDmUploadedFile(recipientPubkey, file)
+                        if (r is Result.Error) break
+                    }
+                    if (r is Result.Success && text.isNotEmpty()) r = sendDm(recipientPubkey, text, replyToId)
+                    r
+                }
+            onResult(result)
+        }
     }
 
     var retryDmAction: (String) -> Unit = { }

@@ -212,7 +212,6 @@ fun DmPageScreen(
         }
         // TextFieldValue for caret-aware emoji/paste insertion in the shared MessageComposer.
         var textFieldValue by remember { mutableStateOf(TextFieldValue("")) }
-        var isSending by remember { mutableStateOf(false) }
 
         // Open a conversation pinned to the latest message (scroll to the bottom), like a chat.
         val messagesScroll = rememberScrollState()
@@ -283,14 +282,14 @@ fun DmPageScreen(
         var uploadError by remember { mutableStateOf<String?>(null) }
         val send = {
             val body = textFieldValue.text.trim()
-            if (body.isNotBlank() && !isSending) {
-                // Snapshot for restore-on-failure (GroupScreen does the same). The field clears
-                // in the gesture that sent: the publish round-trip runs for as long as the signer
-                // takes, and a draft still sitting there reads as "not sent".
+            if (body.isNotBlank()) {
+                // Snapshot for restore-on-failure (GroupScreen does the same). The field clears in
+                // the gesture that sent and takes the next message right away: the message is
+                // already in the thread with its own Sending clock, and the round-trip runs for as
+                // long as the signer takes.
                 val sentValue = textFieldValue
                 val sentReply = replyParent?.id
                 val sentUploads = pendingUploads
-                isSending = true
                 textFieldValue = TextFieldValue("")
                 replyingTo = null
                 pendingUploads = emptyList()
@@ -299,9 +298,7 @@ fun DmPageScreen(
                     body,
                     replyToId = sentReply,
                     uploads = sentUploads,
-                    onSuccess = { isSending = false },
                     onFailure = {
-                        isSending = false
                         // Push it back for a retry, unless a new message was started.
                         if (textFieldValue.text.isBlank()) {
                             textFieldValue = sentValue
@@ -738,7 +735,6 @@ fun DmPageScreen(
             onValueChange = { textFieldValue = it },
             onSend = send,
             placeholder = "Message $name",
-            isSending = isSending,
             modifier = Modifier.padding(horizontal = Spacing.lg).padding(bottom = Spacing.xl, top = Spacing.xs),
             replyAuthorName = replyParent?.let { replyAuthorName(it, userMetadata, name, myPubkey) },
             replySnippet = replyParent?.previewText(),

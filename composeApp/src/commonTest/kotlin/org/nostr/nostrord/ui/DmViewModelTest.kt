@@ -1,5 +1,7 @@
 package org.nostr.nostrord.ui
 
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -153,6 +155,49 @@ class DmViewModelTest {
 
         assertEquals(listOf("peer" to a.url, "peer" to b.url), repo.sentDmUploads)
         assertEquals(listOf("look at these"), sent)
+    }
+
+    @Test
+    fun `a message typed while a send is in flight goes out too, after it`() = runTest {
+        val repo = FakeNostrRepository()
+        val sent = mutableListOf<String>()
+        repo.sendDmAction = { _, content ->
+            sent += content
+            org.nostr.nostrord.utils.Result.Success(Unit)
+        }
+        val gate = CompletableDeferred<Unit>()
+        repo.sendDmGate = gate
+        val vm = DmViewModel(repo)
+
+        vm.send("peer", "first")
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.send("peer", "second")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(emptyList(), sent, "the first send is still parked in the signer")
+
+        gate.complete(Unit)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("first", "second"), sent)
+    }
+
+    @Test
+    fun `a queued message survives the conversation being closed`() = runTest {
+        val repo = FakeNostrRepository()
+        val sent = mutableListOf<String>()
+        repo.sendDmAction = { _, content ->
+            sent += content
+            org.nostr.nostrord.utils.Result.Success(Unit)
+        }
+        val store = ViewModelStore()
+        val vm = DmViewModel(repo).also { store.put("vm", it) }
+
+        vm.send("peer", "bye")
+        store.clear()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("bye"), sent)
     }
 
     @Test

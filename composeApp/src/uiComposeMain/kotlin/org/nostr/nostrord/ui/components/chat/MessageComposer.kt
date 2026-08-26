@@ -97,8 +97,11 @@ fun MessageComposer(
     onValueChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     placeholder: String,
-    isSending: Boolean,
     modifier: Modifier = Modifier,
+    // Spinner in place of the send glyph, and no second send until it clears. Left false where the
+    // message goes into the thread with its own send status (the DM composer), which is what lets
+    // that composer take the next message while this one is still going out.
+    isSending: Boolean = false,
     // Labeled button instead of the paper-plane glyph ("Post reply"), for a deliberate post.
     sendLabel: String? = null,
     // Opening height of the field, in lines.

@@ -2216,6 +2216,15 @@ class NostrRepository(
     // loads). Keeping the defaults in the set closes those cross-device gaps.
     private fun dmRelaysWithDefaults(pubkey: String): List<String> = (dmRelaysFor(pubkey) + defaultDmRelays).distinct()
 
+    // Order stamping plus the on-screen bubble, held only for that. A rumor's created_at and
+    // `ms` come off a counter, so two sends racing here would land swapped in the conversation.
+    private val dmStampMutex = Mutex()
+
+    // One publish at a time. Every message costs two seals through the signer, which a bunker
+    // answers one by one anyway, and the durable queue then holds them in the order they were
+    // typed. Bubbles do not wait on this: they are already up (see [stampDm]).
+    private val dmPublishMutex = Mutex()
+
     /**
      * Send a NIP-17 direct message: build the rumor, seal + gift-wrap it for the recipient and a
      * self-copy for us, and publish each to its side's DM relays. The seal's NIP-44 encrypt and
@@ -2226,20 +2235,109 @@ class NostrRepository(
             ActiveAccountManager.session.value?.signer
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
         val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
+        val rumor = dmStampMutex.withLock { stampDm(chatRumor(myPub, recipientPubkey, content, replyToId), recipientPubkey, myPub) }
+        return dmPublishMutex.withLock { publishStampedDm(rumor, recipientPubkey, myPub, signer) }
+    }
+
+    override fun submitDm(
+        recipientPubkey: String,
+        files: List<DmOutgoingFile>,
+        text: String,
+        replyToId: String?,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        if (files.isEmpty() && text.isEmpty()) return
+        // The session's scope, not the composer's: the round-trip lasts as long as the signer
+        // takes, and a message still waiting its turn must survive the conversation being closed.
+        scope.launch {
+            val signer = ActiveAccountManager.session.value?.signer
+            val myPub = sessionManager.getPublicKey()
+            if (signer == null || myPub == null) {
+                onResult(Result.Error(AppError.Auth.NotAuthenticated))
+                return@launch
+            }
+            // Every message of the submit is on screen before anything is signed, each with its
+            // own Sending clock, so the composer is free the moment Enter is pressed.
+            val rumors =
+                dmStampMutex.withLock {
+                    buildList {
+                        files.forEach { add(fileRumor(myPub, recipientPubkey, it)) }
+                        if (text.isNotEmpty()) add(chatRumor(myPub, recipientPubkey, text, replyToId))
+                    }.map { stampDm(it, recipientPubkey, myPub) }
+                }
+            var failure: AppError? = null
+            dmPublishMutex.withLock {
+                for ((index, rumor) in rumors.withIndex()) {
+                    val result = publishStampedDm(rumor, recipientPubkey, myPub, signer)
+                    if (result is Result.Error) {
+                        failure = result.error
+                        // The rest of the submit never reached the signer, so their bubbles have
+                        // nothing behind them either.
+                        rumors.drop(index + 1).forEach { discardUnsentDm(it) }
+                        break
+                    }
+                }
+            }
+            onResult(failure?.let { Result.Error(it) } ?: Result.Success(Unit))
+        }
+    }
+
+    // A reply is an `e` tag on the rumor, with no relay hint: the rumor's id is computed before
+    // any relay lookup, and the reply never leaves the conversation anyway.
+    private fun chatRumor(myPub: String, recipientPubkey: String, content: String, replyToId: String?): Event {
+        val replyTags = replyToId?.let { listOf(listOf("e", it)) } ?: emptyList()
+        val (createdAt, ms) = DmMessageOrder.next()
+        return Nip17.buildRumor(myPub, recipientPubkey, content, createdAt, DmMessageOrder.withOrderTag(replyTags, ms))
+    }
+
+    // An uploaded attachment as its own kind:15: the url is the content and the tags carry the
+    // key, the nonce and `ox`, the shape other NIP-17 clients read.
+    private fun fileRumor(myPub: String, recipientPubkey: String, file: DmOutgoingFile): Event {
+        val tags =
+            buildList {
+                add(listOf(Nip17File.TAG_FILE_TYPE, file.mimeType))
+                add(listOf("encryption-algorithm", Nip17File.ALGORITHM_AES_GCM))
+                add(listOf(Nip17File.TAG_DECRYPTION_KEY, file.keyHex))
+                add(listOf("decryption-nonce", file.nonceHex))
+                // Hash of the plaintext: what the reader checks the decrypted bytes against.
+                add(listOf("ox", file.originalHashHex))
+                add(listOf("size", file.size.toString()))
+                val w = file.width
+                val h = file.height
+                if (w != null && h != null) add(listOf("dim", "${w}x$h"))
+            }
+        val (createdAt, ms) = DmMessageOrder.next()
+        return Nip17.buildRumor(myPub, recipientPubkey, file.url, createdAt, DmMessageOrder.withOrderTag(tags, ms), kind = Nip17.KIND_FILE)
+    }
+
+    /** Put [rumor] in the thread with a Sending clock before a single byte is signed. */
+    private fun stampDm(rumor: Event, recipientPubkey: String, myPub: String): Event {
+        dmManager.addOptimistic(rumor, recipientPubkey, myPub)
+        return rumor
+    }
+
+    /**
+     * Address, seal and queue a rumor whose bubble is already up. Resolving where the recipient
+     * reads and the two seals are the slow half of a send, which is exactly why the bubble does
+     * not wait for them.
+     */
+    private suspend fun publishStampedDm(rumor: Event, recipientPubkey: String, myPub: String, signer: NostrSigner): Result<Unit> {
         // Where the recipient actually reads. Without their kind:10050 the wrap goes to the app
         // defaults only, which for a first contact means it is published where they never look and
         // is lost silently. Their kind:10044 rides the same REQ, so addressing improves too.
         awaitPeerDmRelays(recipientPubkey)
-        // A reply is an `e` tag on the rumor, with no relay hint: the rumor's id is computed
-        // before any relay lookup, and the reply never leaves the conversation anyway.
-        val replyTags = replyToId?.let { listOf(listOf("e", it)) } ?: emptyList()
-        val (createdAt, ms) = DmMessageOrder.next()
-        return publishDmRumor(
-            Nip17.buildRumor(myPub, recipientPubkey, content, createdAt, DmMessageOrder.withOrderTag(replyTags, ms)),
-            recipientPubkey,
-            myPub,
-            signer,
-        )
+        val result = publishDmRumor(rumor, recipientPubkey, myPub, signer)
+        if (result is Result.Error) discardUnsentDm(rumor)
+        return result
+    }
+
+    /**
+     * Take a message back off the thread when its build failed. Nothing reached the send queue, so
+     * the bubble would sit on Sending for good and its Retry would have no wrap to resend; the
+     * composer offers the draft again instead.
+     */
+    private fun discardUnsentDm(rumor: Event) {
+        rumor.id?.let { dismissDm(it) }
     }
 
     /**
@@ -2287,9 +2385,8 @@ class NostrRepository(
     }
 
     /**
-     * Send an uploaded attachment as a NIP-17 kind:15: the url is the content and the tags carry
-     * the key, the nonce and `ox`, the shape other NIP-17 clients read. Each file is its own rumor;
-     * any text goes in a separate kind:14.
+     * Send an uploaded attachment as its own NIP-17 kind:15. Each file is its own rumor; any text
+     * goes in a separate kind:14.
      */
     override suspend fun sendDmUploadedFile(
         recipientPubkey: String,
@@ -2299,27 +2396,8 @@ class NostrRepository(
             ActiveAccountManager.session.value?.signer
                 ?: return Result.Error(AppError.Auth.NotAuthenticated)
         val myPub = sessionManager.getPublicKey() ?: return Result.Error(AppError.Auth.NotAuthenticated)
-        awaitPeerDmRelays(recipientPubkey)
-        val tags =
-            buildList {
-                add(listOf(Nip17File.TAG_FILE_TYPE, file.mimeType))
-                add(listOf("encryption-algorithm", Nip17File.ALGORITHM_AES_GCM))
-                add(listOf(Nip17File.TAG_DECRYPTION_KEY, file.keyHex))
-                add(listOf("decryption-nonce", file.nonceHex))
-                // Hash of the plaintext: what the reader checks the decrypted bytes against.
-                add(listOf("ox", file.originalHashHex))
-                add(listOf("size", file.size.toString()))
-                val w = file.width
-                val h = file.height
-                if (w != null && h != null) add(listOf("dim", "${w}x$h"))
-            }
-        val (createdAt, ms) = DmMessageOrder.next()
-        return publishDmRumor(
-            Nip17.buildRumor(myPub, recipientPubkey, file.url, createdAt, DmMessageOrder.withOrderTag(tags, ms), kind = Nip17.KIND_FILE),
-            recipientPubkey,
-            myPub,
-            signer,
-        )
+        val rumor = dmStampMutex.withLock { stampDm(fileRumor(myPub, recipientPubkey, file), recipientPubkey, myPub) }
+        return dmPublishMutex.withLock { publishStampedDm(rumor, recipientPubkey, myPub, signer) }
     }
 
     override suspend fun sendDmFile(
@@ -2357,23 +2435,21 @@ class NostrRepository(
             }
         val rumor = Nip17.buildRumor(myPub, recipientPubkey, emoji, extraTags = tags, kind = Nip17.KIND_REACTION)
         dmManager.addOptimisticReaction(rumor, recipientPubkey, myPub)
-        return publishDmRumor(rumor, recipientPubkey, myPub, signer, optimistic = false)
+        return publishDmRumor(rumor, recipientPubkey, myPub, signer)
     }
 
     /**
      * Seal and gift-wrap [rumor] for the recipient plus a self-copy, and publish each to its side's
      * DM relays. Shared by text, file messages and reactions: only the rumor differs, so the NIP-4e
-     * addressing, the send queue and the delivery tracking are written once.
-     *
-     * [optimistic] shows the message in the thread before any relay answers. A reaction turns it
-     * off: it is not a bubble, and it reaches the thread through the reaction map instead.
+     * addressing, the send queue and the delivery tracking are written once. Whatever the rumor
+     * shows on screen is already there: a message bubble from [stampDm], a reaction from the
+     * reaction map.
      */
     private suspend fun publishDmRumor(
         rumor: Event,
         recipientPubkey: String,
         myPub: String,
         signer: NostrSigner,
-        optimistic: Boolean = true,
     ): Result<Unit> {
         return try {
             // NIP-4e: a recipient who announced an encryption key gets both NIP-44 layers addressed
@@ -2423,10 +2499,8 @@ class NostrRepository(
             // wrap. The queue survives an app restart and never gives up, so a wrap that never
             // reached a relay keeps retrying instead of being stranded local-only.
             //
-            // Queue first, bubble second: both writes are durable, and this order means a crash
-            // between them costs the bubble (which the self-copy repaints) rather than the retry.
-            // The status has to be staked out before the queue can publish, though: markDelivered
-            // only resolves ids it already knows, so a wrap accepted before the bubble existed
+            // The status is re-asserted here for the rumors that carry no bubble: markDelivered
+            // only resolves ids it already knows, so a wrap accepted before the id was staked out
             // would leave the message on Sending for good.
             dmManager.setSending(rumorId)
             val now = rumor.createdAt
@@ -2437,7 +2511,6 @@ class NostrRepository(
                     PendingDmWrap(rumorId, selfWrap.id ?: "", selfWrap.toJsonObject().toString(), dmRelaysWithDefaults(myPub), now, toSelf = true),
                 ),
             )
-            if (optimistic) dmManager.addOptimistic(rumor, recipientPubkey, myPub)
             if (NIP4E_DUAL_SEND && myEncKey != null && recipientEncKey != null) {
                 // Best-effort copies in the encryption-key-signed shape, the only one deployed
                 // readers that predate the identity-signed seal accept. Both are signed locally,

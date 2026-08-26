@@ -343,6 +343,22 @@ interface NostrRepositoryApi {
     /** [replyToId] marks this message as a reply to another one in the same conversation. */
     suspend fun sendDm(recipientPubkey: String, content: String, replyToId: String? = null): Result<Unit>
 
+    /**
+     * Hand a composer draft to the session: each file in [files] goes out as its own kind:15 and
+     * whatever [text] is left as one kind:14, in that order. Returns at once and runs on the
+     * session's scope, serialized against the other submits, so a second Enter neither waits for
+     * the first round-trip nor lands out of order, and closing the conversation does not strand a
+     * message that is still queued. [onResult] reports the local build/sign outcome only; delivery
+     * is the send queue's job and shows on the message itself.
+     */
+    fun submitDm(
+        recipientPubkey: String,
+        files: List<DmOutgoingFile>,
+        text: String,
+        replyToId: String?,
+        onResult: (Result<Unit>) -> Unit,
+    )
+
     /** Send a DM again after every relay refused it (its bubble shows Not delivered). */
     fun retryDm(rumorId: String)
 
