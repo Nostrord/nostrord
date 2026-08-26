@@ -301,7 +301,6 @@ fun MessagesList(
         currentOnFetchTargetById(id)
     }
 
-    var seekScrollApplied by remember(groupId) { mutableStateOf(false) }
     var highlightedMessageId by remember(groupId) { mutableStateOf<String?>(null) }
     var internalScrollTarget by remember(groupId) { mutableStateOf<String?>(null) }
 
@@ -319,18 +318,13 @@ fun MessagesList(
         if (currentSearchHitId != null) searchScrollTarget = currentSearchHitId
     }
     // Same seek shape as the deep-link / reply seeks below: keyed on the target plus the list size and
-    // pagination flags, so it pages older history when the match is not loaded yet. seekScrollApplied
-    // suppresses the pagination scroll-restore; the list's top contentPadding (the overlay bar height)
-    // drops the matched row just below the bar.
+    // pagination flags, so it pages older history when the match is not loaded yet. The list's top
+    // contentPadding (the overlay bar height) drops the matched row just below the bar.
     LaunchedEffect(searchScrollTarget, chatItems.size, hasMoreMessages, isLoadingMore) {
-        val id = searchScrollTarget ?: run {
-            seekScrollApplied = false
-            return@LaunchedEffect
-        }
+        val id = searchScrollTarget ?: return@LaunchedEffect
         val idx = chatItems.indexOfFirst { it is ChatItem.Message && it.message.id == id }
         when {
             idx >= 0 -> {
-                seekScrollApplied = true
                 // UserInput priority: the search TextField holds focus while typing, and a focused
                 // TextField's BringIntoView runs a Default-priority scroll that cancels a plain
                 // scrollToItem (also Default), leaving the jump a no-op (the tint moves but the feed
@@ -411,15 +405,10 @@ fun MessagesList(
     // hasMoreMessages and isLoadingMore are keys so the effect re-fires on the
     // InitialLoading→HasMore transition (state change without chatItems.size changing).
     LaunchedEffect(chatItems.size, targetMessageId, hasMoreMessages, isLoadingMore) {
-        val id =
-            targetMessageId ?: run {
-                seekScrollApplied = false
-                return@LaunchedEffect
-            }
+        val id = targetMessageId ?: return@LaunchedEffect
         val idx = chatItems.indexOfFirst { it is ChatItem.Message && it.message.id == id }
         when {
             idx >= 0 -> {
-                seekScrollApplied = true
                 highlightedMessageId = id
                 listState.scrollToItem(idx)
                 currentOnTargetConsumed()
@@ -438,7 +427,6 @@ fun MessagesList(
         val snapshot = currentChatItems
         val idx = snapshot.indexOfFirst { it is ChatItem.Message && it.message.id == id }
         if (idx >= 0) {
-            seekScrollApplied = true
             highlightedMessageId = id
             listState.scrollToItem(idx)
             currentOnTargetConsumed()
@@ -449,27 +437,13 @@ fun MessagesList(
         currentOnTargetConsumed()
     }
 
-    // Correct scroll position after pagination prepends items.
-    var previousFirstKey by remember(groupId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(groupId, chatItems.size) {
-        if (chatItems.isEmpty()) return@LaunchedEffect
-        val currentFirstKey = getItemKey(chatItems.first())
-        val prevKey = previousFirstKey
-        previousFirstKey = currentFirstKey
-
-        if (seekScrollApplied) {
-            seekScrollApplied = false
-            return@LaunchedEffect
-        }
-
-        if (prevKey != null && currentFirstKey != prevKey) {
-            val saved = scrollStateHolder.savedPosition
-            val newIndex = saved?.let { chatItems.indexOfFirst { getItemKey(it) == saved.anchorKey } } ?: -1
-            if (newIndex >= 0) {
-                listState.scrollToItem(newIndex, saved!!.offset)
-            }
-        }
-    }
+    // NO manual restore after a prepend: LazyListState anchors on the KEY of the first
+    // visible item and re-derives its index itself when older messages land in front, so
+    // the rows being read stay put. A second, hand-rolled restore raced the position-save
+    // collector that feeds it and, with the reader at the bottom, out-ran the bottom pin:
+    // a batch that both merged an out-of-order older event (the head key changes) and
+    // appended a live one put the old top row back at the top and dragged the view up.
+    // Keys must stay stable (getItemKey) for that anchoring to hold.
 
     // Load more when scrolled near top.
     LaunchedEffect(listState) {
