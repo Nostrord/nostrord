@@ -100,8 +100,69 @@ jobs:
   # Builds unsigned desktop installers for Linux, macOS, and Windows.
   # On workflow_dispatch the artifacts are uploaded for download/testing only;
   # publishing to a GitHub Release happens exclusively on a v* tag push.
+  # livekit-kmp (desktop AV) is not on Maven Central yet, so the JVM target resolves
+  # it from mavenLocal. Building it once and passing ~/.m2 along as an artifact keeps
+  # the six jobs that need it (5 desktop legs + arch-pkg) from each running a cold
+  # dependency resolution, every one of which is a fresh chance at a Maven Central 403
+  # against the runner IP ranges. Same pinned ref as ci.yml - bump both together.
+  livekit:
+    name: Build livekit-kmp
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Checkout livekit-kmp
+        uses: actions/checkout@v5
+        with:
+          repository: nostrord/livekit-kmp
+          ref: 37095f807922b8ecf3d88c8ae931a824a7b8661f
+          path: livekit-kmp
+
+      # Retry covers the 403 that survives deduplication: this resolution is the cold
+      # one, with no Gradle cache behind it on a first run.
+      - name: Publish livekit-kmp to mavenLocal
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd livekit-kmp
+          for attempt in 1 2 3; do
+            if ./gradlew publishToMavenLocal -q; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "attempt $attempt failed, retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            fi
+          done
+          exit 1
+
+      # Staged into the workspace because the artifact actions do not expand ~.
+      # publishToMavenLocal writes only the livekit publications; Gradle keeps the
+      # dependencies themselves in ~/.gradle, so this stays small.
+      - name: Stage mavenLocal
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p livekit-m2
+          cp -a "$HOME/.m2/repository/." livekit-m2/
+
+      - name: Upload mavenLocal
+        uses: actions/upload-artifact@v6
+        with:
+          name: livekit-mavenlocal
+          path: livekit-m2
+          retention-days: 1
+
   desktop-release:
     name: Build ${{ matrix.label }}
+    needs: livekit
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -158,18 +219,18 @@ jobs:
         if: matrix.ext == 'rpm'
         run: sudo apt-get update && sudo apt-get install -y rpm
 
-      # livekit-kmp (desktop AV) is not on Maven Central yet; the JVM target resolves it
-      # from mavenLocal, so build it first. Same pinned ref as ci.yml — bump both together.
-      - name: Checkout livekit-kmp
-        uses: actions/checkout@v5
+      - name: Restore livekit-kmp into mavenLocal
+        uses: actions/download-artifact@v6
         with:
-          repository: nostrord/livekit-kmp
-          ref: 37095f807922b8ecf3d88c8ae931a824a7b8661f
-          path: livekit-kmp
+          name: livekit-mavenlocal
+          path: livekit-m2
 
-      - name: Publish livekit-kmp to mavenLocal
+      - name: Install livekit-kmp into mavenLocal
         shell: bash
-        run: cd livekit-kmp && ./gradlew publishToMavenLocal -q
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.m2/repository"
+          cp -a livekit-m2/. "$HOME/.m2/repository/"
 
       - name: Build installer
         run: ./gradlew ${{ matrix.task }} --no-daemon
@@ -281,6 +342,7 @@ jobs:
 
   arch-pkg:
     name: Build Arch .pkg.tar.zst
+    needs: livekit
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -297,17 +359,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
 
-      # Same reason as desktop-release: this job compiles the JVM target, which resolves
-      # livekit-kmp from mavenLocal. Keep the ref in step with ci.yml and desktop-release.
-      - name: Checkout livekit-kmp
-        uses: actions/checkout@v5
+      - name: Restore livekit-kmp into mavenLocal
+        uses: actions/download-artifact@v6
         with:
-          repository: nostrord/livekit-kmp
-          ref: 37095f807922b8ecf3d88c8ae931a824a7b8661f
-          path: livekit-kmp
+          name: livekit-mavenlocal
+          path: livekit-m2
 
-      - name: Publish livekit-kmp to mavenLocal
-        run: cd livekit-kmp && ./gradlew publishToMavenLocal -q
+      - name: Install livekit-kmp into mavenLocal
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.m2/repository"
+          cp -a livekit-m2/. "$HOME/.m2/repository/"
 
       - name: Build .deb
         run: ./gradlew :composeApp:fixDebPackage --no-daemon
