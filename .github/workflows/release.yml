@@ -120,6 +120,12 @@ jobs:
             artifact_glob: 'composeApp/build/compose/binaries/main/rpm/*.rpm'
             ext: rpm
             platform: linux-amd64
+          - os: ubuntu-latest
+            label: Linux AppImage
+            task: ':composeApp:createDistributable'
+            artifact_glob: 'composeApp/build/appimage/*.AppImage'
+            ext: AppImage
+            platform: linux-amd64
           - os: macos-latest
             label: macOS .dmg
             task: ':composeApp:packageDmg'
@@ -167,6 +173,59 @@ jobs:
 
       - name: Build installer
         run: ./gradlew ${{ matrix.task }} --no-daemon
+
+      # jpackage has no single-file AppImage target: TargetFormat.AppImage is the
+      # unpacked app-image directory, which is what createDistributable produces.
+      # appimagetool wraps that tree, so the AppImage carries the same jlink runtime
+      # as the .deb. Its static runtime needs no libfuse on the user's machine;
+      # --appimage-extract-and-run covers the runner, which has no FUSE at all.
+      - name: Wrap distributable into an AppImage
+        if: matrix.ext == 'AppImage'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPSRC=composeApp/build/compose/binaries/main/app/Nostrord
+          OUTDIR=composeApp/build/appimage
+          APPDIR="$OUTDIR/Nostrord.AppDir"
+          test -x "$APPSRC/bin/Nostrord"
+
+          rm -rf "$OUTDIR"
+          mkdir -p "$APPDIR"
+          cp -a "$APPSRC/." "$APPDIR/"
+
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/bin/Nostrord" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          # Exec is a bare name: AppRun resolves the real path at launch.
+          # StartupWMClass mirrors fixDebPackage - AWT derives the Wayland app_id
+          # from the main class, org.nostr.nostrord.MainKt.
+          cat > "$APPDIR/nostrord.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=Nostrord
+          Comment=Nostrord - NOSTR NIP-29 Client
+          Exec=Nostrord %u
+          Icon=nostrord
+          Terminal=false
+          Type=Application
+          Categories=Network;InstantMessaging;Chat;
+          StartupWMClass=org-nostr-nostrord-MainKt
+          MimeType=x-scheme-handler/nostrord;x-scheme-handler/nostr;
+          EOF
+
+          cp composeApp/src/jvmMain/resources/linux-icons/icon-256.png "$APPDIR/nostrord.png"
+          ln -sf nostrord.png "$APPDIR/.DirIcon"
+          install -Dm644 "$APPDIR/nostrord.png" \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps/nostrord.png"
+
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool \
+            "$APPDIR" "$OUTDIR/Nostrord-x86_64.AppImage"
 
       - name: Rename artifact with version tag
         shell: bash
